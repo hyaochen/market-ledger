@@ -1,0 +1,269 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// 使用者模型 - 用於身份驗證和權限管理
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  password     String   // SHA-256 加密
+  realName     String?  // 真實姓名
+  email        String?
+  phone        String?
+  status       Boolean  @default(true) // 啟用/停用
+  
+  // 機構管理
+  departmentId String?
+  department   Department? @relation(fields: [departmentId], references: [id])
+  
+  // 角色管理
+  roles        UserRole[]
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  entries      Entry[]
+  logs         OperationLog[]
+}
+
+// 部門/組織機構 (Tree Structure)
+model Department {
+  id        String   @id @default(cuid())
+  name      String
+  code      String?  @unique
+  parentId  String?
+  parent    Department? @relation("DeptHierarchy", fields: [parentId], references: [id])
+  children  Department[] @relation("DeptHierarchy")
+  sortOrder Int      @default(0)
+  status    Boolean  @default(true)
+  
+  users     User[]
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// 角色模型
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  code        String   @unique // admin, manager, user
+  description String?
+  status      Boolean  @default(true)
+  
+  users       UserRole[]
+  permissions RolePermission[]
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// 使用者-角色關聯 (多對多)
+model UserRole {
+  userId    String
+  roleId    String
+  user      User     @relation(fields: [userId], references: [id])
+  role      Role     @relation(fields: [roleId], references: [id])
+
+  @@id([userId, roleId])
+}
+
+// 權限/菜單模型 (Tree Structure)
+model Permission {
+  id          String   @id @default(cuid())
+  name        String   // 菜單名稱
+  code        String   @unique // 權限標識 (user:create)
+  type        String   // MENU, BUTTON, API
+  path        String?  // 路由路徑
+  icon        String?
+  parentId    String?
+  parent      Permission? @relation("PermHierarchy", fields: [parentId], references: [id])
+  children    Permission[] @relation("PermHierarchy")
+  sortOrder   Int      @default(0)
+  
+  roles       RolePermission[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// 角色-權限關聯
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id])
+  permission   Permission @relation(fields: [permissionId], references: [id])
+
+  @@id([roleId, permissionId])
+}
+
+// 數據字典 (取代原本的 UnitDefinition)
+model Dictionary {
+  id        String   @id @default(cuid())
+  category  String   // 類別 (unit, expense_type, etc.)
+  label     String   // 顯示名稱 (公斤, 租金)
+  value     String   // 存儲值 (kg, rent)
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  meta      String?  // JSON for extra config (e.g. { "toKg": 1 })
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([category, value])
+}
+
+// 區域管理 (Tree Structure)
+model Region {
+  id        String   @id @default(cuid())
+  name      String
+  code      String   @unique
+  type      String   // COUNTRY, PROVINCE, CITY, DISTRICT
+  parentId  String?
+  parent    Region?  @relation("RegionHierarchy", fields: [parentId], references: [id])
+  children  Region[] @relation("RegionHierarchy")
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// 品項分類模型 (這部分保留，也可考慮併入 Dictionary，但獨立模型方便擴充)
+model Category {
+  id        String   @id @default(cuid())
+  name      String   @unique // 肉類、菜類、其他
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items     Item[]
+}
+
+// 品項模型
+model Item {
+  id          String   @id @default(cuid())
+  name        String   // 品項名稱
+  categoryId  String
+  defaultUnit String   @default("kg") // 預設單位
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  category    Category @relation(fields: [categoryId], references: [id])
+  entries     Entry[]
+
+  @@unique([name, categoryId])
+}
+
+// 廠商模型
+model Vendor {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  contact   String?  // 聯絡資訊
+  phone     String?
+  note      String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  entries   Entry[]
+}
+
+// 營業地點模型 (這部分可考慮改用 Region，但業務邏輯可能較簡單，維持獨立)
+model Location {
+  id        String   @id @default(cuid())
+  name      String   @unique // 屏東、潮州
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  revenues  Revenue[]
+}
+
+// 進貨/支出記錄模型 (整合了工作流狀態)
+model Entry {
+  id             String   @id @default(cuid())
+  date           DateTime // 記錄日期
+  type           String   // PURCHASE: 進貨, EXPENSE: 其他支出
+  status         String   @default("APPROVED") // DRAFT, PENDING, APPROVED, REJECTED
+  
+  // 進貨相關欄位
+  itemId         String?
+  vendorId       String?
+  inputQuantity  Float?   // 使用者輸入的數量
+  inputUnit      String?  // 使用者選擇的單位
+  standardWeight Float?   // 轉換後的標準重量 (公斤)
+  unitPrice      Float?   // 單價
+  
+  // 通用欄位
+  totalPrice     Float    // 總金額
+  note           String?  // 備註
+  
+  // 其他支出欄位 (可連結到 Dictionary)
+  expenseType    String?  // 租金、瓦斯、電費、其他
+  
+  // 關聯
+  userId         String?  // 暫時設為 optional 直到 User 系統完成
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  item           Item?    @relation(fields: [itemId], references: [id])
+  vendor         Vendor?  @relation(fields: [vendorId], references: [id])
+  user           User?    @relation(fields: [userId], references: [id])
+
+  @@index([date])
+  @@index([type])
+}
+
+// 營業額記錄模型
+model Revenue {
+  id         String   @id @default(cuid())
+  date       DateTime // 記錄日期
+  locationId String
+  amount     Float    // 營業額
+  isDayOff   Boolean  @default(false) // 是否休假
+  note       String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  location   Location @relation(fields: [locationId], references: [id])
+
+  @@unique([date, locationId])
+  @@index([date])
+}
+
+// 操作日誌模型
+model OperationLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String   // CREATE, UPDATE, DELETE, LOGIN, CHECK
+  module    String   // ENTRY, REVENUE, SYSTEM
+  target    String?  // 目標 (ID 或 名稱)
+  details   String?  // 詳細資訊 (JSON)
+  ip        String?
+  status    String   @default("SUCCESS") // SUCCESS, FAIL
+  duration  Int?     // 執行時間 (ms)
+  createdAt DateTime @default(now())
+
+  user      User?    @relation(fields: [userId], references: [id])
+
+  @@index([createdAt])
+  @@index([module])
+}
+
+// 系統設定模型
+model SystemConfig {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
