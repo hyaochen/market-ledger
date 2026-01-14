@@ -31,7 +31,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/components/ui/use-toast";
 import { formatPrice, getUnitLabel, type UnitDef } from "@/lib/units";
-import { updateEntry } from "@/app/actions/entry";
+import { deleteEntry, updateEntry } from "@/app/actions/entry";
 import { updateRevenue } from "@/app/actions/revenue";
 
 const PIE_COLORS = ["#F97316", "#22C55E", "#0EA5E9", "#F59E0B", "#8B5CF6", "#EC4899", "#10B981"];
@@ -93,6 +93,7 @@ export default function ReportsClient({
     const [entryForm, setEntryForm] = useState<ReportsClientProps["entries"][number] | null>(null);
     const [revenueForm, setRevenueForm] = useState<ReportsClientProps["revenues"][number] | null>(null);
     const [entryLoading, setEntryLoading] = useState(false);
+    const [entryDeleting, setEntryDeleting] = useState<string | null>(null);
     const [revenueLoading, setRevenueLoading] = useState(false);
     const [entryFilter, setEntryFilter] = useState<"all" | "PURCHASE" | "EXPENSE">("all");
     const [search, setSearch] = useState("");
@@ -162,6 +163,24 @@ export default function ReportsClient({
             router.refresh();
         } else {
             toast({ title: "更新失敗", description: result.message, variant: "destructive" });
+        }
+    };
+
+    const handleEntryDelete = async (entryId: string) => {
+        if (!canEdit) {
+            toast({ title: "權限不足", description: "此帳號僅能查看", variant: "destructive" });
+            return;
+        }
+        if (!confirm("確定要刪除此筆記錄嗎？")) return;
+        setEntryDeleting(entryId);
+        const result = await deleteEntry(entryId);
+        setEntryDeleting(null);
+
+        if (result.success) {
+            toast({ title: "已刪除", description: "記錄已刪除" });
+            router.refresh();
+        } else {
+            toast({ title: "刪除失敗", description: result.message, variant: "destructive" });
         }
     };
 
@@ -429,9 +448,20 @@ export default function ReportsClient({
                                             <div className="text-xs text-muted-foreground">備註：{entry.note}</div>
                                         )}
                                         {canEdit && (
-                                            <Button variant="outline" size="sm" onClick={() => openEntryEditor(entry)}>
-                                                編輯
-                                            </Button>
+                                            <div className="flex gap-2">
+                                                <Button variant="outline" size="sm" onClick={() => openEntryEditor(entry)}>
+                                                    編輯
+                                                </Button>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="text-destructive"
+                                                    disabled={entryDeleting === entry.id}
+                                                    onClick={() => handleEntryDelete(entry.id)}
+                                                >
+                                                    {entryDeleting === entry.id ? "刪除中..." : "刪除"}
+                                                </Button>
+                                            </div>
                                         )}
                                     </CardContent>
                                 </Card>

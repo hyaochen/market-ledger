@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import prisma from "@/lib/prisma";
 import { formatPrice, getUnitLabel } from "@/lib/units";
 import { getUnits } from "@/app/actions/catalog";
+import { getCurrentUser } from "@/lib/auth";
+import InventoryEntryActions from "./InventoryEntryActions";
 
 // Force dynamic rendering
 export const dynamic = 'force-dynamic';
@@ -18,18 +20,34 @@ export default async function InventoryPage({
     const categoryFilter = resolvedSearchParams?.category || 'all';
     const categories = await prisma.category.findMany({ orderBy: { sortOrder: 'asc' } });
     const units = await getUnits();
+    const user = await getCurrentUser();
+    const canEdit = user?.roleCode === "write" || user?.roleCode === "admin";
 
-    // 獲取最近 50 筆進貨
+    const [items, vendors, expenseTypes] = await Promise.all([
+        prisma.item.findMany({ select: { id: true, name: true }, orderBy: { sortOrder: 'asc' } }),
+        prisma.vendor.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } }),
+        prisma.dictionary.findMany({
+            where: { category: "expense_type", isActive: true },
+            orderBy: { sortOrder: "asc" },
+        }),
+    ]);
+
+    const expenseTypeMap = new Map(expenseTypes.map((item) => [item.value, item.label]));
+    const EXPENSE_FILTER = "expense";
+
+    // 獲取最近 50 筆進貨/支出
     const entries = await prisma.entry.findMany({
         where: {
-            type: 'PURCHASE',
-            ...(categoryFilter !== 'all'
-                ? { item: { categoryId: categoryFilter } }
-                : {})
+            ...(categoryFilter === EXPENSE_FILTER
+                ? { type: 'EXPENSE' }
+                : categoryFilter !== 'all'
+                    ? { type: 'PURCHASE', item: { categoryId: categoryFilter } }
+                    : {})
         },
         include: {
-            item: true,
-            vendor: true
+            item: { include: { category: true } },
+            vendor: true,
+            user: true,
         },
         orderBy: {
             date: 'desc'
@@ -42,7 +60,7 @@ export default async function InventoryPage({
             <header className="flex justify-between items-center">
                 <div>
                     <h1 className="text-2xl font-bold tracking-tight">進貨記錄</h1>
-                    <p className="text-muted-foreground text-sm">最近 {entries.length} 筆採購</p>
+                    <p className="text-muted-foreground text-sm">最近 {entries.length} 筆記錄</p>
                 </div>
                 <Link href="/entry/new">
                     <Button size="sm" className="gap-1">
@@ -70,6 +88,15 @@ export default async function InventoryPage({
                         </Button>
                     </Link>
                 ))}
+                <Link href={`/inventory?category=${EXPENSE_FILTER}`}>
+                    <Button
+                        variant={categoryFilter === EXPENSE_FILTER ? "outline" : "ghost"}
+                        size="sm"
+                        className="rounded-full"
+                    >
+                        其他支出
+                    </Button>
+                </Link>
             </div>
 
             {/* 列表內容 */}
@@ -92,22 +119,61 @@ export default async function InventoryPage({
                             <div className="flex border-l-4 border-primary">
                                 <div className="flex-1 p-4">
                                     <div className="flex justify-between items-start mb-1">
-                                        <h3 className="font-semibold text-base">{entry.item?.name || '未知品項'}</h3>
+                                        <h3 className="font-semibold text-base">
+                                            {entry.type === "PURCHASE"
+                                                ? entry.item?.name || '未知品項'
+                                                : expenseTypeMap.get(entry.expenseType || "") || entry.expenseType || "其他支出"}
+                                        </h3>
                                         <span className="font-bold text-primary">{formatPrice(entry.totalPrice)}</span>
                                     </div>
 
                                     <div className="flex justify-between text-sm text-muted-foreground">
                                         <span>
-                                            {entry.inputQuantity ?? 0} {getUnitLabel(entry.inputUnit || '', units)}
+                                            {entry.type === "PURCHASE"
+                                                ? `${entry.inputQuantity ?? 0} ${getUnitLabel(entry.inputUnit || '', units)}`
+                                                : "支出"}
                                         </span>
                                         <span>{new Date(entry.date).toLocaleDateString('zh-TW')}</span>
                                     </div>
 
-                                    {entry.vendor && (
+                                    {entry.type === "PURCHASE" && entry.item?.category?.name && (
+                                        <div className="mt-2 text-xs text-muted-foreground">
+                                            類別：{entry.item.category.name}
+                                        </div>
+                                    )}
+
+                                    {entry.type === "PURCHASE" && entry.vendor && (
                                         <div className="mt-2 text-xs text-muted-foreground bg-muted inline-block px-2 py-1 rounded">
                                             {entry.vendor.name}
                                         </div>
                                     )}
+                                    <div className="mt-3 flex items-center justify-between gap-2">
+                                        {canEdit ? (
+                                            <InventoryEntryActions
+                                                entry={{
+                                                    id: entry.id,
+                                                    date: entry.date.toISOString(),
+                                                    type: entry.type,
+                                                    itemId: entry.itemId,
+                                                    vendorId: entry.vendorId,
+                                                    inputQuantity: entry.inputQuantity,
+                                                    inputUnit: entry.inputUnit,
+                                                    totalPrice: entry.totalPrice,
+                                                    note: entry.note,
+                                                    expenseType: entry.expenseType,
+                                                }}
+                                                items={items}
+                                                vendors={vendors}
+                                                expenseTypes={expenseTypes}
+                                                units={units}
+                                            />
+                                        ) : (
+                                            <div />
+                                        )}
+                                        <div className="text-xs text-muted-foreground">
+                                            記錄者：{entry.user?.realName || entry.user?.username || "未知"}
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </Card>

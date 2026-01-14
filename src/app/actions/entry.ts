@@ -16,6 +16,7 @@ export async function createEntry(prevState: any, formData: FormData): Promise<C
     try {
         const auth = await ensureRole('write');
         if (!auth.ok) return { success: false, message: auth.error };
+        const user = auth.user;
 
         const type = formData.get('type') as string;
         const dateInput = formData.get('date') as string | null;
@@ -33,6 +34,7 @@ export async function createEntry(prevState: any, formData: FormData): Promise<C
             status: 'APPROVED', // 預設直接核准，未來可改為 DRAFT
             createdAt: new Date(),
             updatedAt: new Date(),
+            userId: user.id,
         };
 
         if (type === 'PURCHASE') {
@@ -101,6 +103,7 @@ export async function createEntry(prevState: any, formData: FormData): Promise<C
             data: {
                 action: 'CREATE',
                 module: 'ENTRY',
+                userId: user.id,
                 details: JSON.stringify({ type, amount: data.totalPrice }),
                 status: 'SUCCESS'
             }
@@ -163,6 +166,7 @@ export async function updateEntry(id: string, formData: FormData) {
     try {
         const auth = await ensureRole('write');
         if (!auth.ok) return { success: false, message: auth.error };
+        const user = auth.user;
 
         const type = formData.get('type') as string;
         const dateInput = formData.get('date') as string | null;
@@ -232,6 +236,7 @@ export async function updateEntry(id: string, formData: FormData) {
             data: {
                 action: 'UPDATE',
                 module: 'ENTRY',
+                userId: user.id,
                 target: id,
                 details: JSON.stringify({ type, amount: formData.get('price') || formData.get('amount') }),
                 status: 'SUCCESS',
@@ -245,5 +250,48 @@ export async function updateEntry(id: string, formData: FormData) {
     } catch (error) {
         console.error('Update Entry Error:', error);
         return { success: false, message: '更新失敗，請稍後再試' };
+    }
+}
+
+export async function deleteEntry(id: string) {
+    try {
+        const auth = await ensureRole('write');
+        if (!auth.ok) return { success: false, message: auth.error };
+        const user = auth.user;
+
+        const entry = await prisma.entry.findUnique({
+            where: { id },
+            include: { item: true, vendor: true },
+        });
+        if (!entry) {
+            return { success: false, message: '記錄不存在或已刪除' };
+        }
+
+        await prisma.entry.delete({ where: { id } });
+
+        await prisma.operationLog.create({
+            data: {
+                action: 'DELETE',
+                module: 'ENTRY',
+                userId: user.id,
+                target: id,
+                details: JSON.stringify({
+                    type: entry.type,
+                    item: entry.item?.name || null,
+                    vendor: entry.vendor?.name || null,
+                    expenseType: entry.expenseType,
+                    amount: entry.totalPrice,
+                }),
+                status: 'SUCCESS',
+            },
+        });
+
+        revalidatePath('/inventory');
+        revalidatePath('/reports');
+        revalidatePath('/');
+        return { success: true };
+    } catch (error) {
+        console.error('Delete Entry Error:', error);
+        return { success: false, message: '刪除失敗，請稍後再試' };
     }
 }

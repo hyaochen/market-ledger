@@ -199,7 +199,14 @@ export default function EntryForm({ categories, items, vendors, expenseTypes, un
             const result = await createEntry(null, formData);
             if (result.success) {
                 toast({ title: "成功", description: "記錄已儲存" });
-                router.push("/");
+                if (type === "PURCHASE") {
+                    setWeight("");
+                    setPrice("");
+                    setPurchaseNote("");
+                } else {
+                    setAmount("");
+                    setExpenseNote("");
+                }
                 router.refresh();
             } else {
                 toast({ title: "失敗", description: result.message, variant: "destructive" });
