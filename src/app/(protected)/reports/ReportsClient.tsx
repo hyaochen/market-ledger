@@ -32,7 +32,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/components/ui/use-toast";
 import { formatPrice, getUnitLabel, type UnitDef } from "@/lib/units";
 import { deleteEntry, updateEntry } from "@/app/actions/entry";
-import { updateRevenue } from "@/app/actions/revenue";
+import { deleteRevenue, updateRevenue } from "@/app/actions/revenue";
 
 const PIE_COLORS = ["#F97316", "#22C55E", "#0EA5E9", "#F59E0B", "#8B5CF6", "#EC4899", "#10B981"];
 
@@ -95,6 +95,7 @@ export default function ReportsClient({
     const [entryLoading, setEntryLoading] = useState(false);
     const [entryDeleting, setEntryDeleting] = useState<string | null>(null);
     const [revenueLoading, setRevenueLoading] = useState(false);
+    const [revenueDeleting, setRevenueDeleting] = useState<string | null>(null);
     const [entryFilter, setEntryFilter] = useState<"all" | "PURCHASE" | "EXPENSE">("all");
     const [search, setSearch] = useState("");
 
@@ -206,6 +207,24 @@ export default function ReportsClient({
             router.refresh();
         } else {
             toast({ title: "更新失敗", description: result.error, variant: "destructive" });
+        }
+    };
+
+    const handleRevenueDelete = async (recordId: string) => {
+        if (!canEdit) {
+            toast({ title: "權限不足", description: "此帳號僅能查看", variant: "destructive" });
+            return;
+        }
+        if (!confirm("確定要刪除此筆營收記錄嗎？")) return;
+        setRevenueDeleting(recordId);
+        const result = await deleteRevenue(recordId);
+        setRevenueDeleting(null);
+
+        if (result.success) {
+            toast({ title: "已刪除", description: "營收記錄已刪除" });
+            router.refresh();
+        } else {
+            toast({ title: "刪除失敗", description: result.error, variant: "destructive" });
         }
     };
 
@@ -490,9 +509,20 @@ export default function ReportsClient({
                                             {record.isDayOff ? "休假" : formatPrice(record.amount)}
                                         </div>
                                         {canEdit && (
-                                            <Button variant="outline" size="sm" onClick={() => openRevenueEditor(record)}>
-                                                編輯
-                                            </Button>
+                                            <div className="flex gap-2">
+                                                <Button variant="outline" size="sm" onClick={() => openRevenueEditor(record)}>
+                                                    編輯
+                                                </Button>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="text-destructive"
+                                                    disabled={revenueDeleting === record.id}
+                                                    onClick={() => handleRevenueDelete(record.id)}
+                                                >
+                                                    {revenueDeleting === record.id ? "刪除中..." : "刪除"}
+                                                </Button>
+                                            </div>
                                         )}
                                     </div>
                                 </CardContent>
