@@ -7,9 +7,11 @@
     "dev:lan": "next dev -H 0.0.0.0",
     "build": "next build",
     "start": "next start",
-    "start:lan": "next start -H 0.0.0.0",
+    "start:lan": "next start -H 0.00.0.0",
+    "tunnel:setup": "powershell -ExecutionPolicy Bypass -File ./setup-tunnel.ps1",
+    "tunnel": "powershell -ExecutionPolicy Bypass -File ./start-tunnel.ps1",
     "backup:db": "tsx scripts/backup-db.ts",
-    "lint": "eslint"
+    "lint": "next lint"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

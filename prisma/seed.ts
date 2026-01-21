@@ -196,10 +196,18 @@ async function main() {
     // 7. 建立預設管理者帳號
     const adminRole = await prisma.role.findUnique({ where: { code: 'admin' } })
     if (adminRole) {
-        const adminPassword = createHash('sha256').update('admin123').digest('hex')
+        // 更新為使用者指定的新密碼 (建議在 .env 設定 ADMIN_PASSWORD)
+        const rawPassword = process.env.ADMIN_PASSWORD || 'admin123';
+        if (!process.env.ADMIN_PASSWORD) {
+            console.warn('⚠️  WARNING: ADMIN_PASSWORD not set in .env, using default "admin123". Please change this in production!');
+        }
+        const adminPassword = createHash('sha256').update(rawPassword).digest('hex')
         const admin = await prisma.user.upsert({
             where: { username: 'admin' },
-            update: { status: true },
+            update: {
+                status: true,
+                password: adminPassword // 確保執行 seed 時更新密碼
+            },
             create: {
                 username: 'admin',
                 password: adminPassword,
@@ -215,27 +223,6 @@ async function main() {
         })
     }
 
-    // 8. 建立預設唯讀帳號
-    const readRole = await prisma.role.findUnique({ where: { code: 'read' } })
-    if (readRole) {
-        const viewerPassword = createHash('sha256').update('viewer123').digest('hex')
-        const viewer = await prisma.user.upsert({
-            where: { username: 'viewer' },
-            update: { status: true },
-            create: {
-                username: 'viewer',
-                password: viewerPassword,
-                realName: '唯讀帳號',
-                status: true,
-            },
-        })
-
-        await prisma.userRole.upsert({
-            where: { userId_roleId: { userId: viewer.id, roleId: readRole.id } },
-            update: {},
-            create: { userId: viewer.id, roleId: readRole.id },
-        })
-    }
 
     console.log('Seed data initialized')
 }

@@ -5,7 +5,11 @@ export type SessionPayload = {
     issuedAt: number;
 };
 
-const SECRET = process.env.SESSION_SECRET || "dev-secret";
+const SECRET = process.env.SESSION_SECRET || "dev-secret-should-be-changed";
+
+if (process.env.NODE_ENV === "production" && !process.env.SESSION_SECRET) {
+    console.warn("WARNING: SESSION_SECRET is not set in production environment!");
+}
 
 function encodeBase64Url(input: string | Buffer) {
     return Buffer.from(input).toString("base64url");

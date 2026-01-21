@@ -42,3 +42,9 @@ yarn-error.log*
 next-env.d.ts
 
 /src/generated/prisma
+*.db
+*.db-journal
+
+
+# cloudflare tunnel
+tunnel-config.yml
