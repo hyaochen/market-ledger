@@ -32,6 +32,7 @@ model User {
 
   entries      Entry[]
   logs         OperationLog[]
+  templates    EntryTemplate[]
 }
 
 // 部門/組織機構 (Tree Structure)
@@ -266,4 +267,35 @@ model SystemConfig {
   value     String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// 常用記錄/模板模型
+model EntryTemplate {
+  id             String   @id @default(cuid())
+  name           String   // 模板名稱 (例如: 每日豬肉, 每月租金)
+  type           String   // PURCHASE, EXPENSE
+  
+  // 進貨相關預設值
+  itemId         String?
+  vendorId       String?
+  inputQuantity  Float?
+  inputUnit      String?
+  
+  // 支出相關預設值
+  expenseType    String?
+  
+  // 通用預設值
+  unitPrice      Float?   // 預設單價 (可選)
+  totalPrice     Float?   // 預設總價 (可選)
+  note           String?
+  
+  userId         String?
+  user           User?    @relation(fields: [userId], references: [id])
+  
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([type])
+  @@index([userId])
 }

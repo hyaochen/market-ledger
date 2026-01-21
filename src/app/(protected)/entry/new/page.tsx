@@ -15,6 +15,12 @@ export default async function NewEntryPage() {
         orderBy: { sortOrder: 'asc' }
     });
 
+    // 獲取常用記錄模板
+    const templates = await prisma.entryTemplate.findMany({
+        where: { userId: (await requireRole('read')).user.id },
+        orderBy: { sortOrder: 'asc' }
+    });
+
     return (
         <div className="space-y-6 pb-20">
             <header>
@@ -28,6 +34,7 @@ export default async function NewEntryPage() {
                 vendors={vendors}
                 expenseTypes={expenseTypes}
                 units={units}
+                templates={templates}
             />
         </div>
     );

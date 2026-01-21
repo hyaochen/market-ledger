@@ -16,12 +16,14 @@ import {
     DialogTitle,
     DialogTrigger,
 } from "@/components/ui/dialog";
-import { PackagePlus, Store, ClipboardList } from "lucide-react";
+import { PackagePlus, Store, ClipboardList, BookTemplate, Save, Trash2, RotateCcw } from "lucide-react";
 import { convertToKg, formatPrice, type UnitDef } from "@/lib/units";
 import { formatDateInput } from "@/lib/date";
 import { createEntry } from "@/app/actions/entry";
 import { createExpenseType, createItem, createVendor } from "@/app/actions/catalog";
+import { createTemplate, deleteTemplate } from "@/app/actions/template";
 import { useToast } from "@/components/ui/use-toast";
+import { Badge } from "@/components/ui/badge";
 
 type Props = {
     categories: any[];
@@ -29,12 +31,18 @@ type Props = {
     vendors: any[];
     expenseTypes: any[];
     units: UnitDef[];
+    templates: any[];
 };
 
-export default function EntryForm({ categories, items, vendors, expenseTypes, units }: Props) {
+export default function EntryForm({ categories, items, vendors, expenseTypes, units, templates: initialTemplates }: Props) {
     const router = useRouter();
     const { toast } = useToast();
     const [loading, setLoading] = useState(false);
+
+    const [templates, setTemplates] = useState(initialTemplates);
+    const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
+    const [newTemplateName, setNewTemplateName] = useState("");
+    const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
 
     const [itemOptions, setItemOptions] = useState(items);
     const [vendorOptions, setVendorOptions] = useState(vendors);
@@ -164,6 +172,86 @@ export default function EntryForm({ categories, items, vendors, expenseTypes, un
         }
     };
 
+    const handleSaveTemplate = async () => {
+        if (!newTemplateName) {
+            toast({ title: "請輸入模板名稱", variant: "destructive" });
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('name', newTemplateName);
+        formData.append('type', type);
+
+        if (type === 'PURCHASE') {
+            if (!selectedItem) {
+                toast({ title: "請選擇品項", variant: "destructive" });
+                return;
+            }
+            formData.append('itemId', selectedItem);
+            formData.append('vendorId', selectedVendor || 'none');
+            formData.append('weight', weight);
+            formData.append('unit', unit);
+            formData.append('price', price);
+            formData.append('note', purchaseNote);
+        } else {
+            if (!selectedExpenseType) {
+                toast({ title: "請選擇支出項目", variant: "destructive" });
+                return;
+            }
+            formData.append('expenseType', selectedExpenseType);
+            formData.append('amount', amount);
+            formData.append('note', expenseNote);
+        }
+
+        setLoading(true);
+        const result = await createTemplate(formData);
+
+        if (result.success) {
+            toast({ title: "已儲存常用記錄", description: "下次可直接從清單選取" });
+            setSaveTemplateOpen(false);
+            setNewTemplateName("");
+            router.refresh();
+        } else {
+            toast({ title: "儲存失敗", description: result.message, variant: "destructive" });
+        }
+        setLoading(false);
+    };
+
+    const handleLoadTemplate = (template: any) => {
+        setType(template.type as 'PURCHASE' | 'EXPENSE');
+        if (template.type === 'PURCHASE') {
+            if (template.itemId) {
+                const item = itemOptions.find(i => i.id === template.itemId);
+                if (item) setSelectedCategory(item.categoryId);
+                setSelectedItem(template.itemId);
+            }
+            if (template.vendorId) setSelectedVendor(template.vendorId);
+            if (template.inputQuantity) setWeight(template.inputQuantity.toString());
+            if (template.inputUnit) setUnit(template.inputUnit);
+            if (template.totalPrice) setPrice(template.totalPrice.toString());
+            if (template.note) setPurchaseNote(template.note);
+        } else {
+            if (template.expenseType) setSelectedExpenseType(template.expenseType);
+            if (template.totalPrice) setAmount(template.totalPrice.toString());
+            if (template.note) setExpenseNote(template.note);
+        }
+        setTemplateDialogOpen(false);
+        toast({ title: "已載入設定", description: `已套用 ${template.name}` });
+    };
+
+    const handleDeleteTemplate = async (e: React.MouseEvent, id: string) => {
+        e.stopPropagation();
+        if (!confirm('確定要刪除這個常用記錄嗎？')) return;
+
+        const result = await deleteTemplate(id);
+        if (result.success) {
+            toast({ title: "已刪除" });
+            router.refresh();
+        } else {
+            toast({ title: "刪除失敗", description: result.message, variant: "destructive" });
+        }
+    };
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
@@ -219,6 +307,8 @@ export default function EntryForm({ categories, items, vendors, expenseTypes, un
         }
     };
 
+    const currentTemplates = templates.filter((t: any) => t.type === type);
+
     return (
         <div className="space-y-6 pb-20 animate-in slide-in-from-bottom-5 duration-500">
             <Card className="border-primary/20 bg-primary/5">
@@ -228,6 +318,98 @@ export default function EntryForm({ categories, items, vendors, expenseTypes, un
                     <p>若未填必要欄位，系統會提醒你補填。</p>
                 </CardContent>
             </Card>
+
+            {/* 功能列 */}
+            <div className="flex justify-between items-center gap-2">
+                <Dialog open={templateDialogOpen} onOpenChange={setTemplateDialogOpen}>
+                    <DialogTrigger asChild>
+                        <Button variant="secondary" className="gap-2 flex-1">
+                            <BookTemplate className="h-4 w-4" />
+                            常用記錄
+                            <Badge variant="secondary" className="bg-background/80 text-foreground ml-1">
+                                {currentTemplates.length}
+                            </Badge>
+                        </Button>
+                    </DialogTrigger>
+                    <DialogContent>
+                        <DialogHeader>
+                            <DialogTitle>選擇常用記錄</DialogTitle>
+                            <DialogDescription>點擊項目將自動填入表單。</DialogDescription>
+                        </DialogHeader>
+                        <div className="grid gap-2 max-h-[60vh] overflow-y-auto">
+                            {currentTemplates.length === 0 ? (
+                                <div className="text-center py-8 text-muted-foreground">
+                                    尚無常用記錄，請先在表單中點擊「存為常用」。
+                                </div>
+                            ) : (
+                                currentTemplates.map((t: any) => (
+                                    <div
+                                        key={t.id}
+                                        className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-accent/50 cursor-pointer transition-colors"
+                                        onClick={() => handleLoadTemplate(t)}
+                                    >
+                                        <div className="flex-1">
+                                            <div className="font-medium">{t.name}</div>
+                                            <div className="text-xs text-muted-foreground">
+                                                {t.type === 'PURCHASE' ? (
+                                                    <>
+                                                        {items.find(i => i.id === t.itemId)?.name || '未知品項'}
+                                                        {t.inputQuantity ? ` · ${t.inputQuantity}${units.find(u => u.code === t.inputUnit)?.name || t.inputUnit}` : ''}
+                                                        {t.totalPrice ? ` · $${t.totalPrice}` : ''}
+                                                    </>
+                                                ) : (
+                                                    <>
+                                                        {expenseTypes.find(e => e.value === t.expenseType)?.label || t.expenseType}
+                                                        {t.totalPrice ? ` · $${t.totalPrice}` : ''}
+                                                    </>
+                                                )}
+                                            </div>
+                                        </div>
+                                        <Button
+                                            size="icon"
+                                            variant="ghost"
+                                            className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                                            onClick={(e) => handleDeleteTemplate(e, t.id)}
+                                        >
+                                            <Trash2 className="h-4 w-4" />
+                                        </Button>
+                                    </div>
+                                ))
+                            )}
+                        </div>
+                    </DialogContent>
+                </Dialog>
+
+                <Dialog open={saveTemplateOpen} onOpenChange={setSaveTemplateOpen}>
+                    <DialogTrigger asChild>
+                        <Button variant="outline" className="gap-2 aspect-square p-0 w-10 md:w-auto md:aspect-auto md:px-4">
+                            <Save className="h-4 w-4" />
+                            <span className="hidden md:inline">存為常用</span>
+                        </Button>
+                    </DialogTrigger>
+                    <DialogContent>
+                        <DialogHeader>
+                            <DialogTitle>儲存為常用記錄</DialogTitle>
+                            <DialogDescription>將目前填寫的內容儲存為模板，方便下次快速使用。</DialogDescription>
+                        </DialogHeader>
+                        <div className="space-y-4 py-4">
+                            <div className="space-y-2">
+                                <Label>模板名稱</Label>
+                                <Input
+                                    placeholder="例如：每日豬肉進貨"
+                                    value={newTemplateName}
+                                    onChange={(e) => setNewTemplateName(e.target.value)}
+                                />
+                            </div>
+                        </div>
+                        <DialogFooter>
+                            <Button onClick={handleSaveTemplate} disabled={loading}>
+                                {loading ? "儲存中..." : "儲存"}
+                            </Button>
+                        </DialogFooter>
+                    </DialogContent>
+                </Dialog>
+            </div>
 
             <div className="flex p-1 bg-muted rounded-lg">
                 <button
@@ -251,12 +433,23 @@ export default function EntryForm({ categories, items, vendors, expenseTypes, un
             <form onSubmit={handleSubmit} className="space-y-6">
                 <div className="space-y-2">
                     <Label>日期</Label>
-                    <Input
-                        type="date"
-                        value={date}
-                        onChange={(e) => setDate(e.target.value)}
-                    />
-                    <p className="text-xs text-muted-foreground">未指定時會以今天為準。</p>
+                    <div className="flex gap-2">
+                        <Input
+                            type="date"
+                            value={date}
+                            onChange={(e) => setDate(e.target.value)}
+                            className="flex-1"
+                        />
+                        <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            onClick={() => setDate(formatDateInput(new Date()))}
+                            title="回到今天"
+                        >
+                            <RotateCcw className="h-4 w-4" />
+                        </Button>
+                    </div>
                 </div>
 
                 {type === 'PURCHASE' ? (
