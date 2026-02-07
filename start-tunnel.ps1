@@ -1,3 +1,8 @@
+# Backup database before starting server
+Write-Host "[Backup] Running database backup..." -ForegroundColor Yellow
+npm run backup:db
+Write-Host ""
+
 $cloudflaredPath = "C:\Program Files (x86)\cloudflared\cloudflared.exe"
 if (-not (Test-Path $cloudflaredPath)) { $cloudflaredPath = "cloudflared" }
 
