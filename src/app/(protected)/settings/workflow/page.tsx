@@ -4,13 +4,15 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { GitPullRequest, CheckCircle2, XCircle, Clock } from "lucide-react";
 import { updateEntryStatus } from "@/app/actions/workflow";
+import { getTenantId } from "@/lib/auth";
 
 export const dynamic = 'force-dynamic';
 
 export default async function WorkflowPage() {
+    const tenantId = await getTenantId();
     // 獲取待審核的單據
     const pendingEntries = await prisma.entry.findMany({
-        where: { status: 'PENDING' },
+        where: { tenantId, status: 'PENDING' },
         include: { item: true, vendor: true },
         orderBy: { createdAt: 'desc' }
     });

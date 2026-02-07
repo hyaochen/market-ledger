@@ -3,12 +3,13 @@
 import prisma from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
 import { parseLocalDate } from '@/lib/date';
-import { ensureRole } from '@/lib/auth';
+import { ensureRole, getTenantId } from '@/lib/auth';
 
 export async function recordRevenue(date: string, locationId: string, amount: number, isDayOff: boolean) {
     try {
         const auth = await ensureRole('write');
         if (!auth.ok) return { success: false, error: auth.error };
+        const tenantId = await getTenantId();
 
         const targetDate = parseLocalDate(date) ?? new Date();
 
@@ -29,7 +30,8 @@ export async function recordRevenue(date: string, locationId: string, amount: nu
                 date: targetDate,
                 locationId: locationId,
                 amount: isDayOff ? 0 : amount,
-                isDayOff: isDayOff
+                isDayOff: isDayOff,
+                tenantId,
             }
         });
 
@@ -43,10 +45,12 @@ export async function recordRevenue(date: string, locationId: string, amount: nu
 }
 
 export async function getRevenueByDate(date: string) {
+    const tenantId = await getTenantId();
     const targetDate = parseLocalDate(date) ?? new Date();
 
     const records = await prisma.revenue.findMany({
         where: {
+            tenantId,
             date: targetDate
         },
         include: {
@@ -62,6 +66,7 @@ export async function updateRevenue(id: string, formData: FormData) {
         const auth = await ensureRole('write');
         if (!auth.ok) return { success: false, error: auth.error };
         const user = auth.user;
+        const tenantId = await getTenantId();
 
         const amount = Number.parseFloat(formData.get('amount') as string);
         const isDayOff = formData.get('isDayOff') === 'on';
@@ -72,7 +77,8 @@ export async function updateRevenue(id: string, formData: FormData) {
             return { success: false, error: '請填寫正確金額' };
         }
 
-        const current = await prisma.revenue.findUnique({ where: { id } });
+        // 驗證所有權
+        const current = await prisma.revenue.findFirst({ where: { id, tenantId } });
         if (!current) {
             return { success: false, error: '找不到營收記錄' };
         }
@@ -81,15 +87,15 @@ export async function updateRevenue(id: string, formData: FormData) {
         const inputDateKey = dateInput || currentDateKey;
         const targetDate = inputDateKey === currentDateKey ? current.date : date;
 
-        const conflict = await prisma.revenue.findUnique({
+        const conflict = await prisma.revenue.findFirst({
             where: {
-                date_locationId: {
-                    date: targetDate,
-                    locationId: current.locationId,
-                },
+                date: targetDate,
+                locationId: current.locationId,
+                tenantId,
+                NOT: { id },
             },
         });
-        if (conflict && conflict.id !== id) {
+        if (conflict) {
             return { success: false, error: '該日期已存在營收記錄，請改用編輯原紀錄或先刪除' };
         }
 
@@ -110,6 +116,7 @@ export async function updateRevenue(id: string, formData: FormData) {
                 target: id,
                 details: JSON.stringify({ amount, isDayOff, date: targetDate.toISOString() }),
                 status: 'SUCCESS',
+                tenantId,
             },
         });
 
@@ -128,9 +135,11 @@ export async function deleteRevenue(id: string) {
         const auth = await ensureRole('write');
         if (!auth.ok) return { success: false, error: auth.error };
         const user = auth.user;
+        const tenantId = await getTenantId();
 
-        const record = await prisma.revenue.findUnique({
-            where: { id },
+        // 驗證所有權
+        const record = await prisma.revenue.findFirst({
+            where: { id, tenantId },
             include: { location: true },
         });
         if (!record) {
@@ -152,6 +161,7 @@ export async function deleteRevenue(id: string) {
                     date: record.date.toISOString(),
                 }),
                 status: 'SUCCESS',
+                tenantId,
             },
         });
 

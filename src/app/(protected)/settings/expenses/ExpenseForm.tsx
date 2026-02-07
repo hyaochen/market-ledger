@@ -47,10 +47,6 @@ export default function ExpenseForm() {
                         <Input name="label" required placeholder="例如：租金、瓦斯" />
                     </div>
                     <div className="space-y-2">
-                        <Label>代碼 (可選)</Label>
-                        <Input name="value" placeholder="例如：rent" />
-                    </div>
-                    <div className="space-y-2">
                         <Label>排序</Label>
                         <Input name="sortOrder" type="number" defaultValue="0" />
                     </div>

@@ -2,13 +2,14 @@
 
 import prisma from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
-import { ensureRole } from '@/lib/auth';
+import { ensureRole, getTenantId } from '@/lib/auth';
 
 export async function createTemplate(formData: FormData) {
     try {
         const auth = await ensureRole('write');
         if (!auth.ok) return { success: false, message: auth.error };
         const user = auth.user;
+        const tenantId = await getTenantId();
 
         const name = formData.get('name') as string;
         const type = formData.get('type') as string;
@@ -22,6 +23,7 @@ export async function createTemplate(formData: FormData) {
             type,
             userId: user.id,
             note: (formData.get('note') as string | null)?.trim() || null,
+            tenantId,
         };
 
         if (type === 'PURCHASE') {
@@ -65,9 +67,10 @@ export async function createTemplate(formData: FormData) {
 export async function getTemplates(type?: string) {
     const auth = await ensureRole('read');
     if (!auth.ok) return [];
+    const tenantId = await getTenantId();
 
     return await prisma.entryTemplate.findMany({
-        where: type ? { type } : undefined,
+        where: type ? { type, tenantId } : { tenantId },
         orderBy: { createdAt: 'desc' }, // 新的在庫
     });
 }
@@ -76,6 +79,11 @@ export async function deleteTemplate(id: string) {
     try {
         const auth = await ensureRole('write');
         if (!auth.ok) return { success: false, message: auth.error };
+        const tenantId = await getTenantId();
+
+        // 驗證所有權
+        const existing = await prisma.entryTemplate.findFirst({ where: { id, tenantId } });
+        if (!existing) return { success: false, message: '模板不存在或無權限' };
 
         await prisma.entryTemplate.delete({
             where: { id },

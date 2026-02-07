@@ -1,4 +1,4 @@
-﻿import { cookies } from "next/headers";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import prisma from "@/lib/prisma";
 import { verifySession, type SessionPayload } from "@/lib/session";
@@ -17,6 +17,9 @@ type CurrentUser = {
     realName: string | null;
     status: boolean;
     roleCode: RoleCode;
+    tenantId: string | null;
+    tenantName: string | null;
+    isSuperAdmin: boolean;
 };
 
 function resolveHighestRole(codes: string[]): RoleCode {
@@ -44,10 +47,13 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
 
     const user = await prisma.user.findUnique({
         where: { id: payload.userId },
-        include: { roles: { include: { role: true } } },
+        include: { roles: { include: { role: true } }, tenant: true },
     });
 
     if (!user || !user.status) return null;
+
+    // 非 super admin 時，檢查租戶是否仍然啟用
+    if (!user.isSuperAdmin && user.tenant && !user.tenant.status) return null;
 
     const roleCodes = user.roles.map((item) => item.role.code);
     const roleCode = resolveHighestRole(roleCodes);
@@ -58,6 +64,9 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
         realName: user.realName,
         status: user.status,
         roleCode,
+        tenantId: user.tenantId,
+        tenantName: user.tenant?.name ?? null,
+        isSuperAdmin: user.isSuperAdmin,
     };
 }
 
@@ -82,6 +91,16 @@ export async function ensureRole(minRole: RoleCode) {
         return { ok: false, error: "權限不足" } as const;
     }
     return { ok: true, user } as const;
+}
+
+/** 取得目前使用者的 tenantId，super admin 呼叫會 throw */
+export async function getTenantId(): Promise<string> {
+    const user = await getCurrentUser();
+    if (!user) redirect("/login");
+    if (!user.tenantId) {
+        throw new Error("Super admin 沒有 tenant context");
+    }
+    return user.tenantId;
 }
 
 export function resolveRoleCode(codes: string[]): RoleCode {

@@ -1,8 +1,16 @@
 import fs from "fs";
 import path from "path";
+import os from "os";
 
 const source = path.resolve("prisma", "dev.db");
-const backupDir = path.resolve("backups");
+
+// 備份到專案外的獨立位置，確保資料安全
+// Windows: C:\db-backups\t_web\
+// 其他系統: ~/db-backups/t_web/
+const backupRoot = process.platform === "win32"
+    ? "C:\\db-backups\\t_web"
+    : path.join(os.homedir(), "db-backups", "t_web");
+const backupDir = backupRoot;
 
 const keepDays = 14;
 const keepWeeks = 8;
@@ -94,7 +102,8 @@ function main() {
     const backupPath = path.join(backupDir, backupName);
 
     fs.copyFileSync(source, backupPath);
-    console.log(`Backup created: ${backupPath}`);
+    const sizeKB = Math.round(fs.statSync(backupPath).size / 1024);
+    console.log(`[${now.toISOString()}] Backup created: ${backupPath} (${sizeKB} KB)`);
 
     const files = fs.readdirSync(backupDir);
     const backups = files

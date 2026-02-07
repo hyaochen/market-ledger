@@ -11,6 +11,7 @@
     "tunnel:setup": "powershell -ExecutionPolicy Bypass -File ./setup-tunnel.ps1",
     "tunnel": "powershell -ExecutionPolicy Bypass -File ./start-tunnel.ps1",
     "backup:db": "tsx scripts/backup-db.ts",
+    "backup:setup": "powershell -ExecutionPolicy Bypass -File ./scripts/setup-daily-backup.ps1",
     "lint": "next lint"
   },
   "prisma": {

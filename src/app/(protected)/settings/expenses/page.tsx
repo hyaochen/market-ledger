@@ -4,10 +4,12 @@ import { Button } from "@/components/ui/button";
 import { Receipt } from "lucide-react";
 import ExpenseForm from "./ExpenseForm";
 import { toggleDictionaryStatus } from "@/app/actions/catalog";
+import { getTenantId } from "@/lib/auth";
 
 export default async function ExpensesPage() {
+    const tenantId = await getTenantId();
     const expenseTypes = await prisma.dictionary.findMany({
-        where: { category: "expense_type" },
+        where: { tenantId, category: "expense_type" },
         orderBy: { sortOrder: "asc" },
     });
 
@@ -43,7 +45,6 @@ export default async function ExpensesPage() {
                                 </span>
                             </CardHeader>
                             <CardContent className="space-y-2 text-sm text-muted-foreground">
-                                <div>代碼：{item.value}</div>
                                 <form
                                     action={async () => {
                                         "use server";

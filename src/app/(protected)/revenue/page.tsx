@@ -3,9 +3,10 @@ import RevenueForm from "./RevenueForm";
 import { requireRole } from "@/lib/auth";
 
 export default async function RevenuePage() {
-    await requireRole("write");
+    const currentUser = await requireRole("write");
+    const tenantId = currentUser.tenantId!;
     const locations = await prisma.location.findMany({
-        where: { isActive: true },
+        where: { tenantId, isActive: true },
         orderBy: { createdAt: 'asc' }
     });
 

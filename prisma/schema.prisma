@@ -10,20 +10,54 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// 租戶/企業模型 - 多租戶隔離的核心
+model Tenant {
+  id        String   @id @default(cuid())
+  name      String   // 企業名稱
+  code      String   @unique // URL-safe 代碼 (如: premium, company-a)
+  status    Boolean  @default(true) // 啟用/停用
+  note      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users          User[]
+  departments    Department[]
+  regions        Region[]
+  locations      Location[]
+  categories     Category[]
+  items          Item[]
+  vendors        Vendor[]
+  dictionaries   Dictionary[]
+  entries        Entry[]
+  revenues       Revenue[]
+  entryTemplates EntryTemplate[]
+  operationLogs  OperationLog[]
+  systemConfigs  SystemConfig[]
+}
+
 // 使用者模型 - 用於身份驗證和權限管理
 model User {
   id           String   @id @default(cuid())
-  username     String   @unique
+  username     String
   password     String   // SHA-256 加密
   realName     String?  // 真實姓名
   email        String?
   phone        String?
   status       Boolean  @default(true) // 啟用/停用
-  
+  isSuperAdmin Boolean  @default(false) // 超級管理員標記
+
+  // 租戶關聯 (super admin 為 null)
+  tenantId     String?
+  tenant       Tenant?  @relation(fields: [tenantId], references: [id])
+
   // 機構管理
   departmentId String?
   department   Department? @relation(fields: [departmentId], references: [id])
-  
+
+  // 所屬場所
+  locationId   String?
+  location     Location? @relation(fields: [locationId], references: [id])
+
   // 角色管理
   roles        UserRole[]
 
@@ -33,36 +67,45 @@ model User {
   entries      Entry[]
   logs         OperationLog[]
   templates    EntryTemplate[]
+
+  @@unique([username, tenantId])
+  @@index([tenantId])
 }
 
 // 部門/組織機構 (Tree Structure)
 model Department {
   id        String   @id @default(cuid())
   name      String
-  code      String?  @unique
+  code      String?
   parentId  String?
   parent    Department? @relation("DeptHierarchy", fields: [parentId], references: [id])
   children  Department[] @relation("DeptHierarchy")
   sortOrder Int      @default(0)
   status    Boolean  @default(true)
-  
+
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+
   users     User[]
-  
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@unique([code, tenantId])
+  @@index([tenantId])
 }
 
-// 角色模型
+// 角色模型 (全域共享，不分租戶)
 model Role {
   id          String   @id @default(cuid())
   name        String   @unique
-  code        String   @unique // admin, manager, user
+  code        String   @unique // admin, write, read
   description String?
   status      Boolean  @default(true)
-  
+
   users       UserRole[]
   permissions RolePermission[]
-  
+
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 }
@@ -77,7 +120,7 @@ model UserRole {
   @@id([userId, roleId])
 }
 
-// 權限/菜單模型 (Tree Structure)
+// 權限/菜單模型 (Tree Structure, 全域共享)
 model Permission {
   id          String   @id @default(cuid())
   name        String   // 菜單名稱
@@ -89,7 +132,7 @@ model Permission {
   parent      Permission? @relation("PermHierarchy", fields: [parentId], references: [id])
   children    Permission[] @relation("PermHierarchy")
   sortOrder   Int      @default(0)
-  
+
   roles       RolePermission[]
 
   createdAt   DateTime @default(now())
@@ -106,45 +149,62 @@ model RolePermission {
   @@id([roleId, permissionId])
 }
 
-// 數據字典 (取代原本的 UnitDefinition)
+// 數據字典 (單位、支出類型等)
 model Dictionary {
   id        String   @id @default(cuid())
   category  String   // 類別 (unit, expense_type, etc.)
   label     String   // 顯示名稱 (公斤, 租金)
-  value     String   // 存儲值 (kg, rent)
+  value     String   // 存儲值 (kg, EXP001)
   sortOrder Int      @default(0)
   isActive  Boolean  @default(true)
   meta      String?  // JSON for extra config (e.g. { "toKg": 1 })
 
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@unique([category, value])
+  @@unique([category, value, tenantId])
+  @@index([tenantId])
 }
 
-// 區域管理 (Tree Structure)
+// 區域管理 (扁平結構 - 營業區域如「屏東地區」「台北地區」)
 model Region {
   id        String   @id @default(cuid())
-  name      String
-  code      String   @unique
-  type      String   // COUNTRY, PROVINCE, CITY, DISTRICT
-  parentId  String?
-  parent    Region?  @relation("RegionHierarchy", fields: [parentId], references: [id])
-  children  Region[] @relation("RegionHierarchy")
-  
+  name      String   // 區域名稱
+  code      String?  // 選填短碼
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+
+  locations Location[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@unique([name, tenantId])
+  @@index([tenantId])
 }
 
-// 品項分類模型 (這部分保留，也可考慮併入 Dictionary，但獨立模型方便擴充)
+// 品項分類模型
 model Category {
   id        String   @id @default(cuid())
-  name      String   @unique // 肉類、菜類、其他
+  name      String   // 肉類、菜類、其他
   sortOrder Int      @default(0)
+
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   items     Item[]
+
+  @@unique([name, tenantId])
+  @@index([tenantId])
 }
 
 // 品項模型
@@ -155,38 +215,61 @@ model Item {
   defaultUnit String   @default("kg") // 預設單位
   isActive    Boolean  @default(true)
   sortOrder   Int      @default(0)
+
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   category    Category @relation(fields: [categoryId], references: [id])
   entries     Entry[]
 
-  @@unique([name, categoryId])
+  @@unique([name, categoryId, tenantId])
+  @@index([tenantId])
 }
 
 // 廠商模型
 model Vendor {
   id        String   @id @default(cuid())
-  name      String   @unique
+  name      String
   contact   String?  // 聯絡資訊
   phone     String?
   note      String?
   isActive  Boolean  @default(true)
+
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   entries   Entry[]
+
+  @@unique([name, tenantId])
+  @@index([tenantId])
 }
 
-// 營業地點模型 (這部分可考慮改用 Region，但業務邏輯可能較簡單，維持獨立)
+// 營業地點/場所模型 (屬於區域)
 model Location {
   id        String   @id @default(cuid())
-  name      String   @unique // 屏東、潮州
+  name      String   // 屏東店、潮州店
   isActive  Boolean  @default(true)
+
+  regionId  String?
+  region    Region?  @relation(fields: [regionId], references: [id])
+
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   revenues  Revenue[]
+  users     User[]   // 在此場所工作的員工
+
+  @@unique([name, tenantId])
+  @@index([tenantId])
 }
 
 // 進貨/支出記錄模型 (整合了工作流狀態)
@@ -195,7 +278,7 @@ model Entry {
   date           DateTime // 記錄日期
   type           String   // PURCHASE: 進貨, EXPENSE: 其他支出
   status         String   @default("APPROVED") // DRAFT, PENDING, APPROVED, REJECTED
-  
+
   // 進貨相關欄位
   itemId         String?
   vendorId       String?
@@ -203,16 +286,18 @@ model Entry {
   inputUnit      String?  // 使用者選擇的單位
   standardWeight Float?   // 轉換後的標準重量 (公斤)
   unitPrice      Float?   // 單價
-  
+
   // 通用欄位
   totalPrice     Float    // 總金額
   note           String?  // 備註
-  
+
   // 其他支出欄位 (可連結到 Dictionary)
   expenseType    String?  // 租金、瓦斯、電費、其他
-  
+
   // 關聯
-  userId         String?  // 暫時設為 optional 直到 User 系統完成
+  userId         String?
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id])
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
@@ -222,6 +307,7 @@ model Entry {
 
   @@index([date])
   @@index([type])
+  @@index([tenantId])
 }
 
 // 營業額記錄模型
@@ -232,13 +318,18 @@ model Revenue {
   amount     Float    // 營業額
   isDayOff   Boolean  @default(false) // 是否休假
   note       String?
+
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
   location   Location @relation(fields: [locationId], references: [id])
 
-  @@unique([date, locationId])
+  @@unique([date, locationId, tenantId])
   @@index([date])
+  @@index([tenantId])
 }
 
 // 操作日誌模型
@@ -252,21 +343,32 @@ model OperationLog {
   ip        String?
   status    String   @default("SUCCESS") // SUCCESS, FAIL
   duration  Int?     // 執行時間 (ms)
+
+  tenantId  String?
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id])
+
   createdAt DateTime @default(now())
 
   user      User?    @relation(fields: [userId], references: [id])
 
   @@index([createdAt])
   @@index([module])
+  @@index([tenantId])
 }
 
 // 系統設定模型
 model SystemConfig {
   id        String   @id @default(cuid())
-  key       String   @unique
+  key       String
   value     String
+
+  tenantId  String?
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id])
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@unique([key, tenantId])
 }
 
 // 常用記錄/模板模型
@@ -274,28 +376,32 @@ model EntryTemplate {
   id             String   @id @default(cuid())
   name           String   // 模板名稱 (例如: 每日豬肉, 每月租金)
   type           String   // PURCHASE, EXPENSE
-  
+
   // 進貨相關預設值
   itemId         String?
   vendorId       String?
   inputQuantity  Float?
   inputUnit      String?
-  
+
   // 支出相關預設值
   expenseType    String?
-  
+
   // 通用預設值
   unitPrice      Float?   // 預設單價 (可選)
   totalPrice     Float?   // 預設總價 (可選)
   note           String?
-  
+
   userId         String?
   user           User?    @relation(fields: [userId], references: [id])
-  
+
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id])
+
   sortOrder      Int      @default(0)
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   @@index([type])
   @@index([userId])
+  @@index([tenantId])
 }

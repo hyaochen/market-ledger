@@ -16,7 +16,9 @@ export default async function ProtectedLayout({
             <header className="border-b bg-background/80 backdrop-blur">
                 <div className="p-4 max-w-md mx-auto w-full md:max-w-2xl lg:max-w-4xl flex items-center justify-between">
                     <div>
-                        <div className="text-xs text-muted-foreground">登入中</div>
+                        {user.tenantName && (
+                            <div className="text-xs font-semibold text-primary">{user.tenantName}</div>
+                        )}
                         <div className="text-sm font-medium">{displayName}</div>
                     </div>
                     <form action={logout}>

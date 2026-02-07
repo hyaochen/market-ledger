@@ -3,14 +3,16 @@
 import prisma from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
 import { UNITS, type UnitDef, parseUnitMeta } from '@/lib/units';
-import { ensureRole } from '@/lib/auth';
+import { ensureRole, getTenantId } from '@/lib/auth';
 
 const UNIT_CATEGORY = 'unit';
 const EXPENSE_CATEGORY = 'expense_type';
 
 export async function getUnits(): Promise<UnitDef[]> {
+    const tenantId = await getTenantId();
+
     const rows = await prisma.dictionary.findMany({
-        where: { category: UNIT_CATEGORY, isActive: true },
+        where: { category: UNIT_CATEGORY, isActive: true, tenantId },
         orderBy: { sortOrder: 'asc' },
     });
 
@@ -31,6 +33,7 @@ export async function createCategory(formData: FormData) {
     try {
         const auth = await ensureRole('admin');
         if (!auth.ok) return { success: false, error: auth.error };
+        const tenantId = await getTenantId();
 
         const name = (formData.get('name') as string | null)?.trim();
         const sortOrder = parseInt(formData.get('sortOrder') as string) || 0;
@@ -40,9 +43,9 @@ export async function createCategory(formData: FormData) {
         }
 
         const category = await prisma.category.upsert({
-            where: { name },
+            where: { name_tenantId: { name, tenantId } },
             update: { sortOrder },
-            create: { name, sortOrder },
+            create: { name, sortOrder, tenantId },
         });
 
         revalidatePath('/settings/items');
@@ -58,6 +61,7 @@ export async function createItem(formData: FormData) {
     try {
         const auth = await ensureRole('write');
         if (!auth.ok) return { success: false, error: auth.error };
+        const tenantId = await getTenantId();
 
         const name = (formData.get('name') as string | null)?.trim();
         const categoryId = (formData.get('categoryId') as string | null)?.trim();
@@ -69,9 +73,9 @@ export async function createItem(formData: FormData) {
         }
 
         const item = await prisma.item.upsert({
-            where: { name_categoryId: { name, categoryId } },
+            where: { name_categoryId_tenantId: { name, categoryId, tenantId } },
             update: { defaultUnit, isActive: true, sortOrder },
-            create: { name, categoryId, defaultUnit, sortOrder },
+            create: { name, categoryId, defaultUnit, sortOrder, tenantId },
         });
 
         revalidatePath('/settings/items');
@@ -87,6 +91,11 @@ export async function toggleItemStatus(id: string, isActive: boolean) {
     try {
         const auth = await ensureRole('admin');
         if (!auth.ok) return { success: false, error: auth.error };
+        const tenantId = await getTenantId();
+
+        // 驗證所有權
+        const existing = await prisma.item.findFirst({ where: { id, tenantId } });
+        if (!existing) return { success: false, error: '品項不存在或無權限' };
 
         await prisma.item.update({
             where: { id },
@@ -105,6 +114,7 @@ export async function createVendor(formData: FormData) {
     try {
         const auth = await ensureRole('write');
         if (!auth.ok) return { success: false, error: auth.error };
+        const tenantId = await getTenantId();
 
         const name = (formData.get('name') as string | null)?.trim();
         const contact = (formData.get('contact') as string | null)?.trim() || null;
@@ -116,9 +126,9 @@ export async function createVendor(formData: FormData) {
         }
 
         const vendor = await prisma.vendor.upsert({
-            where: { name },
+            where: { name_tenantId: { name, tenantId } },
             update: { contact, phone, note, isActive: true },
-            create: { name, contact, phone, note },
+            create: { name, contact, phone, note, tenantId },
         });
 
         revalidatePath('/settings/vendors');
@@ -134,6 +144,11 @@ export async function toggleVendorStatus(id: string, isActive: boolean) {
     try {
         const auth = await ensureRole('admin');
         if (!auth.ok) return { success: false, error: auth.error };
+        const tenantId = await getTenantId();
+
+        // 驗證所有權
+        const existing = await prisma.vendor.findFirst({ where: { id, tenantId } });
+        if (!existing) return { success: false, error: '廠商不存在或無權限' };
 
         await prisma.vendor.update({
             where: { id },
@@ -152,21 +167,25 @@ export async function createExpenseType(formData: FormData) {
     try {
         const auth = await ensureRole('write');
         if (!auth.ok) return { success: false, error: auth.error };
+        const tenantId = await getTenantId();
 
         const label = (formData.get('label') as string | null)?.trim();
-        const rawValue = (formData.get('value') as string | null)?.trim();
         const sortOrder = parseInt(formData.get('sortOrder') as string) || 0;
 
         if (!label) {
             return { success: false, error: '請填寫支出名稱' };
         }
 
-        const value = rawValue || label.replace(/\s+/g, '_').toLowerCase();
+        // 自動產生序號代碼
+        const count = await prisma.dictionary.count({
+            where: { category: EXPENSE_CATEGORY, tenantId },
+        });
+        const value = `EXP${String(count + 1).padStart(3, '0')}`;
 
         const item = await prisma.dictionary.upsert({
-            where: { category_value: { category: EXPENSE_CATEGORY, value } },
+            where: { category_value_tenantId: { category: EXPENSE_CATEGORY, value, tenantId } },
             update: { label, sortOrder, isActive: true },
-            create: { category: EXPENSE_CATEGORY, label, value, sortOrder, isActive: true },
+            create: { category: EXPENSE_CATEGORY, label, value, sortOrder, isActive: true, tenantId },
         });
 
         revalidatePath('/settings/dictionary');
@@ -183,6 +202,7 @@ export async function createUnit(formData: FormData) {
     try {
         const auth = await ensureRole('admin');
         if (!auth.ok) return { success: false, error: auth.error };
+        const tenantId = await getTenantId();
 
         const label = (formData.get('label') as string | null)?.trim();
         const value = (formData.get('value') as string | null)?.trim();
@@ -205,9 +225,9 @@ export async function createUnit(formData: FormData) {
         });
 
         const unit = await prisma.dictionary.upsert({
-            where: { category_value: { category: UNIT_CATEGORY, value } },
+            where: { category_value_tenantId: { category: UNIT_CATEGORY, value, tenantId } },
             update: { label, sortOrder, isActive: true, meta },
-            create: { category: UNIT_CATEGORY, label, value, sortOrder, isActive: true, meta },
+            create: { category: UNIT_CATEGORY, label, value, sortOrder, isActive: true, meta, tenantId },
         });
 
         revalidatePath('/settings/units');
@@ -223,6 +243,11 @@ export async function toggleDictionaryStatus(id: string, isActive: boolean) {
     try {
         const auth = await ensureRole('admin');
         if (!auth.ok) return { success: false, error: auth.error };
+        const tenantId = await getTenantId();
+
+        // 驗證所有權
+        const existing = await prisma.dictionary.findFirst({ where: { id, tenantId } });
+        if (!existing) return { success: false, error: '字典項目不存在或無權限' };
 
         await prisma.dictionary.update({
             where: { id },
@@ -243,6 +268,11 @@ export async function updateItem(id: string, formData: FormData) {
     try {
         const auth = await ensureRole('admin');
         if (!auth.ok) return { success: false, error: auth.error };
+        const tenantId = await getTenantId();
+
+        // 驗證所有權
+        const existing = await prisma.item.findFirst({ where: { id, tenantId } });
+        if (!existing) return { success: false, error: '品項不存在或無權限' };
 
         const name = (formData.get('name') as string | null)?.trim();
         const categoryId = (formData.get('categoryId') as string | null)?.trim();
@@ -271,6 +301,11 @@ export async function deleteItem(id: string) {
     try {
         const auth = await ensureRole('admin');
         if (!auth.ok) return { success: false, error: auth.error };
+        const tenantId = await getTenantId();
+
+        // 驗證所有權
+        const existing = await prisma.item.findFirst({ where: { id, tenantId } });
+        if (!existing) return { success: false, error: '品項不存在或無權限' };
 
         await prisma.item.delete({ where: { id } });
         revalidatePath('/settings/items');
@@ -286,6 +321,11 @@ export async function deleteVendor(id: string) {
     try {
         const auth = await ensureRole('admin');
         if (!auth.ok) return { success: false, error: auth.error };
+        const tenantId = await getTenantId();
+
+        // 驗證所有權
+        const existing = await prisma.vendor.findFirst({ where: { id, tenantId } });
+        if (!existing) return { success: false, error: '廠商不存在或無權限' };
 
         await prisma.vendor.delete({ where: { id } });
         revalidatePath('/settings/vendors');
@@ -301,8 +341,13 @@ export async function deleteCategory(id: string) {
     try {
         const auth = await ensureRole('admin');
         if (!auth.ok) return { success: false, error: auth.error };
+        const tenantId = await getTenantId();
 
-        const items = await prisma.item.count({ where: { categoryId: id } });
+        // 驗證所有權
+        const existing = await prisma.category.findFirst({ where: { id, tenantId } });
+        if (!existing) return { success: false, error: '類別不存在或無權限' };
+
+        const items = await prisma.item.count({ where: { categoryId: id, tenantId } });
         if (items > 0) {
             return { success: false, error: '請先刪除或移動該類別下的品項' };
         }

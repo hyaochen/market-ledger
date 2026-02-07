@@ -4,7 +4,7 @@ import prisma from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
 import { convertToKg, parseUnitMeta, type UnitDef, UNITS } from '@/lib/units';
 import { parseLocalDate } from '@/lib/date';
-import { ensureRole } from '@/lib/auth';
+import { ensureRole, getTenantId } from '@/lib/auth';
 
 export interface CreateEntryState {
     success?: boolean;
@@ -17,6 +17,7 @@ export async function createEntry(prevState: any, formData: FormData): Promise<C
         const auth = await ensureRole('write');
         if (!auth.ok) return { success: false, message: auth.error };
         const user = auth.user;
+        const tenantId = await getTenantId();
 
         const type = formData.get('type') as string;
         const dateInput = formData.get('date') as string | null;
@@ -35,6 +36,7 @@ export async function createEntry(prevState: any, formData: FormData): Promise<C
             createdAt: new Date(),
             updatedAt: new Date(),
             userId: user.id,
+            tenantId,
         };
 
         if (type === 'PURCHASE') {
@@ -105,7 +107,8 @@ export async function createEntry(prevState: any, formData: FormData): Promise<C
                 module: 'ENTRY',
                 userId: user.id,
                 details: JSON.stringify({ type, amount: data.totalPrice }),
-                status: 'SUCCESS'
+                status: 'SUCCESS',
+                tenantId,
             }
         });
 
@@ -122,6 +125,8 @@ export async function createEntry(prevState: any, formData: FormData): Promise<C
 }
 
 export async function getDashboardStats() {
+    const tenantId = await getTenantId();
+
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -131,6 +136,7 @@ export async function getDashboardStats() {
     // 取得今日營收 (從 Revenue 表)
     const revenueData = await prisma.revenue.aggregate({
         where: {
+            tenantId,
             date: {
                 gte: today,
                 lt: tomorrow
@@ -144,6 +150,7 @@ export async function getDashboardStats() {
     // 取得今日支出 (從 Entry 表)
     const expenseData = await prisma.entry.aggregate({
         where: {
+            tenantId,
             date: {
                 gte: today,
                 lt: tomorrow
@@ -167,6 +174,13 @@ export async function updateEntry(id: string, formData: FormData) {
         const auth = await ensureRole('write');
         if (!auth.ok) return { success: false, message: auth.error };
         const user = auth.user;
+        const tenantId = await getTenantId();
+
+        // 驗證所有權
+        const existing = await prisma.entry.findFirst({ where: { id, tenantId } });
+        if (!existing) {
+            return { success: false, message: '記錄不存在或無權限' };
+        }
 
         const type = formData.get('type') as string;
         const dateInput = formData.get('date') as string | null;
@@ -240,6 +254,7 @@ export async function updateEntry(id: string, formData: FormData) {
                 target: id,
                 details: JSON.stringify({ type, amount: formData.get('price') || formData.get('amount') }),
                 status: 'SUCCESS',
+                tenantId,
             },
         });
 
@@ -258,9 +273,11 @@ export async function deleteEntry(id: string) {
         const auth = await ensureRole('write');
         if (!auth.ok) return { success: false, message: auth.error };
         const user = auth.user;
+        const tenantId = await getTenantId();
 
-        const entry = await prisma.entry.findUnique({
-            where: { id },
+        // 驗證所有權
+        const entry = await prisma.entry.findFirst({
+            where: { id, tenantId },
             include: { item: true, vendor: true },
         });
         if (!entry) {
@@ -283,6 +300,7 @@ export async function deleteEntry(id: string) {
                     amount: entry.totalPrice,
                 }),
                 status: 'SUCCESS',
+                tenantId,
             },
         });
 

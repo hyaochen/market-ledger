@@ -17,6 +17,7 @@ export async function GET(request: Request) {
     if (!currentUser) {
         return new Response("Unauthorized", { status: 401 });
     }
+    const tenantId = currentUser.tenantId!;
     const url = new URL(request.url);
     const type = url.searchParams.get("type") || "entries";
     const fromParam = url.searchParams.get("from");
@@ -36,7 +37,7 @@ export async function GET(request: Request) {
 
     if (type === "revenues") {
         const revenues = await prisma.revenue.findMany({
-            where: { date: { gte: fromStart, lte: toEnd } },
+            where: { tenantId, date: { gte: fromStart, lte: toEnd } },
             include: { location: true },
             orderBy: { date: "asc" },
         });
@@ -62,11 +63,11 @@ export async function GET(request: Request) {
 
     const [entries, expenseTypes, units] = await Promise.all([
         prisma.entry.findMany({
-            where: { date: { gte: fromStart, lte: toEnd } },
+            where: { tenantId, date: { gte: fromStart, lte: toEnd } },
             include: { item: true, vendor: true },
             orderBy: { date: "asc" },
         }),
-        prisma.dictionary.findMany({ where: { category: "expense_type" } }),
+        prisma.dictionary.findMany({ where: { tenantId, category: "expense_type" } }),
         getUnits(),
     ]);
 

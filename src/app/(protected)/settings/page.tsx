@@ -11,8 +11,6 @@ import {
     FileClock,
     Shield,
     MapPin,
-    LayoutGrid,
-    GitPullRequest,
     Activity,
     Receipt
 } from "lucide-react";
@@ -33,10 +31,8 @@ export default function SettingsPage() {
     ];
 
     const advancedItems = [
-        { icon: LayoutGrid, label: "功能表管理", desc: "系統菜單與權限標識", href: "/settings/menu" },
-        { icon: MapPin, label: "區域管理", desc: "行政區域資料", href: "/settings/region" },
+        { icon: MapPin, label: "區域管理", desc: "營業區域與場所設定", href: "/settings/region" },
         { icon: Database, label: "字典管理", desc: "進階常數與枚舉設定", href: "/settings/dictionary" },
-        { icon: GitPullRequest, label: "工作流審核", desc: "單據審批流程", href: "/settings/workflow" },
         { icon: FileClock, label: "操作日誌", desc: "系統操作記錄", href: "/settings/logs" },
         { icon: Activity, label: "系統監測", desc: "資料庫與伺服器狀態", href: "/settings/monitor" },
     ];

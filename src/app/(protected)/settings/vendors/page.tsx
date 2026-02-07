@@ -5,9 +5,12 @@ import { Store, Phone, User } from "lucide-react";
 import VendorForm from "./VendorForm";
 import { toggleVendorStatus } from "@/app/actions/catalog";
 import VendorActions from "./VendorActions";
+import { getTenantId } from "@/lib/auth";
 
 export default async function VendorsPage() {
+    const tenantId = await getTenantId();
     const vendors = await prisma.vendor.findMany({
+        where: { tenantId },
         orderBy: { createdAt: "desc" },
     });
 

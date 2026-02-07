@@ -4,21 +4,50 @@ import { createHash } from 'crypto'
 const prisma = new PrismaClient()
 
 async function main() {
-    // 1. 建立地點
-    const locations = [
-        { name: '屏東攤位' },
-        { name: '潮州攤位' },
+    // ─── 0. 建立預設租戶 ───
+    const defaultTenant = await prisma.tenant.upsert({
+        where: { code: 'default' },
+        update: {},
+        create: {
+            name: '預設企業',
+            code: 'default',
+            status: true,
+            note: '系統預設企業',
+        },
+    })
+    const tenantId = defaultTenant.id
+
+    // ─── 1. 建立區域 ───
+    const defaultRegion = await prisma.region.upsert({
+        where: { name_tenantId: { name: '屏東地區', tenantId } },
+        update: {},
+        create: {
+            name: '屏東地區',
+            code: 'pingtung',
+            sortOrder: 1,
+            tenantId,
+        },
+    })
+
+    // ─── 2. 建立地點 (關聯到區域) ───
+    const locationDefs = [
+        { name: '屏東攤位', sortOrder: 1 },
+        { name: '潮州攤位', sortOrder: 2 },
     ]
 
-    for (const loc of locations) {
+    for (const loc of locationDefs) {
         await prisma.location.upsert({
-            where: { name: loc.name },
-            update: {},
-            create: loc,
+            where: { name_tenantId: { name: loc.name, tenantId } },
+            update: { regionId: defaultRegion.id },
+            create: {
+                name: loc.name,
+                regionId: defaultRegion.id,
+                tenantId,
+            },
         })
     }
 
-    // 2. 建立分類
+    // ─── 3. 建立分類 ───
     const categories = [
         { name: '肉類', sortOrder: 1 },
         { name: '菜類', sortOrder: 2 },
@@ -27,16 +56,16 @@ async function main() {
 
     for (const cat of categories) {
         await prisma.category.upsert({
-            where: { name: cat.name },
+            where: { name_tenantId: { name: cat.name, tenantId } },
             update: {},
-            create: cat,
+            create: { name: cat.name, sortOrder: cat.sortOrder, tenantId },
         })
     }
 
-    // 3. 建立品項清單
-    const meatCat = await prisma.category.findUnique({ where: { name: '肉類' } })
-    const vegCat = await prisma.category.findUnique({ where: { name: '菜類' } })
-    const otherCat = await prisma.category.findUnique({ where: { name: '其他' } })
+    // ─── 4. 建立品項清單 ───
+    const meatCat = await prisma.category.findFirst({ where: { name: '肉類', tenantId } })
+    const vegCat = await prisma.category.findFirst({ where: { name: '菜類', tenantId } })
+    const otherCat = await prisma.category.findFirst({ where: { name: '其他', tenantId } })
 
     const unitMap: Record<string, string> = {
         公斤: 'kg',
@@ -124,13 +153,14 @@ async function main() {
         for (const [index, item] of items.entries()) {
             const defaultUnit = resolveDefaultUnit(item.units)
             await prisma.item.upsert({
-                where: { name_categoryId: { name: item.name, categoryId } },
+                where: { name_categoryId_tenantId: { name: item.name, categoryId, tenantId } },
                 update: { defaultUnit, sortOrder: sortOffset + index + 1 },
                 create: {
                     name: item.name,
                     categoryId,
                     defaultUnit,
                     sortOrder: sortOffset + index + 1,
+                    tenantId,
                 },
             })
         }
@@ -141,23 +171,23 @@ async function main() {
     await upsertItems(otherCat?.id, processedItems)
     await upsertItems(otherCat?.id, dryGoods, processedItems.length)
 
-    // 4. 建立 Dictionary (支出類型)
+    // ─── 5. 建立 Dictionary (支出類型) ───
     const expenseTypes = [
-        { label: '租金', value: 'rent' },
-        { label: '水電費', value: 'utilities' },
-        { label: '瓦斯', value: 'gas' },
-        { label: '雜支', value: 'misc' },
+        { label: '租金', value: 'EXP001' },
+        { label: '水電費', value: 'EXP002' },
+        { label: '瓦斯', value: 'EXP003' },
+        { label: '雜支', value: 'EXP004' },
     ]
 
     for (const exp of expenseTypes) {
         await prisma.dictionary.upsert({
-            where: { category_value: { category: 'expense_type', value: exp.value } },
-            update: {},
-            create: { category: 'expense_type', label: exp.label, value: exp.value },
+            where: { category_value_tenantId: { category: 'expense_type', value: exp.value, tenantId } },
+            update: { label: exp.label },
+            create: { category: 'expense_type', label: exp.label, value: exp.value, tenantId },
         })
     }
 
-    // 5. 建立單位 (Dictionary: unit)
+    // ─── 6. 建立單位 (Dictionary: unit) ───
     const unitDefs = [
         { label: '公斤', value: 'kg', meta: { isWeight: true, toKg: 1 } },
         { label: '臺斤', value: 'catty', meta: { isWeight: true, toKg: 0.6 } },
@@ -172,13 +202,13 @@ async function main() {
 
     for (const unit of unitDefs) {
         await prisma.dictionary.upsert({
-            where: { category_value: { category: 'unit', value: unit.value } },
+            where: { category_value_tenantId: { category: 'unit', value: unit.value, tenantId } },
             update: { label: unit.label, meta: JSON.stringify(unit.meta) },
-            create: { category: 'unit', label: unit.label, value: unit.value, meta: JSON.stringify(unit.meta) },
+            create: { category: 'unit', label: unit.label, value: unit.value, meta: JSON.stringify(unit.meta), tenantId },
         })
     }
 
-    // 6. 建立預設角色
+    // ─── 7. 建立預設角色 (全域，不分租戶) ───
     const roles = [
         { name: '讀取者', code: 'read', description: '僅能查看資料 (讀取權限)' },
         { name: '編輯者', code: 'write', description: '可新增與修改資料 (含讀取權限)' },
@@ -193,38 +223,83 @@ async function main() {
         })
     }
 
-    // 7. 建立預設管理者帳號
+    // ─── 8. 建立超級管理員 (無 tenantId) ───
     const adminRole = await prisma.role.findUnique({ where: { code: 'admin' } })
     if (adminRole) {
-        // 更新為使用者指定的新密碼 (建議在 .env 設定 ADMIN_PASSWORD)
-        const rawPassword = process.env.ADMIN_PASSWORD || 'admin123';
-        if (!process.env.ADMIN_PASSWORD) {
-            console.warn('⚠️  WARNING: ADMIN_PASSWORD not set in .env, using default "admin123". Please change this in production!');
+        const superAdminPassword = process.env.SUPER_ADMIN_PASSWORD || 'superadmin123'
+        if (!process.env.SUPER_ADMIN_PASSWORD) {
+            console.warn('⚠️  WARNING: SUPER_ADMIN_PASSWORD not set in .env, using default "superadmin123".')
         }
-        const adminPassword = createHash('sha256').update(rawPassword).digest('hex')
-        const admin = await prisma.user.upsert({
-            where: { username: 'admin' },
-            update: {
-                status: true,
-                password: adminPassword // 確保執行 seed 時更新密碼
-            },
-            create: {
-                username: 'admin',
-                password: adminPassword,
-                realName: '系統管理者',
-                status: true,
-            },
+        const hashedSuperPassword = createHash('sha256').update(superAdminPassword).digest('hex')
+
+        // 使用 findFirst + create/update (因為 nullable tenantId 在 composite unique 中的 SQLite 限制)
+        let superAdmin = await prisma.user.findFirst({
+            where: { username: 'superadmin', isSuperAdmin: true },
         })
 
+        if (superAdmin) {
+            await prisma.user.update({
+                where: { id: superAdmin.id },
+                data: { password: hashedSuperPassword, status: true },
+            })
+        } else {
+            superAdmin = await prisma.user.create({
+                data: {
+                    username: 'superadmin',
+                    password: hashedSuperPassword,
+                    realName: '超級管理員',
+                    isSuperAdmin: true,
+                    tenantId: null,
+                    status: true,
+                },
+            })
+        }
+
         await prisma.userRole.upsert({
-            where: { userId_roleId: { userId: admin.id, roleId: adminRole.id } },
+            where: { userId_roleId: { userId: superAdmin.id, roleId: adminRole.id } },
             update: {},
-            create: { userId: admin.id, roleId: adminRole.id },
+            create: { userId: superAdmin.id, roleId: adminRole.id },
+        })
+
+        // ─── 9. 建立預設企業管理員 ───
+        const rawPassword = process.env.ADMIN_PASSWORD || 'admin123'
+        if (!process.env.ADMIN_PASSWORD) {
+            console.warn('⚠️  WARNING: ADMIN_PASSWORD not set in .env, using default "admin123".')
+        }
+        const adminPassword = createHash('sha256').update(rawPassword).digest('hex')
+
+        let tenantAdmin = await prisma.user.findFirst({
+            where: { username: 'admin', tenantId },
+        })
+
+        if (tenantAdmin) {
+            await prisma.user.update({
+                where: { id: tenantAdmin.id },
+                data: { password: adminPassword, status: true },
+            })
+        } else {
+            tenantAdmin = await prisma.user.create({
+                data: {
+                    username: 'admin',
+                    password: adminPassword,
+                    realName: '系統管理者',
+                    tenantId,
+                    status: true,
+                },
+            })
+        }
+
+        await prisma.userRole.upsert({
+            where: { userId_roleId: { userId: tenantAdmin.id, roleId: adminRole.id } },
+            update: {},
+            create: { userId: tenantAdmin.id, roleId: adminRole.id },
         })
     }
 
-
-    console.log('Seed data initialized')
+    console.log('✅ Seed data initialized (multi-tenant)')
+    console.log(`   Tenant: ${defaultTenant.name} (${defaultTenant.code})`)
+    console.log(`   Super Admin: superadmin`)
+    console.log(`   Tenant Admin: admin`)
 }
 
 main()

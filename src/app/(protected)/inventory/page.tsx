@@ -18,16 +18,17 @@ export default async function InventoryPage({
 }) {
     const resolvedSearchParams = await Promise.resolve(searchParams);
     const categoryFilter = resolvedSearchParams?.category || 'all';
-    const categories = await prisma.category.findMany({ orderBy: { sortOrder: 'asc' } });
-    const units = await getUnits();
     const user = await getCurrentUser();
+    const tenantId = user!.tenantId!;
     const canEdit = user?.roleCode === "write" || user?.roleCode === "admin";
 
-    const [items, vendors, expenseTypes] = await Promise.all([
-        prisma.item.findMany({ select: { id: true, name: true }, orderBy: { sortOrder: 'asc' } }),
-        prisma.vendor.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' } }),
+    const [categories, units, items, vendors, expenseTypes] = await Promise.all([
+        prisma.category.findMany({ where: { tenantId }, orderBy: { sortOrder: 'asc' } }),
+        getUnits(),
+        prisma.item.findMany({ where: { tenantId }, select: { id: true, name: true }, orderBy: { sortOrder: 'asc' } }),
+        prisma.vendor.findMany({ where: { tenantId }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
         prisma.dictionary.findMany({
-            where: { category: "expense_type", isActive: true },
+            where: { tenantId, category: "expense_type", isActive: true },
             orderBy: { sortOrder: "asc" },
         }),
     ]);
@@ -38,6 +39,7 @@ export default async function InventoryPage({
     // 獲取最近 50 筆進貨/支出
     const entries = await prisma.entry.findMany({
         where: {
+            tenantId,
             ...(categoryFilter === EXPENSE_FILTER
                 ? { type: 'EXPENSE' }
                 : categoryFilter !== 'all'

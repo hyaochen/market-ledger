@@ -8,9 +8,12 @@ import { getUnits, toggleItemStatus } from "@/app/actions/catalog";
 import { getUnitLabel } from "@/lib/units";
 import ItemActions from "./ItemActions";
 import CategoryActions from "./CategoryActions";
+import { getTenantId } from "@/lib/auth";
 
 export default async function ItemsPage() {
+    const tenantId = await getTenantId();
     const categories = await prisma.category.findMany({
+        where: { tenantId },
         orderBy: { sortOrder: "asc" },
         include: {
             items: { orderBy: { sortOrder: "asc" } },

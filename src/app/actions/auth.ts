@@ -1,4 +1,4 @@
-﻿'use server';
+'use server';
 
 import { cookies } from "next/headers";
 import prisma from "@/lib/prisma";
@@ -14,12 +14,20 @@ export async function login(formData: FormData) {
         return { success: false, message: "請輸入帳號與密碼" };
     }
 
-    const user = await prisma.user.findUnique({
-        where: { username },
-        include: { roles: { include: { role: true } } },
+    // 查詢用戶（跨租戶搜尋，同一 username 在不同租戶中可能存在）
+    const user = await prisma.user.findFirst({
+        where: {
+            username,
+            status: true,
+            OR: [
+                { isSuperAdmin: true },
+                { tenant: { status: true } },
+            ],
+        },
+        include: { roles: { include: { role: true } }, tenant: true },
     });
 
-    if (!user || !user.status) {
+    if (!user) {
         return { success: false, message: "帳號不存在或已停用" };
     }
 
@@ -33,6 +41,8 @@ export async function login(formData: FormData) {
 
     const token = signSession({
         userId: user.id,
+        tenantId: user.tenantId,
+        isSuperAdmin: user.isSuperAdmin,
         issuedAt: Date.now(),
     });
 
@@ -44,7 +54,24 @@ export async function login(formData: FormData) {
         path: "/",
     });
 
-    return { success: true, roleCode };
+    // 記錄登入日誌
+    await prisma.operationLog.create({
+        data: {
+            userId: user.id,
+            action: 'LOGIN',
+            module: 'SYSTEM',
+            target: user.username,
+            details: JSON.stringify({ isSuperAdmin: user.isSuperAdmin }),
+            status: 'SUCCESS',
+            tenantId: user.tenantId,
+        },
+    });
+
+    return {
+        success: true,
+        roleCode,
+        isSuperAdmin: user.isSuperAdmin,
+    };
 }
 
 export async function logout() {

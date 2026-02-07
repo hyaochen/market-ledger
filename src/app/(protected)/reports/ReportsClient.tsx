@@ -237,16 +237,50 @@ export default function ReportsClient({
 
             <Card>
                 <CardContent className="space-y-4 p-4">
+                    <div className="flex flex-wrap gap-2">
+                        {(() => {
+                            const now = new Date();
+                            const fmt = (d: Date) => d.toISOString().slice(0, 10);
+                            const dayOfWeek = now.getDay() || 7;
+                            const weekStart = new Date(now);
+                            weekStart.setDate(now.getDate() - dayOfWeek + 1);
+                            const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+                            const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+                            const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+                            const yearStart = new Date(now.getFullYear(), 0, 1);
+                            const yearEnd = new Date(now.getFullYear(), 11, 31);
+
+                            const presets = [
+                                { label: "今日", from: fmt(now), to: fmt(now) },
+                                { label: "本週", from: fmt(weekStart), to: fmt(now) },
+                                { label: "本月", from: fmt(monthStart), to: fmt(now) },
+                                { label: "上月", from: fmt(lastMonthStart), to: fmt(lastMonthEnd) },
+                                { label: "今年", from: fmt(yearStart), to: fmt(yearEnd) },
+                            ];
+
+                            return presets.map((p) => (
+                                <Button
+                                    key={p.label}
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-9 text-sm"
+                                    onClick={() => router.push(`/reports?from=${p.from}&to=${p.to}`)}
+                                >
+                                    {p.label}
+                                </Button>
+                            ));
+                        })()}
+                    </div>
                     <form className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end" method="get">
                         <div className="space-y-1">
                             <Label>起始日期</Label>
-                            <Input type="date" name="from" defaultValue={range.from} />
+                            <Input type="date" name="from" defaultValue={range.from} className="h-12 text-base" />
                         </div>
                         <div className="space-y-1">
                             <Label>結束日期</Label>
-                            <Input type="date" name="to" defaultValue={range.to} />
+                            <Input type="date" name="to" defaultValue={range.to} className="h-12 text-base" />
                         </div>
-                        <Button type="submit" className="w-full sm:w-auto">查詢</Button>
+                        <Button type="submit" className="w-full sm:w-auto h-12 text-base">查詢</Button>
                     </form>
                     <div className="flex flex-col gap-2 sm:flex-row">
                         <a href={`/reports/export?from=${range.from}&to=${range.to}&type=entries`}>

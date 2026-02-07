@@ -13,38 +13,41 @@ export default async function ReportsPage({
 }) {
     const resolvedSearchParams = await Promise.resolve(searchParams);
     const today = new Date();
-    const defaultFrom = new Date(today);
-    defaultFrom.setDate(defaultFrom.getDate() - 6);
+    const defaultFrom = new Date(today.getFullYear(), 0, 1);
+    const defaultTo = new Date(today.getFullYear(), 11, 31);
 
     const fromDate = parseLocalDate(resolvedSearchParams?.from) ?? defaultFrom;
-    const toDate = parseLocalDate(resolvedSearchParams?.to) ?? today;
+    const toDate = parseLocalDate(resolvedSearchParams?.to) ?? defaultTo;
 
     const fromStart = new Date(fromDate);
     fromStart.setHours(0, 0, 0, 0);
     const toEnd = new Date(toDate);
     toEnd.setHours(23, 59, 59, 999);
 
-    const [entries, revenues, items, vendors, expenseTypes, units, currentUser] = await Promise.all([
+    const currentUser = await getCurrentUser();
+    const tenantId = currentUser!.tenantId!;
+
+    const [entries, revenues, items, vendors, expenseTypes, units] = await Promise.all([
         prisma.entry.findMany({
             where: {
+                tenantId,
                 date: { gte: fromStart, lte: toEnd },
             },
             include: { item: true, vendor: true },
             orderBy: { date: "desc" },
         }),
         prisma.revenue.findMany({
-            where: { date: { gte: fromStart, lte: toEnd } },
+            where: { tenantId, date: { gte: fromStart, lte: toEnd } },
             include: { location: true },
             orderBy: { date: "desc" },
         }),
-        prisma.item.findMany({ orderBy: { sortOrder: "asc" } }),
-        prisma.vendor.findMany({ orderBy: { name: "asc" } }),
+        prisma.item.findMany({ where: { tenantId }, orderBy: { sortOrder: "asc" } }),
+        prisma.vendor.findMany({ where: { tenantId }, orderBy: { name: "asc" } }),
         prisma.dictionary.findMany({
-            where: { category: "expense_type" },
+            where: { tenantId, category: "expense_type" },
             orderBy: { sortOrder: "asc" },
         }),
         getUnits(),
-        getCurrentUser(),
     ]);
 
     const expenseTypeMap = new Map(expenseTypes.map((item) => [item.value, item.label]));

@@ -26,7 +26,7 @@ export default function LoginPage() {
             const result = await login(formData);
             if (result.success) {
                 toast({ title: "登入成功", description: "歡迎使用系統" });
-                router.push("/");
+                router.push(result.isSuperAdmin ? "/super-admin" : "/");
                 router.refresh();
             } else {
                 toast({ title: "登入失敗", description: result.message, variant: "destructive" });

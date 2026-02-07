@@ -2,6 +2,8 @@
 
 export type SessionPayload = {
     userId: string;
+    tenantId: string | null;
+    isSuperAdmin: boolean;
     issuedAt: number;
 };
 
