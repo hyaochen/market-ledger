@@ -1,7 +1,9 @@
 import { getTenants, toggleTenantStatus } from "@/app/actions/super-admin";
+import { switchToTenant } from "@/app/actions/auth";
+import { redirect } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Building2, Users, FileText, DollarSign } from "lucide-react";
+import { Building2, Users, FileText, DollarSign, LogIn } from "lucide-react";
 import Link from "next/link";
 
 export const dynamic = "force-dynamic";
@@ -49,6 +51,20 @@ export default async function TenantsPage() {
                                     </span>
                                 </div>
                                 <div className="flex items-center gap-2">
+                                    {tenant.status && (
+                                        <form
+                                            action={async () => {
+                                                "use server";
+                                                const res = await switchToTenant(tenant.id);
+                                                if (res.success) redirect("/");
+                                            }}
+                                        >
+                                            <Button size="sm" className="text-xs h-7 gap-1">
+                                                <LogIn className="h-3 w-3" />
+                                                進入企業
+                                            </Button>
+                                        </form>
+                                    )}
                                     <Link href={`/super-admin/tenants/${tenant.id}`}>
                                         <Button variant="outline" size="sm" className="text-xs h-7">
                                             詳情

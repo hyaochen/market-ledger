@@ -74,6 +74,63 @@ export async function login(formData: FormData) {
     };
 }
 
+/** 超級管理者切換到指定企業 */
+export async function switchToTenant(tenantId: string) {
+    const { getCurrentUser } = await import("@/lib/auth");
+    const user = await getCurrentUser();
+    if (!user || !user.isSuperAdmin) {
+        return { success: false, error: "權限不足" };
+    }
+
+    const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
+    if (!tenant) {
+        return { success: false, error: "企業不存在" };
+    }
+
+    const token = signSession({
+        userId: user.id,
+        tenantId: tenant.id,
+        isSuperAdmin: true,
+        issuedAt: Date.now(),
+    });
+
+    const cookieStore = await cookies();
+    cookieStore.set("session", token, {
+        httpOnly: true,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
+        path: "/",
+    });
+
+    return { success: true };
+}
+
+/** 超級管理者返回超級管理後台 */
+export async function switchBackToSuperAdmin() {
+    const { getCurrentUser } = await import("@/lib/auth");
+    const user = await getCurrentUser();
+    if (!user || !user.isSuperAdmin) {
+        return { success: false, error: "權限不足" };
+    }
+
+    const token = signSession({
+        userId: user.id,
+        tenantId: null,
+        isSuperAdmin: true,
+        issuedAt: Date.now(),
+    });
+
+    const cookieStore = await cookies();
+    cookieStore.set("session", token, {
+        httpOnly: true,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
+        path: "/",
+    });
+
+    return { success: true };
+}
+
 export async function logout() {
     const cookieStore = await cookies();
     cookieStore.set("session", "", {

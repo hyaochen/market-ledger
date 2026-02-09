@@ -154,6 +154,30 @@ export async function toggleTenantStatus(id: string, status: boolean) {
     }
 }
 
+export async function resetUserPassword(userId: string, newPassword: string) {
+    try {
+        const auth = await requireSuperAdmin();
+        if (!auth.ok) return { success: false, error: auth.error };
+
+        if (!newPassword || newPassword.length < 4) {
+            return { success: false, error: '密碼至少需要 4 個字元' };
+        }
+
+        const hashedPassword = createHash('sha256').update(newPassword).digest('hex');
+
+        await prisma.user.update({
+            where: { id: userId },
+            data: { password: hashedPassword },
+        });
+
+        revalidatePath('/super-admin');
+        return { success: true };
+    } catch (error) {
+        console.error(error);
+        return { success: false, error: '重設密碼失敗' };
+    }
+}
+
 export async function getSuperAdminStats() {
     const auth = await requireSuperAdmin();
     if (!auth.ok) return null;

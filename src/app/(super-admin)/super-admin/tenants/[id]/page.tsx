@@ -1,11 +1,12 @@
-import { getTenantById, updateTenant, toggleTenantStatus } from "@/app/actions/super-admin";
+import { getTenantById, updateTenant, toggleTenantStatus, resetUserPassword } from "@/app/actions/super-admin";
+import { switchToTenant } from "@/app/actions/auth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
-import { Users, FileText, DollarSign, Package, Truck, MapPin } from "lucide-react";
+import { Users, FileText, DollarSign, Package, Truck, MapPin, LogIn } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -47,6 +48,20 @@ export default async function TenantDetailPage({
                     <p className="text-muted-foreground text-sm">代碼：{tenant.code}</p>
                 </div>
                 <div className="flex gap-2">
+                    {tenant.status && (
+                        <form
+                            action={async () => {
+                                "use server";
+                                const res = await switchToTenant(tenant.id);
+                                if (res.success) redirect("/");
+                            }}
+                        >
+                            <Button size="sm" className="gap-1">
+                                <LogIn className="h-3.5 w-3.5" />
+                                進入企業
+                            </Button>
+                        </form>
+                    )}
                     <form
                         action={async () => {
                             "use server";
@@ -120,15 +135,34 @@ export default async function TenantDetailPage({
                                         <span className="text-sm font-medium">{u.realName || u.username}</span>
                                         <span className="text-xs text-muted-foreground ml-2">@{u.username}</span>
                                     </div>
-                                    <span
-                                        className={`text-xs px-2 py-0.5 rounded-full ${
-                                            u.status
-                                                ? "bg-green-100 text-green-700"
-                                                : "bg-red-100 text-red-700"
-                                        }`}
-                                    >
-                                        {u.status ? "啟用" : "停用"}
-                                    </span>
+                                    <div className="flex items-center gap-2">
+                                        <form
+                                            action={async (formData: FormData) => {
+                                                "use server";
+                                                const newPassword = formData.get("newPassword") as string;
+                                                if (newPassword) await resetUserPassword(u.id, newPassword);
+                                            }}
+                                            className="flex items-center gap-1"
+                                        >
+                                            <Input
+                                                name="newPassword"
+                                                placeholder="新密碼"
+                                                className="h-7 w-28 text-xs"
+                                            />
+                                            <Button variant="outline" size="sm" type="submit" className="text-xs h-7">
+                                                重設
+                                            </Button>
+                                        </form>
+                                        <span
+                                            className={`text-xs px-2 py-0.5 rounded-full ${
+                                                u.status
+                                                    ? "bg-green-100 text-green-700"
+                                                    : "bg-red-100 text-red-700"
+                                            }`}
+                                        >
+                                            {u.status ? "啟用" : "停用"}
+                                        </span>
+                                    </div>
                                 </div>
                             ))}
                         </div>
