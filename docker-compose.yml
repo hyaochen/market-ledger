@@ -1,4 +1,4 @@
-services:
+﻿services:
   market-ledger:
     build:
       context: .
@@ -15,3 +15,17 @@ services:
       PORT: 3000
     volumes:
       - ./docker-data:/app/data
+
+  market-ledger-tunnel:
+    build:
+      context: .
+      dockerfile: Dockerfile.cloudflared
+    container_name: market-ledger-tunnel
+    restart: unless-stopped
+    depends_on:
+      - market-ledger
+    command: tunnel --config /app/cloudflared-docker.yml run
+    volumes:
+      - ./cloudflared-docker.yml:/app/cloudflared-docker.yml:ro
+      - ${CLOUDFLARED_DIR}:/etc/cloudflared:ro
+

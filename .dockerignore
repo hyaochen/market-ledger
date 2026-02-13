@@ -10,3 +10,4 @@ docker-data
 tunnel.log
 prisma/*.db
 prisma/*.db-journal
+docker-data

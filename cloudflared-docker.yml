@@ -1,0 +1,7 @@
+tunnel: 81173a65-2be8-4c15-bc91-50ac0fcb8653
+credentials-file: /etc/cloudflared/81173a65-2be8-4c15-bc91-50ac0fcb8653.json
+
+ingress:
+  - hostname: hongjixuan-market-ledger.com
+    service: http://market-ledger:3000
+  - service: http_status:404

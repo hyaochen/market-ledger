@@ -1,0 +1,11 @@
+FROM mcr.microsoft.com/devcontainers/base:debian-12
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL -o /usr/local/bin/cloudflared https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+    && chmod +x /usr/local/bin/cloudflared
+
+WORKDIR /app
+
+ENTRYPOINT ["cloudflared"]
