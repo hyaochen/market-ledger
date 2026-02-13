@@ -1,0 +1,17 @@
+services:
+  market-ledger:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: market-ledger
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: file:/app/data/dev.db
+      PORT: 3000
+    volumes:
+      - ./docker-data:/app/data

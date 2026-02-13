@@ -48,3 +48,9 @@ next-env.d.ts
 
 # cloudflare tunnel
 tunnel-config.yml
+tunnel.log
+
+# local AI/editor settings
+.claude/
+
+docker-data/

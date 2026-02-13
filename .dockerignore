@@ -1,0 +1,12 @@
+node_modules
+.next
+.git
+.gitignore
+.env
+.env.*
+.claude
+backups
+docker-data
+tunnel.log
+prisma/*.db
+prisma/*.db-journal
