@@ -52,33 +52,33 @@ graph TB
 
 每個企業（Tenant）的資料完全隔離：所有業務資料表均含 `tenantId` 欄位，查詢時強制過濾。
 
+本專案使用兩個獨立企業：
+- **真實企業**：內部實際使用，管理員 `mom`
+- **展示企業**：對外展示用，唯讀帳號 `viewer`，使用飲料店假資料
+
 ```mermaid
 graph LR
     subgraph 超級管理者
-        SA[super admin\nisSuperAdmin=true\ntenantId=null]
+        SA[chen\nisSuperAdmin=true]
     end
 
-    subgraph 企業A
-        AdminA[admin A]
-        UserA[user A]
-        DataA[(企業A資料\ntenantId=A)]
+    subgraph 真實企業
+        Mom[mom\n管理員]
+        RealData[(真實業務資料\n進貨 / 支出 / 營收)]
     end
 
-    subgraph 企業B
-        AdminB[admin B]
-        UserB[user B]
-        DataB[(企業B資料\ntenantId=B)]
+    subgraph 展示企業
+        Viewer[viewer\n查看者]
+        DemoData[(7個月飲料店假資料\n444筆營收 + 660筆進貨)]
     end
 
-    SA -->|管理| 企業A
-    SA -->|管理| 企業B
-    SA -->|進入企業\n切換session| DataA
-    SA -->|進入企業\n切換session| DataB
-    AdminA --> DataA
-    UserA --> DataA
-    AdminB --> DataB
-    UserB --> DataB
-    DataA -. 完全隔離 .- DataB
+    SA -->|管理兩個企業| 真實企業
+    SA -->|管理兩個企業| 展示企業
+    SA -->|進入企業\n切換 session| RealData
+    SA -->|進入企業\n切換 session| DemoData
+    Mom --> RealData
+    Viewer --> DemoData
+    RealData -. 資料完全隔離 .- DemoData
 ```
 
 ---

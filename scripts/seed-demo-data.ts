@@ -41,7 +41,7 @@ function dateRange(start: string, end: string): Date[] {
 function dayOfWeek(d: Date) { return d.getDay(); } // 0=Sun
 
 async function main() {
-    const tenantId = "cml8xdpx20000cfyo23pu6cbm";
+    const tenantId = "cmm0w2ja40000c2v00yb2w46t"; // 飲料展示企業 (demo tenant)
     const START = "2025-07-01";
     const END   = "2026-02-07";
 
