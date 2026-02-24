@@ -4,34 +4,32 @@ cd /d "%~dp0"
 
 echo.
 echo  ============================================
-echo   Market Ledger - Start All Services
+echo   Market Ledger - Start (Docker)
 echo  ============================================
 echo.
 
-echo  [1/3] Running database backup...
+echo  [1/2] Running database backup...
 echo.
 call npm run backup:db
 
 echo.
-echo  [2/3] Starting Cloudflare Tunnel (background)...
-set CLOUDFLARED="C:\Program Files (x86)\cloudflared\cloudflared.exe"
-if not exist %CLOUDFLARED% set CLOUDFLARED=cloudflared
-start "Market Ledger - Tunnel" /min %CLOUDFLARED% tunnel --config .\tunnel-config.yml --protocol http2 run
-echo  Tunnel started in background.
+echo  [2/2] Starting containers (background)...
+echo.
+docker compose up -d --build
 
 echo.
-echo  [3/3] Starting server (LAN mode)...
+if %errorlevel% equ 0 (
+    echo  All services started successfully.
+    echo.
+    echo  App    : http://localhost:3000
+    echo  Tunnel : running in background
+    echo.
+    echo  Use stop.bat to shut everything down.
+) else (
+    echo  Failed to start. Check Docker is running.
+)
+
 echo.
-echo  Local  : http://localhost:3000
-echo  Network: http://[your-ip]:3000
-echo.
-echo  Close this window to stop the server.
 echo  ============================================
 echo.
-
-title Market Ledger - Running
-call npm run start:lan
-
-echo.
-echo  Server stopped.
 pause

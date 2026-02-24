@@ -2,7 +2,10 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 
-const source = path.resolve("prisma", "dev.db");
+// Docker mode uses docker-data/dev.db; dev mode uses prisma/dev.db
+const dockerSource = path.resolve("docker-data", "dev.db");
+const devSource = path.resolve("prisma", "dev.db");
+const source = fs.existsSync(dockerSource) ? dockerSource : devSource;
 
 // 備份到專案外的獨立位置，確保資料安全
 // Windows: C:\db-backups\t_web\
