@@ -27,7 +27,7 @@ export default async function ReportsPage({
     const currentUser = await getCurrentUser();
     const tenantId = currentUser!.tenantId!;
 
-    const [entries, revenues, items, vendors, expenseTypes, units] = await Promise.all([
+    const [entries, revenues, items, vendors, expenseTypes, units, earliestEntry, earliestRevenue] = await Promise.all([
         prisma.entry.findMany({
             where: {
                 tenantId,
@@ -48,7 +48,14 @@ export default async function ReportsPage({
             orderBy: { sortOrder: "asc" },
         }),
         getUnits(),
+        prisma.entry.findFirst({ where: { tenantId }, orderBy: { date: "asc" }, select: { date: true } }),
+        prisma.revenue.findFirst({ where: { tenantId }, orderBy: { date: "asc" }, select: { date: true } }),
     ]);
+
+    const allDates = [earliestEntry?.date, earliestRevenue?.date].filter(Boolean) as Date[];
+    const earliestDate = allDates.length > 0
+        ? formatDateInput(new Date(Math.min(...allDates.map((d) => d.getTime()))))
+        : null;
 
     const expenseTypeMap = new Map(expenseTypes.map((item) => [item.value, item.label]));
     const itemOptions = items.map((item) => ({
@@ -166,6 +173,7 @@ export default async function ReportsPage({
     return (
         <ReportsClient
             roleCode={currentUser?.roleCode ?? "read"}
+            earliestDate={earliestDate}
             range={{ from: formatDateInput(fromStart), to: formatDateInput(toEnd) }}
             totals={{ revenue: totalRevenue, cost: totalCost, profit: totalRevenue - totalCost }}
             dailyStats={dailyStats}

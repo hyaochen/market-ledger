@@ -11,6 +11,7 @@ const backupRoot = process.platform === "win32"
     ? "C:\\db-backups\\t_web"
     : path.join(os.homedir(), "db-backups", "t_web");
 const backupDir = backupRoot;
+const logFile = path.join(backupDir, "backup.log");
 
 const keepDays = 14;
 const keepWeeks = 8;
@@ -24,6 +25,13 @@ function formatTimestamp(date: Date) {
     const mi = `${date.getMinutes()}`.padStart(2, "0");
     const ss = `${date.getSeconds()}`.padStart(2, "0");
     return `${yyyy}${mm}${dd}_${hh}${mi}${ss}`;
+}
+
+function todayStr(date: Date) {
+    const yyyy = date.getFullYear().toString();
+    const mm = `${date.getMonth() + 1}`.padStart(2, "0");
+    const dd = `${date.getDate()}`.padStart(2, "0");
+    return `${yyyy}${mm}${dd}`;
 }
 
 function parseTimestamp(fileName: string) {
@@ -64,6 +72,12 @@ function ensureDir(dir: string) {
     }
 }
 
+function appendLog(msg: string) {
+    const line = `${msg}\n`;
+    fs.appendFileSync(logFile, line, "utf-8");
+    process.stdout.write(line);
+}
+
 function shouldKeep(date: Date, now: Date, keptWeeks: Set<string>, keptMonths: Set<string>) {
     if (diffInDays(date, now) <= keepDays) return true;
 
@@ -90,23 +104,36 @@ function shouldKeep(date: Date, now: Date, keptWeeks: Set<string>, keptMonths: S
 
 function main() {
     if (!fs.existsSync(source)) {
-        console.error(`Source database not found: ${source}`);
+        console.error(`[ERROR] Source database not found: ${source}`);
         process.exit(1);
     }
 
     ensureDir(backupDir);
 
     const now = new Date();
+    const today = todayStr(now);
+
+    // 檢查今天是否已經備份過，若已備份則跳過
+    const existingFiles = fs.existsSync(backupDir) ? fs.readdirSync(backupDir) : [];
+    const alreadyBackedUpToday = existingFiles.some((f) => f.startsWith(`dev_db_${today}`));
+
+    if (alreadyBackedUpToday) {
+        appendLog(`[${now.toISOString()}] Backup skipped: already backed up today (${today})`);
+        return;
+    }
+
+    // 執行備份
     const timestamp = formatTimestamp(now);
     const backupName = `dev_db_${timestamp}.db`;
     const backupPath = path.join(backupDir, backupName);
 
     fs.copyFileSync(source, backupPath);
     const sizeKB = Math.round(fs.statSync(backupPath).size / 1024);
-    console.log(`[${now.toISOString()}] Backup created: ${backupPath} (${sizeKB} KB)`);
+    appendLog(`[${now.toISOString()}] Backup created: ${backupPath} (${sizeKB} KB)`);
 
-    const files = fs.readdirSync(backupDir);
-    const backups = files
+    // 清理舊備份
+    const allFiles = fs.readdirSync(backupDir);
+    const backups = allFiles
         .map((file) => ({ file, date: parseTimestamp(file) }))
         .filter((item): item is { file: string; date: Date } => Boolean(item.date))
         .sort((a, b) => b.date.getTime() - a.date.getTime());
@@ -121,10 +148,16 @@ function main() {
         }
     }
 
+    let removed = 0;
     for (const backup of backups) {
         if (!keepSet.has(backup.file)) {
             fs.unlinkSync(path.join(backupDir, backup.file));
+            removed++;
         }
+    }
+
+    if (removed > 0) {
+        appendLog(`[${now.toISOString()}] Cleanup: removed ${removed} old backup(s), kept ${keepSet.size}`);
     }
 }
 

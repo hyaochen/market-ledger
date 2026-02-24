@@ -38,6 +38,7 @@ const PIE_COLORS = ["#F97316", "#22C55E", "#0EA5E9", "#F59E0B", "#8B5CF6", "#EC4
 
 type ReportsClientProps = {
     roleCode: "read" | "write" | "admin";
+    earliestDate?: string | null;
     range: { from: string; to: string };
     totals: { revenue: number; cost: number; profit: number };
     dailyStats: { date: string; revenue: number; cost: number }[];
@@ -73,6 +74,7 @@ type ReportsClientProps = {
 
 export default function ReportsClient({
     roleCode,
+    earliestDate,
     range,
     totals,
     dailyStats,
@@ -250,13 +252,16 @@ export default function ReportsClient({
                             const yearStart = new Date(now.getFullYear(), 0, 1);
                             const yearEnd = new Date(now.getFullYear(), 11, 31);
 
-                            const presets = [
+                            const presets: { label: string; from: string; to: string }[] = [
                                 { label: "今日", from: fmt(now), to: fmt(now) },
                                 { label: "本週", from: fmt(weekStart), to: fmt(now) },
                                 { label: "本月", from: fmt(monthStart), to: fmt(now) },
                                 { label: "上月", from: fmt(lastMonthStart), to: fmt(lastMonthEnd) },
                                 { label: "今年", from: fmt(yearStart), to: fmt(yearEnd) },
                             ];
+                            if (earliestDate) {
+                                presets.push({ label: "全部", from: earliestDate, to: fmt(now) });
+                            }
 
                             return presets.map((p) => (
                                 <Button
