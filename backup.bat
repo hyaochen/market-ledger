@@ -1,5 +1,5 @@
 @echo off
-title Market Ledger - Database Backup
+title Market Ledger - Backup
 cd /d "%~dp0"
 
 echo.
@@ -15,7 +15,7 @@ if %errorlevel% equ 0 (
     echo  Backup complete!
     echo  Location: C:\db-backups\t_web\
 ) else (
-    echo  Backup failed. Check error messages above.
+    echo  Backup failed. Check messages above.
 )
 
 echo.
