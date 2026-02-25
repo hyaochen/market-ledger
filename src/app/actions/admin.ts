@@ -124,6 +124,61 @@ export async function createUser(formData: FormData) {
     }
 }
 
+export async function toggleUserStatus(id: string, status: boolean) {
+    try {
+        const auth = await ensureRole('admin');
+        if (!auth.ok) return { success: false, error: auth.error };
+        const tenantId = await getTenantId();
+
+        const existing = await prisma.user.findFirst({ where: { id, tenantId } });
+        if (!existing) return { success: false, error: '使用者不存在或無權限' };
+
+        await prisma.user.update({ where: { id }, data: { status } });
+        revalidatePath('/settings/users');
+        return { success: true };
+    } catch (e) {
+        return { success: false, error: '更新失敗' };
+    }
+}
+
+export async function deleteUser(id: string) {
+    try {
+        const auth = await ensureRole('admin');
+        if (!auth.ok) return { success: false, error: auth.error };
+        const tenantId = await getTenantId();
+
+        const existing = await prisma.user.findFirst({ where: { id, tenantId } });
+        if (!existing) return { success: false, error: '使用者不存在或無權限' };
+
+        await prisma.user.delete({ where: { id } });
+        revalidatePath('/settings/users');
+        return { success: true };
+    } catch (e) {
+        return { success: false, error: '刪除失敗' };
+    }
+}
+
+export async function updateUserRole(userId: string, roleId: string) {
+    try {
+        const auth = await ensureRole('admin');
+        if (!auth.ok) return { success: false, error: auth.error };
+        const tenantId = await getTenantId();
+
+        const existing = await prisma.user.findFirst({ where: { id: userId, tenantId } });
+        if (!existing) return { success: false, error: '使用者不存在或無權限' };
+
+        await prisma.$transaction([
+            prisma.userRole.deleteMany({ where: { userId } }),
+            prisma.userRole.create({ data: { userId, roleId } }),
+        ]);
+
+        revalidatePath('/settings/users');
+        return { success: true };
+    } catch (e) {
+        return { success: false, error: '更新角色失敗' };
+    }
+}
+
 // --- Role Actions ---
 
 const DEFAULT_ROLES = [

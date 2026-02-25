@@ -41,7 +41,7 @@ graph TB
     iPhone -->|HTTPS| CF
     Desktop -->|HTTPS| CF
     CF --> Tunnel
-    Tunnel -->|http://localhost:3000| App
+    Tunnel -->|http://market-ledger:3000| App
     App --> DB
     App -->|啟動時備份| Backup
 ```
@@ -208,7 +208,8 @@ t_web/
 │   │   │   ├── inventory/          # 進貨記錄列表
 │   │   │   ├── revenue/            # 每日營收記帳
 │   │   │   ├── reports/            # 報表與分析
-│   │   │   └── settings/           # 系統設定
+│   │   │   └── settings/
+│   │   │       └── users/          # 使用者管理（新增/編輯角色/停用/刪除）
 │   │   ├── (super-admin)/  # 超級管理者後台
 │   │   │   └── super-admin/
 │   │   │       ├── page.tsx        # 系統總覽
@@ -238,6 +239,19 @@ t_web/
 | 管理員 | admin | 所有功能 + 系統設定 |
 | 操作員 | write | 新增/編輯進貨、營收記帳 |
 | 查看者 | read | 僅查看儀表板、報表 |
+
+### 使用者管理功能（`/settings/users`）
+
+管理員可對同企業內的其他帳號執行以下操作：
+
+| 操作 | 說明 |
+|------|------|
+| 新增使用者 | 設定帳號、密碼、部門、角色 |
+| 編輯角色 | 將現有帳號的角色切換為讀取者 / 操作員 / 管理員 |
+| 停用 / 啟用 | 帳號停用後無法登入，但資料保留 |
+| 刪除 | 永久刪除帳號（需二次確認） |
+
+> 管理員無法對自己的帳號執行上述操作；若需修改自身角色，須由另一位管理員或超級管理者處理。
 
 ---
 
@@ -274,20 +288,18 @@ npm run dev
 
 ### 正式部署（Docker）
 
-```bash
-# 建立並啟動容器（含 Cloudflare Tunnel）
-docker compose up -d
+```bat
+# 啟動（備份 DB → 建置 image → 啟動 App 容器）
+start.bat
+
+# 停止 App（Cloudflare Tunnel 保持運行）
+stop.bat
 
 # 查看 logs
 docker compose logs -f market-ledger
 ```
 
-### 本機啟動（不含 Docker）
-
-```bash
-# 區網模式（備份 + 啟動）
-npm run start:lan
-```
+> **注意**：Cloudflare Tunnel 容器（`market-ledger-tunnel`）須持續運行以維持對外連線，`stop.bat` 只停止 App，不停 Tunnel。
 
 ---
 

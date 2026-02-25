@@ -53,8 +53,8 @@ export async function createEntry(prevState: any, formData: FormData): Promise<C
                 return { success: false, message: '請填寫完整進貨資訊' };
             }
 
-            const unitRow = await prisma.dictionary.findUnique({
-                where: { category_value: { category: 'unit', value: unit } },
+            const unitRow = await prisma.dictionary.findFirst({
+                where: { category: 'unit', value: unit, tenantId },
             });
             const unitMeta = parseUnitMeta(unitRow?.meta);
             const unitDef: UnitDef | undefined = unitRow
@@ -198,8 +198,8 @@ export async function updateEntry(id: string, formData: FormData) {
                 return { success: false, message: '請填寫完整進貨資訊' };
             }
 
-            const unitRow = await prisma.dictionary.findUnique({
-                where: { category_value: { category: 'unit', value: unit } },
+            const unitRow = await prisma.dictionary.findFirst({
+                where: { category: 'unit', value: unit, tenantId },
             });
             const unitMeta = parseUnitMeta(unitRow?.meta);
             const unitDef: UnitDef | undefined = unitRow

@@ -4,22 +4,18 @@ cd /d "%~dp0"
 
 echo.
 echo  ============================================
-echo   Market Ledger - Stop All Services
+echo   Market Ledger - Stop
 echo  ============================================
 echo.
 
-echo  Stopping all containers...
+echo  Stopping app container...
 echo.
-docker compose down
+docker compose stop market-ledger
 
 echo.
-if %errorlevel% equ 0 (
-    echo  All services stopped.
-) else (
-    echo  No running containers found (or Docker error).
-)
-
-echo.
+echo  ============================================
+echo   App stopped. Cloudflare tunnel still running.
+echo   Run start.bat to restart.
 echo  ============================================
 echo.
 pause
