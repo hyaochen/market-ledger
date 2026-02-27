@@ -48,6 +48,9 @@ export default function EntryForm({ categories, items, vendors, expenseTypes, un
     const [vendorOptions, setVendorOptions] = useState(vendors);
     const [expenseOptions, setExpenseOptions] = useState(expenseTypes);
 
+    // 載入常用組合時，若需要切換類別，品項必須等類別 re-render 後再設定
+    const [pendingItemId, setPendingItemId] = useState<string | null>(null);
+
     const [date, setDate] = useState(formatDateInput(new Date()));
 
     // 表單狀態
@@ -98,6 +101,14 @@ export default function EntryForm({ categories, items, vendors, expenseTypes, un
             setUnit(item.defaultUnit);
         }
     }, [itemOptions, selectedItem]);
+
+    // 當類別確實切換完成後，才把暫存的品項 ID 套上去
+    useEffect(() => {
+        if (pendingItemId !== null) {
+            setSelectedItem(pendingItemId);
+            setPendingItemId(null);
+        }
+    }, [selectedCategory]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // 自動計算摘要
     useEffect(() => {
@@ -222,8 +233,17 @@ export default function EntryForm({ categories, items, vendors, expenseTypes, un
         if (template.type === 'PURCHASE') {
             if (template.itemId) {
                 const item = itemOptions.find(i => i.id === template.itemId);
-                if (item) setSelectedCategory(item.categoryId);
-                setSelectedItem(template.itemId);
+                const targetCategory = item?.categoryId ?? null;
+
+                if (targetCategory && targetCategory !== selectedCategory) {
+                    // 類別需要切換：先設類別，品項等 re-render 後再由 useEffect 填入
+                    setSelectedCategory(targetCategory);
+                    setPendingItemId(template.itemId);
+                } else {
+                    // 類別相同或找不到品項：直接設定
+                    if (targetCategory) setSelectedCategory(targetCategory);
+                    setSelectedItem(template.itemId);
+                }
             }
             if (template.vendorId) setSelectedVendor(template.vendorId);
             if (template.inputQuantity) setWeight(template.inputQuantity.toString());
