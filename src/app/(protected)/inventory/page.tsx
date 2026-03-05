@@ -7,6 +7,7 @@ import { formatPrice, getUnitLabel } from "@/lib/units";
 import { getUnits } from "@/app/actions/catalog";
 import { getCurrentUser } from "@/lib/auth";
 import InventoryEntryActions from "./InventoryEntryActions";
+import ScrollToTop from "./ScrollToTop";
 
 // Force dynamic rendering
 export const dynamic = 'force-dynamic';
@@ -59,6 +60,7 @@ export default async function InventoryPage({
 
     return (
         <div className="space-y-6 pb-20 animate-in fade-in zoom-in duration-500">
+            <ScrollToTop id={categoryFilter} />
             <header className="flex justify-between items-center">
                 <div>
                     <h1 className="text-2xl font-bold tracking-tight">進貨記錄</h1>
@@ -72,8 +74,8 @@ export default async function InventoryPage({
                 </Link>
             </header>
 
-            {/* 篩選器 */}
-            <div className="flex gap-2 overflow-x-auto pb-2">
+            {/* 篩選器 - sticky 貼在 header 下方 (header 高度 = py-3 + h-9 + border = 61px) */}
+            <div className="sticky top-[61px] z-30 bg-background -mx-4 px-4 py-2 flex gap-2 overflow-x-auto border-b mb-2 shadow-sm">
                 <Link href="/inventory">
                     <Button variant={categoryFilter === 'all' ? "outline" : "ghost"} size="sm" className="rounded-full">
                         全部
@@ -133,7 +135,9 @@ export default async function InventoryPage({
                                         <span>
                                             {entry.type === "PURCHASE"
                                                 ? `${entry.inputQuantity ?? 0} ${getUnitLabel(entry.inputUnit || '', units)}`
-                                                : "支出"}
+                                                : entry.inputQuantity
+                                                    ? `${entry.inputQuantity} ${getUnitLabel(entry.inputUnit || '', units)} · 支出`
+                                                    : "支出"}
                                         </span>
                                         <span>{new Date(entry.date).toLocaleDateString('zh-TW')}</span>
                                     </div>

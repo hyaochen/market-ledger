@@ -85,6 +85,8 @@ export async function createEntry(prevState: any, formData: FormData): Promise<C
             const amountRaw = formData.get('amount') as string;
             const amount = Number.parseFloat(amountRaw);
             const note = (formData.get('note') as string | null)?.trim();
+            const qtyRaw = (formData.get('expenseQuantity') as string | null)?.trim();
+            const expUnit = (formData.get('expenseUnit') as string | null)?.trim();
 
             if (!expenseType || !Number.isFinite(amount) || amount < 0) {
                 return { success: false, message: '請填寫完整支出資訊' };
@@ -93,6 +95,8 @@ export async function createEntry(prevState: any, formData: FormData): Promise<C
             data.expenseType = expenseType;
             data.totalPrice = amount;
             data.note = note || null;
+            if (qtyRaw) data.inputQuantity = Number.parseFloat(qtyRaw);
+            if (expUnit && expUnit !== 'none') data.inputUnit = expUnit;
         }
 
         // 儲存到資料庫
@@ -231,6 +235,8 @@ export async function updateEntry(id: string, formData: FormData) {
         } else {
             const expenseType = formData.get('expenseType') as string;
             const amount = Number.parseFloat(formData.get('amount') as string);
+            const qtyRaw = (formData.get('expenseQuantity') as string | null)?.trim();
+            const expUnit = (formData.get('expenseUnit') as string | null)?.trim();
             if (!expenseType || !Number.isFinite(amount) || amount < 0) {
                 return { success: false, message: '請填寫完整支出資訊' };
             }
@@ -242,6 +248,8 @@ export async function updateEntry(id: string, formData: FormData) {
                     expenseType,
                     totalPrice: amount,
                     note: note || null,
+                    inputQuantity: qtyRaw ? Number.parseFloat(qtyRaw) : null,
+                    inputUnit: (expUnit && expUnit !== 'none') ? expUnit : null,
                 },
             });
         }

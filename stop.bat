@@ -8,13 +8,13 @@ echo   Market Ledger - Stop
 echo  ============================================
 echo.
 
-echo  Stopping app container...
+echo  Stopping app and bot containers...
 echo.
-docker compose stop market-ledger
+docker compose stop market-ledger market-ledger-bot
 
 echo.
 echo  ============================================
-echo   App stopped. Cloudflare tunnel still running.
+echo   App and bot stopped. Cloudflare tunnel still running.
 echo   Run start.bat to restart.
 echo  ============================================
 echo.

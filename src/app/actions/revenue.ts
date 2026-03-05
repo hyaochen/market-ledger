@@ -16,9 +16,10 @@ export async function recordRevenue(date: string, locationId: string, amount: nu
         // 使用 upsert: 如果存在則更新，不存在則新增
         await prisma.revenue.upsert({
             where: {
-                date_locationId: {
+                date_locationId_tenantId: {
                     date: targetDate,
-                    locationId: locationId
+                    locationId: locationId,
+                    tenantId,
                 }
             },
             update: {

@@ -69,6 +69,8 @@ export default function EntryForm({ categories, items, vendors, expenseTypes, un
     const [selectedExpenseType, setSelectedExpenseType] = useState<string>("");
     const [amount, setAmount] = useState<string>("");
     const [expenseNote, setExpenseNote] = useState<string>("");
+    const [expenseQuantity, setExpenseQuantity] = useState<string>("");
+    const [expenseUnit, setExpenseUnit] = useState<string>("none");
 
     // 計算結果
     const [summary, setSummary] = useState<string>("");
@@ -212,6 +214,8 @@ export default function EntryForm({ categories, items, vendors, expenseTypes, un
             formData.append('expenseType', selectedExpenseType);
             formData.append('amount', amount);
             formData.append('note', expenseNote);
+            if (expenseQuantity) formData.append('weight', expenseQuantity);
+            if (expenseUnit && expenseUnit !== 'none') formData.append('unit', expenseUnit);
         }
 
         setLoading(true);
@@ -254,6 +258,8 @@ export default function EntryForm({ categories, items, vendors, expenseTypes, un
             if (template.expenseType) setSelectedExpenseType(template.expenseType);
             if (template.totalPrice) setAmount(template.totalPrice.toString());
             if (template.note) setExpenseNote(template.note);
+            setExpenseQuantity(template.inputQuantity ? template.inputQuantity.toString() : "");
+            setExpenseUnit(template.inputUnit || "none");
         }
         setTemplateDialogOpen(false);
         toast({ title: "已載入設定", description: `已套用 ${template.name}` });
@@ -301,6 +307,8 @@ export default function EntryForm({ categories, items, vendors, expenseTypes, un
             formData.append('expenseType', selectedExpenseType);
             formData.append('amount', amount);
             formData.append('note', expenseNote);
+            if (expenseQuantity) formData.append('expenseQuantity', expenseQuantity);
+            if (expenseUnit && expenseUnit !== 'none') formData.append('expenseUnit', expenseUnit);
         }
 
         try {
@@ -314,6 +322,8 @@ export default function EntryForm({ categories, items, vendors, expenseTypes, un
                 } else {
                     setAmount("");
                     setExpenseNote("");
+                    setExpenseQuantity("");
+                    setExpenseUnit("none");
                 }
                 router.refresh();
             } else {
@@ -749,6 +759,34 @@ export default function EntryForm({ categories, items, vendors, expenseTypes, un
                                 value={amount}
                                 onChange={(e) => setAmount(e.target.value)}
                             />
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                                <Label className="flex gap-1">數量 <span className="text-xs text-muted-foreground">(選填)</span></Label>
+                                <Input
+                                    type="number"
+                                    inputMode="decimal"
+                                    step="0.01"
+                                    min="0"
+                                    placeholder="例如：2"
+                                    value={expenseQuantity}
+                                    onChange={(e) => setExpenseQuantity(e.target.value)}
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label className="flex gap-1">單位 <span className="text-xs text-muted-foreground">(選填)</span></Label>
+                                <Select value={expenseUnit} onValueChange={setExpenseUnit}>
+                                    <SelectTrigger>
+                                        <SelectValue placeholder="不指定" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="none">不指定</SelectItem>
+                                        {units.map((u) => (
+                                            <SelectItem key={u.code} value={u.code}>{u.name}</SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
                         </div>
                         <div className="space-y-2">
                             <Label>備註</Label>

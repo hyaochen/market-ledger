@@ -26,9 +26,9 @@ if %errorlevel% neq 0 (
 )
 
 echo.
-echo  [3/3] Starting app container...
+echo  [3/3] Starting app and bot containers...
 echo.
-docker compose up -d market-ledger
+docker compose up -d market-ledger market-ledger-bot
 if %errorlevel% neq 0 (
     echo  Failed to start. Check Docker is running.
     echo.
@@ -43,6 +43,7 @@ echo  ============================================
 echo   Started successfully.
 echo.
 echo   App    : http://localhost:3000
+echo   Bot    : Telegram @market_ledger_bot
 echo   Tunnel : https://hongjixuan-market-ledger.com
 echo.
 echo   Note: Cloudflare tunnel runs separately.

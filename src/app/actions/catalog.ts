@@ -361,3 +361,22 @@ export async function deleteCategory(id: string) {
         return { success: false, error: '刪除類別失敗' };
     }
 }
+
+export async function deleteDictionary(id: string) {
+    try {
+        const auth = await ensureRole('admin');
+        if (!auth.ok) return { success: false, error: auth.error };
+        const tenantId = await getTenantId();
+
+        const existing = await prisma.dictionary.findFirst({ where: { id, tenantId } });
+        if (!existing) return { success: false, error: '項目不存在或無權限' };
+
+        await prisma.dictionary.delete({ where: { id } });
+        revalidatePath('/settings/expenses');
+        revalidatePath('/entry/new');
+        return { success: true };
+    } catch (error) {
+        console.error(error);
+        return { success: false, error: '刪除失敗' };
+    }
+}

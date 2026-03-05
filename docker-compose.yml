@@ -16,6 +16,28 @@
     volumes:
       - ./docker-data:/app/data
 
+  market-ledger-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: market-ledger-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: file:/app/data/dev.db
+      # 容器內連到 host 的 Ollama（Windows/Mac 用 host.docker.internal）
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+    volumes:
+      - ./docker-data:/app/data
+    depends_on:
+      - market-ledger
+    # 略過 next build，直接跑 bot
+    command: ["node_modules/.bin/tsx", "bot/index.ts"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
   market-ledger-tunnel:
     build:
       context: .

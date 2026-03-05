@@ -16,8 +16,10 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/components/ui/use-toast";
 import { deleteEntry, updateEntry } from "@/app/actions/entry";
+import { createTemplate } from "@/app/actions/template";
 import type { UnitDef } from "@/lib/units";
 import { formatDateInput } from "@/lib/date";
+import { Star } from "lucide-react";
 
 type EntryRecord = {
     id: string;
@@ -48,6 +50,8 @@ export default function InventoryEntryActions({
     const router = useRouter();
     const { toast } = useToast();
     const [open, setOpen] = useState(false);
+    const [templateOpen, setTemplateOpen] = useState(false);
+    const [templateName, setTemplateName] = useState("");
     const [loading, setLoading] = useState(false);
 
     const [date, setDate] = useState(formatDateInput(new Date(entry.date)));
@@ -58,6 +62,8 @@ export default function InventoryEntryActions({
     const [price, setPrice] = useState(entry.totalPrice.toString());
     const [note, setNote] = useState(entry.note || "");
     const [expenseType, setExpenseType] = useState(entry.expenseType || expenseTypes[0]?.value || "");
+    const [expenseQuantity, setExpenseQuantity] = useState(entry.inputQuantity?.toString() || "");
+    const [expenseEditUnit, setExpenseEditUnit] = useState(entry.inputUnit || "none");
 
     const handleSave = async () => {
         setLoading(true);
@@ -75,6 +81,8 @@ export default function InventoryEntryActions({
             formData.append("expenseType", expenseType);
             formData.append("amount", price);
             formData.append("note", note);
+            if (expenseQuantity) formData.append("expenseQuantity", expenseQuantity);
+            formData.append("expenseUnit", expenseEditUnit);
         }
 
         const result = await updateEntry(entry.id, formData);
@@ -103,8 +111,74 @@ export default function InventoryEntryActions({
         }
     };
 
+    const handleSaveAsTemplate = async () => {
+        if (!templateName.trim()) {
+            toast({ title: "請輸入常用名稱", variant: "destructive" });
+            return;
+        }
+        setLoading(true);
+        const formData = new FormData();
+        formData.append('name', templateName.trim());
+        formData.append('type', entry.type);
+        if (entry.type === 'PURCHASE') {
+            if (entry.itemId) formData.append('itemId', entry.itemId);
+            formData.append('vendorId', entry.vendorId || 'none');
+            formData.append('weight', entry.inputQuantity?.toString() || '');
+            formData.append('unit', entry.inputUnit || 'kg');
+            formData.append('price', entry.totalPrice.toString());
+            formData.append('note', entry.note || '');
+        } else {
+            formData.append('expenseType', entry.expenseType || '');
+            formData.append('amount', entry.totalPrice.toString());
+            formData.append('note', entry.note || '');
+            if (entry.inputQuantity) formData.append('weight', entry.inputQuantity.toString());
+            if (entry.inputUnit) formData.append('unit', entry.inputUnit);
+        }
+        const result = await createTemplate(formData);
+        setLoading(false);
+        if (result.success) {
+            toast({ title: "已加入常用", description: "可在新增記錄時快速套用" });
+            setTemplateOpen(false);
+            setTemplateName("");
+        } else {
+            toast({ title: "儲存失敗", description: result.message, variant: "destructive" });
+        }
+    };
+
     return (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+            {/* 加入常用 */}
+            <Dialog open={templateOpen} onOpenChange={setTemplateOpen}>
+                <DialogTrigger asChild>
+                    <Button size="sm" variant="ghost" className="gap-1 text-muted-foreground" title="加入常用">
+                        <Star className="h-4 w-4" />
+                    </Button>
+                </DialogTrigger>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>加入常用記錄</DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-4 py-2">
+                        <p className="text-sm text-muted-foreground">將此筆記錄儲存為常用，方便下次在新增頁面快速套用。</p>
+                        <div className="space-y-2">
+                            <Label>常用名稱</Label>
+                            <Input
+                                placeholder="例如：每日豬肉進貨"
+                                value={templateName}
+                                onChange={(e) => setTemplateName(e.target.value)}
+                                onKeyDown={(e) => e.key === 'Enter' && handleSaveAsTemplate()}
+                            />
+                        </div>
+                    </div>
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setTemplateOpen(false)}>取消</Button>
+                        <Button onClick={handleSaveAsTemplate} disabled={loading}>
+                            {loading ? "儲存中..." : "儲存"}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
             <Dialog open={open} onOpenChange={setOpen}>
                 <DialogTrigger asChild>
                     <Button size="sm" variant="outline">編輯</Button>
@@ -212,6 +286,31 @@ export default function InventoryEntryActions({
                                         value={price}
                                         onChange={(e) => setPrice(e.target.value)}
                                     />
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-2">
+                                        <Label className="flex gap-1">數量 <span className="text-xs text-muted-foreground">(選填)</span></Label>
+                                        <Input
+                                            type="number"
+                                            placeholder="選填"
+                                            value={expenseQuantity}
+                                            onChange={(e) => setExpenseQuantity(e.target.value)}
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label className="flex gap-1">單位 <span className="text-xs text-muted-foreground">(選填)</span></Label>
+                                        <Select value={expenseEditUnit} onValueChange={setExpenseEditUnit}>
+                                            <SelectTrigger>
+                                                <SelectValue placeholder="不指定" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="none">不指定</SelectItem>
+                                                {units.map((u) => (
+                                                    <SelectItem key={u.code} value={u.code}>{u.name}</SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
                                 </div>
                             </>
                         )}

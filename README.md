@@ -14,6 +14,8 @@
 | 認證 | HMAC-SHA256 簽名 Cookie Session |
 | 部署 | Docker Compose + Cloudflare Tunnel |
 | 圖表 | Recharts |
+| 機器人 | Telegram Bot（node-telegram-bot-api，polling 模式） |
+| 本地 LLM | Ollama（qwen2.5:7b）自然語言解析 |
 
 ---
 
@@ -24,6 +26,7 @@ graph TB
     subgraph 使用者端
         iPhone[iPhone / Android 瀏覽器]
         Desktop[桌面瀏覽器]
+        TG[Telegram App]
     end
 
     subgraph Cloudflare
@@ -34,8 +37,13 @@ graph TB
         direction TB
         Tunnel[cloudflared 容器]
         App[market-ledger 容器\nNext.js 16 + Node.js]
+        Bot[market-ledger-bot 容器\nTelegram Bot + tsx]
         DB[(SQLite\ndocker-data/dev.db)]
         Backup[(本機備份\nC:\\db-backups\\t_web)]
+    end
+
+    subgraph 本地服務
+        Ollama[Ollama\nqwen2.5:7b]
     end
 
     iPhone -->|HTTPS| CF
@@ -43,7 +51,10 @@ graph TB
     CF --> Tunnel
     Tunnel -->|http://market-ledger:3000| App
     App --> DB
+    Bot --> DB
     App -->|啟動時備份| Backup
+    TG <-->|Polling| Bot
+    Bot -->|HTTP 推論| Ollama
 ```
 
 ---
@@ -115,6 +126,80 @@ sequenceDiagram
     Prisma-->>Next.js: 用戶資料
     Next.js-->>使用者: 渲染頁面
 ```
+
+---
+
+## Telegram Bot 自然語言記帳
+
+透過 Telegram 傳送中文語音轉文字或手打記帳訊息，Bot 自動解析、比對資料庫並儲存，與 Web UI 共用同一 SQLite 資料庫即時同步。
+
+### Bot 記帳流程
+
+```mermaid
+flowchart TD
+    A([用戶傳訊息]) --> B{已登入?}
+    B --否--> C[回覆：請輸入帳號密碼]
+    C --> D[帳號 密碼]
+    D --> E{SHA-256 密碼驗證}
+    E --失敗--> C
+    E --成功--> F[✅ 登入成功\n7天有效 存入 SystemConfig]
+    F --> G
+
+    B --是--> G{訊息類型}
+    G --查詢指令\n今天/昨天/日期--> H[查詢 DB\n回傳記錄摘要]
+    G --記帳文字--> I[Ollama qwen2.5:7b\n自然語言提取 JSON]
+
+    I --> J[TypeScript 數字修正\nfixNumbersFromRaw]
+    J --> K[Fuzzy 比對 DB\nmatcher.ts]
+
+    K --> L{全部確信?}
+    L --是--> M[直接存入 DB]
+    L --否--> N[逐一確認\n顯示解析結果]
+
+    N --> O{使用者回應}
+    O --✅ 確認--> P{需要補充?}
+    O --❌ 跳過--> Q[捨棄此筆]
+
+    P --未知品項--> R[🛒 新增進貨品項\n💸 新增支出費用\n❌ 略過]
+    P --未選廠商--> S[顯示廠商清單按鈕\n依歷史頻率排序]
+    P --重複記錄--> T[⚠️ 今日已有記錄\n確定再記一筆?]
+    P --無--> U[存入 DB]
+
+    R --> U
+    S --> V[選擇廠商 or 不填] --> U
+    T --> W{用戶決定} --> U
+
+    M --> X[📊 記錄摘要]
+    U --> X
+    Q --> X
+```
+
+### 支援輸入格式
+
+```
+# 進貨（多行）
+全頭皮3個360廠商海豐
+肝連 2.6臺斤 218 廠商海豐
+五花肉 5000 2.7斤 廠商永新
+
+# 支出
+薪資1220備註阿秀
+清潔費110備註潮州
+
+# 營業額
+潮州攤 12800
+
+# 查詢
+今天記了什麼
+3/3 的記錄
+```
+
+### 新品項/廠商建立流程
+
+- **未知品項**：Bot 提供 [🛒 新增為進貨品項] / [💸 新增為支出費用] / [❌ 略過] 三選一
+- **進貨品項**：選擇分類後即建立並記錄
+- **未知廠商**：提供 [✅ 新增廠商] / [⬜ 不填廠商] 選擇
+- **未指定廠商**：顯示全部廠商按鈕（依歷史頻率排序）供快速選擇
 
 ---
 
@@ -194,15 +279,25 @@ erDiagram
 
 ```
 t_web/
+├── bot/                            # Telegram Bot（獨立 Node.js 進程）
+│   ├── index.ts                    # Bot 主入口（polling 模式、狀態機）
+│   ├── types.ts                    # TypeScript 型別（ParsedEntry, ChatState...）
+│   ├── auth.ts                     # 會話管理 + SHA-256 登入驗證
+│   ├── parser.ts                   # Ollama LLM 解析 + 數字後處理
+│   ├── matcher.ts                  # Fuzzy 比對 DB + 廠商推斷 + 重複偵測
+│   ├── state.ts                    # In-memory 狀態機
+│   └── handlers/
+│       ├── entry.ts                # 進貨/支出存入 DB
+│       └── query.ts                # 查詢今日/歷史記錄
 ├── prisma/
-│   ├── schema.prisma       # 資料庫模型定義
-│   └── seed.ts             # 初始資料 (角色、super admin)
+│   ├── schema.prisma               # 資料庫模型定義
+│   └── seed.ts                     # 初始資料 (角色、super admin)
 ├── scripts/
-│   ├── backup-db.ts        # 每日備份腳本（啟動時執行）
-│   └── seed-demo-data.ts   # 展示用假資料（viewer 帳號用）
+│   ├── backup-db.ts                # 每日備份腳本（啟動時執行）
+│   └── seed-demo-data.ts           # 展示用假資料（viewer 帳號用）
 ├── src/
 │   ├── app/
-│   │   ├── (protected)/    # 一般用戶功能（需登入）
+│   │   ├── (protected)/            # 一般用戶功能（需登入）
 │   │   │   ├── page.tsx            # 首頁儀表板
 │   │   │   ├── entry/new/          # 新增進貨/支出
 │   │   │   ├── inventory/          # 進貨記錄列表
@@ -210,21 +305,21 @@ t_web/
 │   │   │   ├── reports/            # 報表與分析
 │   │   │   └── settings/
 │   │   │       └── users/          # 使用者管理（新增/編輯角色/停用/刪除）
-│   │   ├── (super-admin)/  # 超級管理者後台
+│   │   ├── (super-admin)/          # 超級管理者後台
 │   │   │   └── super-admin/
 │   │   │       ├── page.tsx        # 系統總覽
 │   │   │       └── tenants/        # 企業管理 CRUD
-│   │   ├── actions/        # Next.js Server Actions
-│   │   └── login/          # 登入頁面
+│   │   ├── actions/                # Next.js Server Actions
+│   │   └── login/                  # 登入頁面
 │   ├── components/
 │   │   ├── layout/
 │   │   │   └── MobileNav.tsx       # 底部導覽列（iOS Safe Area 支援）
 │   │   └── ui/                     # shadcn/ui 元件
 │   └── lib/
-│       ├── auth.ts         # 認證邏輯、getCurrentUser
-│       ├── session.ts      # Cookie Session 簽名/驗證
-│       └── prisma.ts       # Prisma Client 單例
-├── docker-compose.yml      # Docker 部署配置
+│       ├── auth.ts                 # 認證邏輯、getCurrentUser
+│       ├── session.ts              # Cookie Session 簽名/驗證
+│       └── prisma.ts               # Prisma Client 單例
+├── docker-compose.yml              # Docker 部署配置（App + Bot + Tunnel）
 ├── Dockerfile
 └── Dockerfile.cloudflared
 ```
@@ -322,6 +417,11 @@ docker compose logs -f market-ledger
 | `DATABASE_URL` | SQLite 路徑 | `file:./prisma/dev.db` |
 | `SESSION_SECRET` | Session 簽名金鑰（至少 32 字元） | 隨機字串 |
 | `CLOUDFLARED_DIR` | cloudflared 憑證目錄 | `C:/Users/xxx/.cloudflared` |
+| `TELEGRAM_BOT_TOKEN` | Telegram Bot Token（BotFather 取得） | 請勿公開 |
+| `OLLAMA_BASE_URL` | Ollama 服務位址 | `http://localhost:11434` |
+| `OLLAMA_MODEL` | 使用的 LLM 模型 | `qwen2.5:7b` |
+
+> **注意**：請將 `.env` 加入 `.gitignore`，切勿將 Token 或 Secret 提交至版本控制。
 
 ---
 

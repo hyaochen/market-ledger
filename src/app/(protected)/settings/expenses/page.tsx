@@ -1,9 +1,8 @@
 import prisma from "@/lib/prisma";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { Receipt } from "lucide-react";
 import ExpenseForm from "./ExpenseForm";
-import { toggleDictionaryStatus } from "@/app/actions/catalog";
+import ExpenseActions from "./ExpenseActions";
 import { getTenantId } from "@/lib/auth";
 
 export default async function ExpensesPage() {
@@ -45,16 +44,7 @@ export default async function ExpensesPage() {
                                 </span>
                             </CardHeader>
                             <CardContent className="space-y-2 text-sm text-muted-foreground">
-                                <form
-                                    action={async () => {
-                                        "use server";
-                                        await toggleDictionaryStatus(item.id, !item.isActive);
-                                    }}
-                                >
-                                    <Button size="sm" variant="outline" className="mt-2">
-                                        {item.isActive ? "停用" : "啟用"}
-                                    </Button>
-                                </form>
+                                <ExpenseActions id={item.id} isActive={item.isActive} />
                             </CardContent>
                         </Card>
                     ))
