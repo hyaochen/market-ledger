@@ -104,7 +104,8 @@ async function sendUncertainPrompt(chatId: number, entry: ParsedEntry, idx: numb
 }
 
 // ── 建立廠商選擇鍵盤 ─────────────────────────────────────────
-function buildVendorKeyboard(vendors: { id: string; name: string }[]) {
+// allowCreate=true：加入「➕ 新增廠商」按鈕（新建品項後使用）
+function buildVendorKeyboard(vendors: { id: string; name: string }[], allowCreate = false) {
     const rows: { text: string; callback_data: string }[][] = [];
     for (let i = 0; i < vendors.length; i += 2) {
         rows.push(vendors.slice(i, i + 2).map(v => ({
@@ -112,7 +113,24 @@ function buildVendorKeyboard(vendors: { id: string; name: string }[]) {
             callback_data: `vendor_select_${v.id}`,
         })));
     }
+    if (allowCreate) {
+        rows.push([{ text: '➕ 新增廠商', callback_data: 'vendor_create_prompt' }]);
+    }
     rows.push([{ text: '⬜ 不填廠商', callback_data: 'vendor_skip' }]);
+    return { inline_keyboard: rows };
+}
+
+// ── 建立品項選擇鍵盤（多相似品項時使用）────────────────────────
+function buildItemKeyboard(items: { id: string; name: string }[]) {
+    const rows: { text: string; callback_data: string }[][] = [];
+    for (let i = 0; i < items.length; i += 2) {
+        rows.push(items.slice(i, i + 2).map(item => ({
+            text: item.name,
+            callback_data: `item_select_${item.id}`,
+        })));
+    }
+    rows.push([{ text: '➕ 新增品項', callback_data: 'new_purchase_create' }]);
+    rows.push([{ text: '❌ 略過', callback_data: 'new_item_no' }]);
     return { inline_keyboard: rows };
 }
 
@@ -185,6 +203,20 @@ async function handleAcceptedEntry(
             chatId,
             `「${accepted.itemName}」不在支出清單中。\n要新增為支出項目並記錄 $${accepted.price} 嗎？`,
             { reply_markup: NEW_ITEM_KEYBOARD },
+        );
+        return true;
+    }
+
+    // PURCHASE 有多個相似品項 → 讓使用者選擇
+    if (accepted.type === 'PURCHASE' && accepted._itemCandidates?.length) {
+        removeLastConfirmed(chatId);
+        setState(chatId, {
+            phase: 'awaiting_item_select',
+            newItemPending: { entry: accepted, suggestedName: accepted.itemName ?? '', nextUncertain: next },
+        });
+        await bot.sendMessage(chatId,
+            `「${accepted.itemName}」有以下相似品項，請選擇：`,
+            { reply_markup: buildItemKeyboard(accepted._itemCandidates) },
         );
         return true;
     }
@@ -322,6 +354,81 @@ bot.on('message', async (msg) => {
         return;
     }
 
+    // ── 等待支出項目確認（awaiting_new_expense，僅有按鈕互動）──
+    if (state.phase === 'awaiting_new_expense') {
+        if (/^(略過|skip|跳過|取消|cancel)$/i.test(text)) {
+            const next = exitNewItemFlow(chatId);
+            if (next) {
+                const ctx2 = await loadDbContext(session.tenantId);
+                await sendUncertainPrompt(chatId, next, 0, ctx2);
+            } else {
+                await finalizeEntries(chatId, session);
+            }
+        } else {
+            await bot.sendMessage(chatId, '請點選上方按鈕確認是否新增支出項目，或輸入「略過」跳過。');
+        }
+        return;
+    }
+
+    // ── 等待輸入新廠商名稱（awaiting_new_vendor_input）────────
+    if (state.phase === 'awaiting_new_vendor_input' && state.newItemPending) {
+        const pending = state.newItemPending;
+        if (/^(略過|skip|跳過|取消|cancel)$/i.test(text)) {
+            addToConfirmed(chatId, { ...pending.entry, vendorId: null, vendorName: null });
+            const next = exitNewItemFlow(chatId);
+            if (next) {
+                const ctx2 = await loadDbContext(session.tenantId);
+                await sendUncertainPrompt(chatId, next, 0, ctx2);
+            } else {
+                await finalizeEntries(chatId, session);
+            }
+            return;
+        }
+        const vendorName = text.trim();
+        try {
+            const vendor = await prisma.vendor.create({
+                data: { name: vendorName, isActive: true, tenantId: session.tenantId },
+            });
+            addToConfirmed(chatId, { ...pending.entry, vendorId: vendor.id, vendorName: vendor.name });
+            await bot.sendMessage(chatId, `✅ 已新增廠商「${vendor.name}」。`);
+        } catch {
+            const existing = await prisma.vendor.findFirst({
+                where: { name: vendorName, tenantId: session.tenantId },
+            });
+            if (existing) {
+                addToConfirmed(chatId, { ...pending.entry, vendorId: existing.id, vendorName: existing.name });
+                await bot.sendMessage(chatId, `✅ 廠商「${existing.name}」已存在，已使用。`);
+            } else {
+                addToConfirmed(chatId, { ...pending.entry, vendorId: null, vendorName: null });
+                await bot.sendMessage(chatId, '❌ 新增廠商失敗，將不記錄廠商。');
+            }
+        }
+        const next = exitNewItemFlow(chatId);
+        if (next) {
+            const ctx2 = await loadDbContext(session.tenantId);
+            await sendUncertainPrompt(chatId, next, 0, ctx2);
+        } else {
+            await finalizeEntries(chatId, session);
+        }
+        return;
+    }
+
+    // ── 等待品項選擇（awaiting_item_select，僅有按鈕互動）────────
+    if (state.phase === 'awaiting_item_select') {
+        if (/^(略過|skip|跳過|取消|cancel)$/i.test(text)) {
+            const next = exitNewItemFlow(chatId);
+            if (next) {
+                const ctx2 = await loadDbContext(session.tenantId);
+                await sendUncertainPrompt(chatId, next, 0, ctx2);
+            } else {
+                await finalizeEntries(chatId, session);
+            }
+        } else {
+            await bot.sendMessage(chatId, '請點選上方按鈕選擇品項，或點「❌ 略過」跳過。');
+        }
+        return;
+    }
+
     // ── 等待新增品項名稱輸入（awaiting_new_purchase）──────────
     if (state.phase === 'awaiting_new_purchase' && state.newItemPending) {
         const ctx = await loadDbContext(session.tenantId);
@@ -423,8 +530,9 @@ bot.on('message', async (msg) => {
             }
             return;
         }
-        // 不是確認回覆 → 繼續往下處理為新輸入（重置狀態）
-        resetToIdle(chatId);
+        // 非確認詞 → 提示使用按鈕，不重置待確認記錄
+        await bot.sendMessage(chatId, '⚠️ 請點選上方 ✅/❌ 按鈕確認，或輸入「略過」放棄本批記錄。');
+        return;
     }
 
     // ── 查詢意圖 ──────────────────────────────────────────
@@ -460,8 +568,8 @@ bot.on('message', async (msg) => {
     const { confident, uncertain } = startConfirmation(chatId, enriched);
 
     if (uncertain.length === 0) {
-        const { saved, duplicates, failed } = await processEntries(confident, session, ctx);
-        const summary = formatSummary(saved, duplicates, failed, ctx);
+        const { saved, failed } = await processEntries(confident, session, ctx);
+        const summary = formatSummary(saved, failed, ctx);
         resetToIdle(chatId);
         await bot.sendMessage(chatId, summary);
     } else {
@@ -550,6 +658,57 @@ bot.on('callback_query', async (query) => {
         return;
     }
 
+    // ── 從相似品項中選擇 ─────────────────────────────────────
+    if (data.startsWith('item_select_')) {
+        const pending = state.newItemPending;
+        if (!pending) return;
+        const itemId = data.replace('item_select_', '');
+        const item = ctx.items.find(i => i.id === itemId);
+        if (!item) {
+            await bot.sendMessage(chatId, '❌ 找不到該品項，請重新選擇。');
+            return;
+        }
+
+        // 用選定品項重新做 enrichment（主要是補廠商推斷）
+        const { enrichEntry: enrich } = await import('./matcher');
+        const selectedEntry = { ...pending.entry, itemId: item.id, itemName: item.name, _itemCandidates: undefined };
+        const enriched2 = await enrich(selectedEntry, ctx);
+        const savedNext = pending.nextUncertain;
+
+        if (enriched2._vendorCandidates?.length) {
+            setState(chatId, {
+                phase: 'awaiting_vendor_decision',
+                newItemPending: { entry: enriched2, suggestedName: '', nextUncertain: savedNext },
+            });
+            await bot.sendMessage(chatId,
+                `「${item.name}」請選擇廠商（${enriched2._vendorCandidates.length} 個）：`,
+                { reply_markup: buildVendorKeyboard(enriched2._vendorCandidates) },
+            );
+        } else if (enriched2.itemId && enriched2.vendorName && !enriched2.vendorId) {
+            setState(chatId, {
+                phase: 'awaiting_vendor_decision',
+                newItemPending: { entry: enriched2, suggestedName: enriched2.vendorName, nextUncertain: savedNext },
+            });
+            await bot.sendMessage(chatId,
+                `「${enriched2.vendorName}」不在廠商清單中，要新增嗎？`,
+                { reply_markup: { inline_keyboard: [[
+                    { text: '✅ 新增廠商', callback_data: 'vendor_create' },
+                    { text: '⬜ 不填廠商', callback_data: 'vendor_skip' },
+                ]] } },
+            );
+        } else {
+            addToConfirmed(chatId, enriched2);
+            setState(chatId, {
+                phase: savedNext ? 'awaiting_confirmation' : 'idle',
+                newItemPending: null,
+                currentUncertain: savedNext,
+            });
+            if (savedNext) await sendUncertainPrompt(chatId, savedNext, 0, ctx);
+            else await finalizeEntries(chatId, session);
+        }
+        return;
+    }
+
     // ── 新增為進貨品項 → 顯示分類鍵盤 ─────────────────────────
     if (data === 'new_purchase_create') {
         const pending = state.newItemPending;
@@ -602,23 +761,50 @@ bot.on('callback_query', async (query) => {
         const categoryId = data.replace('cat_select_', '');
         const itemName = pending.confirmedItemName ?? pending.suggestedName;
         const defaultUnit = pending.entry.unit ?? ctx.units[0]?.code ?? '個';
+        const savedNextUncertain = pending.nextUncertain;
 
         try {
             const newItemId = await createItem(session.tenantId, itemName, categoryId, defaultUnit);
             const category = ctx.categories.find(c => c.id === categoryId);
             const updatedEntry: ParsedEntry = { ...pending.entry, itemId: newItemId, itemName };
-            addToConfirmed(chatId, updatedEntry);
-            await bot.sendMessage(chatId, `✅ 已新增品項「${itemName}」（分類：${category?.name ?? categoryId}），並加入待儲存清單。`);
+
+            await bot.sendMessage(chatId, `✅ 已新增品項「${itemName}」（分類：${category?.name ?? categoryId}）`);
+
+            // 新品項建立後詢問廠商（有廠商資料才問）
+            if (ctx.vendors.length > 0) {
+                setState(chatId, {
+                    phase: 'awaiting_vendor_decision',
+                    newItemPending: { entry: updatedEntry, suggestedName: '', nextUncertain: savedNextUncertain },
+                    currentUncertain: savedNextUncertain,
+                });
+                await bot.sendMessage(chatId,
+                    `「${itemName}」請選擇廠商（${ctx.vendors.length} 個）：`,
+                    { reply_markup: buildVendorKeyboard(ctx.vendors, true) },
+                );
+            } else {
+                addToConfirmed(chatId, updatedEntry);
+                setState(chatId, { phase: savedNextUncertain ? 'awaiting_confirmation' : 'idle', newItemPending: null, currentUncertain: savedNextUncertain });
+                if (savedNextUncertain) {
+                    await sendUncertainPrompt(chatId, savedNextUncertain, 0, ctx);
+                } else {
+                    await finalizeEntries(chatId, session, ctx);
+                }
+            }
         } catch (e) {
             await bot.sendMessage(chatId, `❌ 新增品項失敗：${e}`);
+            const next = exitNewItemFlow(chatId);
+            if (next) await sendUncertainPrompt(chatId, next, 0, ctx);
+            else await finalizeEntries(chatId, session, ctx);
         }
+        return;
+    }
 
-        const next = exitNewItemFlow(chatId);
-        if (next) {
-            await sendUncertainPrompt(chatId, next, 0, ctx);
-        } else {
-            await finalizeEntries(chatId, session, ctx);
-        }
+    // ── 廠商：提示輸入新廠商名稱（新建品項後） ─────────────────
+    if (data === 'vendor_create_prompt') {
+        const pending = state.newItemPending;
+        if (!pending) return;
+        setState(chatId, { phase: 'awaiting_new_vendor_input' });
+        await bot.sendMessage(chatId, '請輸入新廠商名稱（或輸入「略過」不填廠商）：');
         return;
     }
 
@@ -693,8 +879,8 @@ async function finalizeEntries(
 
     // 重新載入最新 ctx，確保新建品項/支出類型能正確顯示名稱
     const freshCtx = await loadDbContext(session.tenantId);
-    const { saved, duplicates, failed } = await processEntries(confirmed, session, freshCtx);
-    const summary = formatSummary(saved, duplicates, failed, freshCtx);
+    const { saved, failed } = await processEntries(confirmed, session, freshCtx);
+    const summary = formatSummary(saved, failed, freshCtx);
     await bot.sendMessage(chatId, summary);
 }
 

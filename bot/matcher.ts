@@ -114,24 +114,44 @@ export async function enrichEntry(entry: ParsedEntry, ctx: DbContext): Promise<P
     if (entry.type === 'PURCHASE') {
         // 若 itemId 為 null，用 itemName 做 fuzzy matching
         if (!enriched.itemId && entry.itemName) {
-            let bestScore = 0;
-            let bestItem: typeof ctx.items[0] | null = null;
+            // 收集所有分數 >= 0.5 的候選品項
+            const candidates: { item: typeof ctx.items[0]; score: number }[] = [];
             for (const item of ctx.items) {
                 const score = fuzzyScore(entry.itemName, item.name);
-                if (score > bestScore) { bestScore = score; bestItem = item; }
+                if (score >= 0.5) candidates.push({ item, score });
             }
-            if (bestItem && bestScore >= 0.65) {
-                enriched.itemId = bestItem.id;
-                enriched.itemName = bestItem.name; // 標準化名稱
-                if (bestScore < 1.0) {
-                    enriched.confident = false;
-                    enriched.uncertainReason = `「${entry.itemName}」→「${bestItem.name}」，請確認是否正確`;
-                }
-                console.log(`[Matcher] item "${entry.itemName}" → "${bestItem.name}" (score=${bestScore.toFixed(2)})`);
-            } else {
+            candidates.sort((a, b) => b.score - a.score);
+
+            if (candidates.length === 0) {
+                // 完全找不到相似品項 → 觸發新增流程
                 enriched.confident = false;
                 enriched.uncertainReason = `找不到品項「${entry.itemName}」，請確認`;
-                console.log(`[Matcher] item "${entry.itemName}" no match (best score=${bestScore.toFixed(2)})`);
+                console.log(`[Matcher] item "${entry.itemName}" no match`);
+            } else if (candidates[0].score >= 1.0) {
+                // 完全匹配 → 直接採用
+                enriched.itemId = candidates[0].item.id;
+                enriched.itemName = candidates[0].item.name;
+                console.log(`[Matcher] item "${entry.itemName}" exact match → "${candidates[0].item.name}"`);
+            } else if (candidates.length >= 2) {
+                // 多個相似品項 → 讓使用者選擇
+                enriched._itemCandidates = candidates.map(c => ({ id: c.item.id, name: c.item.name }));
+                enriched.confident = false;
+                enriched.uncertainReason = `「${entry.itemName}」有 ${candidates.length} 個相似品項，請選擇`;
+                console.log(`[Matcher] item "${entry.itemName}" → ${candidates.length} candidates`);
+            } else {
+                // 唯一候選，分數 >= 0.65 → 詢問確認；< 0.65 → 新增流程
+                const best = candidates[0];
+                if (best.score >= 0.65) {
+                    enriched.itemId = best.item.id;
+                    enriched.itemName = best.item.name;
+                    enriched.confident = false;
+                    enriched.uncertainReason = `「${entry.itemName}」→「${best.item.name}」，請確認是否正確`;
+                    console.log(`[Matcher] item "${entry.itemName}" → "${best.item.name}" (score=${best.score.toFixed(2)})`);
+                } else {
+                    enriched.confident = false;
+                    enriched.uncertainReason = `找不到品項「${entry.itemName}」，請確認`;
+                    console.log(`[Matcher] item "${entry.itemName}" weak match only (best score=${best.score.toFixed(2)})`);
+                }
             }
         }
 
@@ -221,13 +241,30 @@ export async function enrichEntry(entry: ParsedEntry, ctx: DbContext): Promise<P
         }
     } else if (entry.type === 'EXPENSE') {
         // 用 itemName（LLM 提取的支出說明）做 fuzzy matching 找支出類型
-        if (!enriched.expenseType && entry.itemName) {
+        // Fallback：若 itemName 為 null，嘗試從 rawInput 提取（去除日期/數字/備註後剩餘）
+        let expenseQuery = entry.itemName;
+        if (!expenseQuery && entry.rawInput) {
+            const stripped = entry.rawInput
+                .replace(/\d+[月日號]\d*[月日號]?/g, '')   // 日期：3月4號、4日
+                .replace(/\d+\/\d+/g, '')                   // M/D
+                .replace(/備註.*/g, '')                      // 備註及其後
+                .replace(/廠商\S+/g, '')                     // 廠商XXX
+                .replace(/[\d,，.。]/g, '')                   // 數字
+                .replace(/[臺台斤公斤kgKG個包條份箱罐瓶桶組片顆克袋]/g, '') // 單位
+                .trim();
+            if (stripped.length > 0) {
+                expenseQuery = stripped;
+                console.log(`[Matcher] expense itemName=null, extracted from rawInput: "${stripped}"`);
+            }
+        }
+
+        if (!enriched.expenseType && expenseQuery) {
             let bestScore = 0;
             let bestType: typeof ctx.expenseTypes[0] | null = null;
             for (const et of ctx.expenseTypes) {
                 const score = Math.max(
-                    fuzzyScore(entry.itemName, et.label),
-                    fuzzyScore(entry.itemName, et.value),
+                    fuzzyScore(expenseQuery, et.label),
+                    fuzzyScore(expenseQuery, et.value),
                 );
                 if (score > bestScore) { bestScore = score; bestType = et; }
             }
@@ -235,13 +272,13 @@ export async function enrichEntry(entry: ParsedEntry, ctx: DbContext): Promise<P
                 enriched.expenseType = bestType.value;
                 if (bestScore < 0.9) {
                     enriched.confident = false;
-                    enriched.uncertainReason = `「${entry.itemName}」→「${bestType.label}」，請確認是否正確`;
+                    enriched.uncertainReason = `「${expenseQuery}」→「${bestType.label}」，請確認是否正確`;
                 }
-                console.log(`[Matcher] expense "${entry.itemName}" → "${bestType.label}" (score=${bestScore.toFixed(2)})`);
+                console.log(`[Matcher] expense "${expenseQuery}" → "${bestType.label}" (score=${bestScore.toFixed(2)})`);
             } else {
                 enriched.confident = false;
-                enriched.uncertainReason = `找不到支出類型「${entry.itemName}」，請確認`;
-                console.log(`[Matcher] expense "${entry.itemName}" no match (best score=${bestScore.toFixed(2)})`);
+                enriched.uncertainReason = `找不到支出類型「${expenseQuery}」，請確認`;
+                console.log(`[Matcher] expense "${expenseQuery}" no match (best score=${bestScore.toFixed(2)})`);
             }
         }
 

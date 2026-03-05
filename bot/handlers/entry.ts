@@ -126,15 +126,12 @@ export async function processEntries(
     ctx: DbContext,
 ): Promise<{
     saved: ParsedEntry[];
-    duplicates: { entry: ParsedEntry; existing: { id: string; totalPrice: number; note: string | null } }[];
     failed: { entry: ParsedEntry; error: string }[];
 }> {
     const saved: ParsedEntry[] = [];
-    const duplicates: { entry: ParsedEntry; existing: { id: string; totalPrice: number; note: string | null } }[] = [];
     const failed: { entry: ParsedEntry; error: string }[] = [];
 
     for (const entry of entries) {
-        // 重複偵測已移至 enrichEntry，使用者確認後直接儲存
         const result = await saveEntry(entry, session);
         if (result.success) {
             saved.push(entry);
@@ -143,13 +140,12 @@ export async function processEntries(
         }
     }
 
-    return { saved, duplicates, failed };
+    return { saved, failed };
 }
 
 // 格式化處理結果摘要
 export function formatSummary(
     saved: ParsedEntry[],
-    duplicates: { entry: ParsedEntry; existing: { id: string; totalPrice: number; note: string | null } }[],
     failed: { entry: ParsedEntry; error: string }[],
     ctx: DbContext,
 ): string {
@@ -158,11 +154,6 @@ export function formatSummary(
     if (saved.length > 0) {
         lines.push(`✅ 已記錄 ${saved.length} 筆：`);
         saved.forEach(e => lines.push(`  • ${formatEntry(e, ctx)}`));
-    }
-
-    if (duplicates.length > 0) {
-        lines.push(`⚠️ 重複（已略過）${duplicates.length} 筆：`);
-        duplicates.forEach(({ entry }) => lines.push(`  • ${formatEntry(entry, ctx)}（今天已有相同記錄）`));
     }
 
     if (failed.length > 0) {

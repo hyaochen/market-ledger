@@ -30,15 +30,23 @@ function buildSystemPrompt(today: string, locationNames: string[]): string {
 
 類型（type）：
 - PURCHASE：食材/商品名稱 + 數量/重量 + 金額
-- EXPENSE：薪資/清潔費/停車費/油費/洗攤費等純費用（無數量單位，只有金額）
+- EXPENSE：薪資/清潔費/停車費/油費/洗攤費/洗碗精等費用支出（itemName 填支出名稱，可含數量單位）
 - REVENUE：攤位/店面的營業額（含「攤位」「地點名」+金額）${locHint}
 
 REVENUE 時：itemName 填地點名稱（如「潮州」「屏東」），quantity/unit 為 null
+EXPENSE 時：itemName 填支出名稱（如「薪資」「清潔費」「洗碗精」），有數量時填 quantity/unit
 廠商：「廠商XXX」「向XXX買」才填 vendorName，vendorName 只填廠商名稱本身，不含「廠商」二字
   - 例：「廠商海豐」→ vendorName:"海豐"（不是"廠商海豐"）
   - 例：「廠商哈哈哈」→ vendorName:"哈哈哈"
 備註：「備註XXX」才填，否則 null
-日期：有「3/3」「3月3日」才填，否則 ${today}
+日期：有「3/3」「3月3日」「3月4號」才填，否則 ${today}
+
+輸入範例 → 輸出範例：
+- 「薪資1300備註阿秀」→ {"type":"EXPENSE","itemName":"薪資","price":1300,"note":"阿秀"}
+- 「3月4號清潔費200備註中山」→ {"type":"EXPENSE","date":"YYYY-03-04","itemName":"清潔費","price":200,"note":"中山"}
+- 「洗碗精12桶560」→ {"type":"EXPENSE","itemName":"洗碗精","quantity":12,"unit":"桶","price":560}
+- 「漂白水2桶40」→ {"type":"EXPENSE","itemName":"漂白水","quantity":2,"unit":"桶","price":40}
+- 「肝連2.6台斤218廠商海豐」→ {"type":"PURCHASE","itemName":"肝連","quantity":2.6,"unit":"台斤","price":218,"vendorName":"海豐"}
 
 輸出（只輸出JSON，不加任何說明文字）：
 {"entries":[{"type":"PURCHASE","date":"${today}","itemName":"品項名稱","quantity":2,"unit":"斤","price":6000,"vendorName":"廠商名稱","note":null,"rawInput":"原始文字"}]}`;
@@ -88,8 +96,14 @@ async function callOllama(systemPrompt: string, userText: string, model: string)
             }
         }
         if (!arr) {
-            console.error('[Parser] No array found. Keys:', Object.keys(parsed).join(', '));
-            return null;
+            // LLM 有時回傳單一物件而非陣列，嘗試包裝
+            if (typeof parsed === 'object' && parsed !== null && 'type' in parsed) {
+                arr = [parsed];
+                console.log('[Parser] Wrapped single entry object in array');
+            } else {
+                console.error('[Parser] No array found. Keys:', Object.keys(parsed).join(', '));
+                return null;
+            }
         }
 
         console.log(`[Parser] Extracted ${arr.length} entries`);

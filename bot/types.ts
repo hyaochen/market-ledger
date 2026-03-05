@@ -30,6 +30,8 @@ export type ParsedEntry = {
 
     // 暫存：廠商候選清單（多廠商選擇時使用，不寫入 DB）
     _vendorCandidates?: { id: string; name: string }[];
+    // 暫存：品項候選清單（多相似品項時使用，不寫入 DB）
+    _itemCandidates?: { id: string; name: string }[];
 };
 
 export type SessionData = {
@@ -47,10 +49,12 @@ export type ChatPhase =
     | 'awaiting_auth'
     | 'awaiting_confirmation'
     | 'awaiting_duplicate_confirm'
-    | 'awaiting_new_expense'       // 詢問是否新增支出項目
-    | 'awaiting_new_purchase'      // 請使用者輸入正確品項名稱或選擇新增
-    | 'awaiting_category_select'   // 等待使用者選擇品項分類（建立新品項中）
-    | 'awaiting_vendor_decision';  // 等待廠商確認/選擇/新增
+    | 'awaiting_new_expense'        // 詢問是否新增支出項目
+    | 'awaiting_new_purchase'       // 請使用者輸入正確品項名稱或選擇新增
+    | 'awaiting_category_select'    // 等待使用者選擇品項分類（建立新品項中）
+    | 'awaiting_vendor_decision'    // 等待廠商確認/選擇/新增
+    | 'awaiting_new_vendor_input'   // 使用者輸入新廠商名稱（新增品項後）
+    | 'awaiting_item_select';       // 等待使用者從相似品項中選擇
 
 export type NewItemPending = {
     entry: ParsedEntry;               // 需要新增的那筆

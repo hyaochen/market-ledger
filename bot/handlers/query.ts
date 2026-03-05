@@ -44,6 +44,9 @@ export function detectQueryDate(text: string): Date | 'recent' | null {
 
 // 是否為查詢指令
 export function isQueryIntent(text: string): boolean {
+    const t = text.trim();
+    // 純日期詞直接觸發查詢（不需要額外關鍵字）
+    if (/^(今天|今日|昨天|昨日|最近|近期)$/.test(t)) return true;
     return detectQueryDate(text) !== null &&
         /記|記錄|記了|記了什麼|紀錄|查|什麼|多少/.test(text);
 }
@@ -53,28 +56,45 @@ function fmtDate(d: Date): string {
     return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
-// 查詢指定日期的記錄並格式化
+// 查詢指定日期的記錄並格式化（含進貨、支出、營業額）
 export async function queryByDate(date: Date, session: SessionData, ctx: DbContext): Promise<string> {
     const nextDay = new Date(date);
     nextDay.setDate(nextDay.getDate() + 1);
 
-    const entries = await prisma.entry.findMany({
-        where: {
-            tenantId: session.tenantId,
-            date: { gte: date, lt: nextDay },
-        },
-        include: { item: true, vendor: true },
-        orderBy: { createdAt: 'asc' },
-    });
+    const [entries, revenues] = await Promise.all([
+        prisma.entry.findMany({
+            where: { tenantId: session.tenantId, date: { gte: date, lt: nextDay } },
+            include: { item: true, vendor: true },
+            orderBy: { createdAt: 'asc' },
+        }),
+        prisma.revenue.findMany({
+            where: { tenantId: session.tenantId, date: { gte: date, lt: nextDay } },
+            include: { location: true },
+            orderBy: { date: 'asc' },
+        }),
+    ]);
 
-    if (entries.length === 0) {
+    const totalCount = entries.length + revenues.length;
+    if (totalCount === 0) {
         return `📅 ${fmtDate(date)} 尚無記錄`;
     }
 
-    const lines: string[] = [`📅 ${fmtDate(date)} 記錄（${entries.length} 筆）`];
+    const lines: string[] = [`📅 ${fmtDate(date)} 記錄（${totalCount} 筆）`];
     let purchaseTotal = 0;
     let expenseTotal = 0;
+    let revenueTotal = 0;
 
+    // 營業額
+    if (revenues.length > 0) {
+        lines.push('💰 營業額：');
+        for (const r of revenues) {
+            const note = r.note ? ` 備註：${r.note}` : '';
+            lines.push(`  • ${r.location?.name ?? '?'} $${r.amount.toLocaleString()}${note}`);
+            revenueTotal += r.amount;
+        }
+    }
+
+    // 進貨 & 支出
     for (const e of entries) {
         if (e.type === 'PURCHASE') {
             purchaseTotal += e.totalPrice;
@@ -94,7 +114,11 @@ export async function queryByDate(date: Date, session: SessionData, ctx: DbConte
     }
 
     lines.push('---');
-    lines.push(`進貨：$${purchaseTotal} ｜ 支出：$${expenseTotal} ｜ 合計：$${purchaseTotal + expenseTotal}`);
+    const parts: string[] = [];
+    if (revenues.length > 0) parts.push(`營業額：$${revenueTotal.toLocaleString()}`);
+    if (purchaseTotal > 0) parts.push(`進貨：$${purchaseTotal.toLocaleString()}`);
+    if (expenseTotal > 0) parts.push(`支出：$${expenseTotal.toLocaleString()}`);
+    lines.push(parts.join(' ｜ '));
 
     return lines.join('\n');
 }
@@ -105,36 +129,51 @@ export async function queryRecent(session: SessionData, ctx: DbContext): Promise
     since.setDate(since.getDate() - 6);
     since.setHours(0, 0, 0, 0);
 
-    const entries = await prisma.entry.findMany({
-        where: {
-            tenantId: session.tenantId,
-            date: { gte: since },
-        },
-        include: { item: true, vendor: true },
-        orderBy: { date: 'asc' },
-    });
+    const [entries, revenues] = await Promise.all([
+        prisma.entry.findMany({
+            where: { tenantId: session.tenantId, date: { gte: since } },
+            include: { item: true, vendor: true },
+            orderBy: { date: 'asc' },
+        }),
+        prisma.revenue.findMany({
+            where: { tenantId: session.tenantId, date: { gte: since } },
+            include: { location: true },
+            orderBy: { date: 'asc' },
+        }),
+    ]);
 
-    if (entries.length === 0) {
-        return '📊 最近 7 天尚無記錄';
-    }
+    const totalCount = entries.length + revenues.length;
+    if (totalCount === 0) return '📊 最近 7 天尚無記錄';
 
     // 依日期分組
-    const byDate = new Map<string, typeof entries>();
+    type DayGroup = { entries: typeof entries; revenues: typeof revenues };
+    const byDate = new Map<string, DayGroup>();
+    const getOrCreate = (key: string): DayGroup => {
+        if (!byDate.has(key)) byDate.set(key, { entries: [], revenues: [] });
+        return byDate.get(key)!;
+    };
+
     entries.forEach(e => {
         const key = e.date.toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit' });
-        if (!byDate.has(key)) byDate.set(key, []);
-        byDate.get(key)!.push(e);
+        getOrCreate(key).entries.push(e);
+    });
+    revenues.forEach(r => {
+        const key = r.date.toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit' });
+        getOrCreate(key).revenues.push(r);
     });
 
-    const lines: string[] = [`📊 最近 7 天（${entries.length} 筆）`];
+    const lines: string[] = [`📊 最近 7 天（${totalCount} 筆）`];
     let grandTotal = 0;
 
-    byDate.forEach((dayEntries, dateKey) => {
-        const dayTotal = dayEntries.reduce((s, e) => s + e.totalPrice, 0);
+    byDate.forEach(({ entries: dayEntries, revenues: dayRevs }, dateKey) => {
+        const entryTotal = dayEntries.reduce((s, e) => s + e.totalPrice, 0);
+        const revTotal = dayRevs.reduce((s, r) => s + r.amount, 0);
+        const dayTotal = entryTotal + revTotal;
         grandTotal += dayTotal;
-        lines.push(`  ${dateKey}（${dayEntries.length} 筆，$${dayTotal}）`);
+        const count = dayEntries.length + dayRevs.length;
+        lines.push(`  ${dateKey}（${count} 筆，$${dayTotal.toLocaleString()}）`);
     });
 
-    lines.push(`---\n總計：$${grandTotal}`);
+    lines.push(`---\n總計：$${grandTotal.toLocaleString()}`);
     return lines.join('\n');
 }
