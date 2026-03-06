@@ -19,6 +19,10 @@ function buildSystemPrompt(today: string, locationNames: string[]): string {
 1. 數字絕對不做任何計算、換算、四捨五入，直接從原文複製
 2. 識別方式：有重量/數量單位（臺斤/台斤/斤/公斤/kg/個/包/條/份/箱/罐/瓶）緊接的數字 → quantity；沒有單位的獨立數字 → price
 3. 金額和數量的前後順序不影響判斷，完全依靠「有無單位」決定
+4. itemName/vendorName 必須直接複製自用戶輸入原文，嚴禁轉換字體或改字
+   - 輸入「頭皮」→ itemName:"頭皮"（絕對不可寫成 "头皮"）
+   - 輸入「肝連」→ itemName:"肝連"（絕對不可寫成 "肝连"）
+   - 輸入「清潔費」→ itemName:"清潔費"（絕對不可寫成 "清洁费"）
 - 例：「180臺斤1500塊」→ quantity:180, unit:"臺斤", price:1500
 - 例：「64.9臺斤 15251」→ quantity:64.9, unit:"臺斤", price:15251
 - 例：「五花肉 6000 2斤」→ quantity:2, unit:"斤", price:6000（6000無單位=price，2斤有單位=quantity）

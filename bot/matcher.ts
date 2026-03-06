@@ -63,6 +63,20 @@ export async function loadDbContext(tenantId: string): Promise<DbContext> {
     };
 }
 
+// 從 rawInput 提取品項名（去除數字、單位、廠商、備註、日期後剩餘）
+// 用途：當 LLM 輸出簡體字導致比對失敗時，改用原始輸入文字救援
+const QTY_UNIT_CHARS = '臺台斤公斤kgKGg個包條份箱罐瓶桶組片顆克袋';
+function extractNameFromRaw(raw: string): string {
+    return raw
+        .replace(/\d+[月日號]\d*[月日號]?/g, '')       // 日期：3月4號
+        .replace(/\d+\/\d+/g, '')                       // M/D
+        .replace(/備註.*/g, '')                          // 備註及其後
+        .replace(/廠商\S+/g, '')                         // 廠商XXX
+        .replace(/向\S+買/g, '')                         // 向XXX買
+        .replace(new RegExp(`[\\d,.，。${QTY_UNIT_CHARS}]`, 'g'), '') // 數字+單位
+        .trim();
+}
+
 // 中文 fuzzy 比對分數（0~1）
 function fuzzyScore(query: string, target: string): number {
     const q = query.trim().toLowerCase();
@@ -113,31 +127,55 @@ export async function enrichEntry(entry: ParsedEntry, ctx: DbContext): Promise<P
 
     if (entry.type === 'PURCHASE') {
         // 若 itemId 為 null，用 itemName 做 fuzzy matching
-        if (!enriched.itemId && entry.itemName) {
-            // 收集所有分數 >= 0.5 的候選品項
+        if (!enriched.itemId && (entry.itemName || entry.rawInput)) {
+            // 若 LLM 輸出了 itemName，優先用它；否則從 rawInput 提取
+            // 額外：同時準備 rawInput 提取的名稱作為備用（防止 LLM 輸出簡體字）
+            const llmName = entry.itemName ?? '';
+            const rawName = entry.rawInput ? extractNameFromRaw(entry.rawInput) : '';
+
+            // 決定主要查詢名稱：LLM 名稱優先，但同時也對 rawName 打分做比較
+            const searchName = llmName || rawName;
+            if (!searchName) {
+                enriched.confident = false;
+                enriched.uncertainReason = '無法識別品項名稱';
+                return enriched;
+            }
+
+            // 收集所有分數 >= 0.5 的候選品項（llmName 和 rawName 取最高分）
             const candidates: { item: typeof ctx.items[0]; score: number }[] = [];
             for (const item of ctx.items) {
-                const score = fuzzyScore(entry.itemName, item.name);
+                const s1 = llmName ? fuzzyScore(llmName, item.name) : 0;
+                const s2 = rawName ? fuzzyScore(rawName, item.name) : 0;
+                const score = Math.max(s1, s2);
                 if (score >= 0.5) candidates.push({ item, score });
             }
             candidates.sort((a, b) => b.score - a.score);
 
+            // 若 LLM 名稱比對失敗但 rawName 不同，記錄 fallback 使用
+            if (candidates.length > 0 && llmName && rawName && llmName !== rawName) {
+                const llmBest = Math.max(...ctx.items.map(i => fuzzyScore(llmName, i.name)));
+                const rawBest = Math.max(...ctx.items.map(i => fuzzyScore(rawName, i.name)));
+                if (rawBest > llmBest + 0.1) {
+                    console.log(`[Matcher] rawInput fallback: LLM="${llmName}"(${llmBest.toFixed(2)}) vs raw="${rawName}"(${rawBest.toFixed(2)})`);
+                }
+            }
+
             if (candidates.length === 0) {
                 // 完全找不到相似品項 → 觸發新增流程
                 enriched.confident = false;
-                enriched.uncertainReason = `找不到品項「${entry.itemName}」，請確認`;
-                console.log(`[Matcher] item "${entry.itemName}" no match`);
+                enriched.uncertainReason = `找不到品項「${searchName}」，請確認`;
+                console.log(`[Matcher] item "${searchName}" no match`);
             } else if (candidates[0].score >= 1.0) {
                 // 完全匹配 → 直接採用
                 enriched.itemId = candidates[0].item.id;
                 enriched.itemName = candidates[0].item.name;
-                console.log(`[Matcher] item "${entry.itemName}" exact match → "${candidates[0].item.name}"`);
+                console.log(`[Matcher] item "${searchName}" exact match → "${candidates[0].item.name}"`);
             } else if (candidates.length >= 2) {
                 // 多個相似品項 → 讓使用者選擇
                 enriched._itemCandidates = candidates.map(c => ({ id: c.item.id, name: c.item.name }));
                 enriched.confident = false;
-                enriched.uncertainReason = `「${entry.itemName}」有 ${candidates.length} 個相似品項，請選擇`;
-                console.log(`[Matcher] item "${entry.itemName}" → ${candidates.length} candidates`);
+                enriched.uncertainReason = `「${searchName}」有 ${candidates.length} 個相似品項，請選擇`;
+                console.log(`[Matcher] item "${searchName}" → ${candidates.length} candidates`);
             } else {
                 // 唯一候選，分數 >= 0.65 → 詢問確認；< 0.65 → 新增流程
                 const best = candidates[0];
@@ -145,12 +183,12 @@ export async function enrichEntry(entry: ParsedEntry, ctx: DbContext): Promise<P
                     enriched.itemId = best.item.id;
                     enriched.itemName = best.item.name;
                     enriched.confident = false;
-                    enriched.uncertainReason = `「${entry.itemName}」→「${best.item.name}」，請確認是否正確`;
-                    console.log(`[Matcher] item "${entry.itemName}" → "${best.item.name}" (score=${best.score.toFixed(2)})`);
+                    enriched.uncertainReason = `「${searchName}」→「${best.item.name}」，請確認是否正確`;
+                    console.log(`[Matcher] item "${searchName}" → "${best.item.name}" (score=${best.score.toFixed(2)})`);
                 } else {
                     enriched.confident = false;
-                    enriched.uncertainReason = `找不到品項「${entry.itemName}」，請確認`;
-                    console.log(`[Matcher] item "${entry.itemName}" weak match only (best score=${best.score.toFixed(2)})`);
+                    enriched.uncertainReason = `找不到品項「${searchName}」，請確認`;
+                    console.log(`[Matcher] item "${searchName}" weak match only (best score=${best.score.toFixed(2)})`);
                 }
             }
         }
