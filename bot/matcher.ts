@@ -77,9 +77,31 @@ function extractNameFromRaw(raw: string): string {
         .trim();
 }
 
+// 簡體→繁體常用字對照（僅包含在食材/費用情境下明確無歧義的字）
+// 目的：LLM 有時輸出簡體字，比對前先轉換，避免「头皮」≠「頭皮」
+const S2T_MAP: Record<string, string> = {
+    // 食材 / 動物
+    '头': '頭', '猪': '豬', '鸡': '雞', '鸭': '鴨',
+    '鱼': '魚', '虾': '蝦', '贝': '貝', '鱿': '魷',
+    '鳗': '鰻', '鳝': '鱔', '鲈': '鱸', '鲑': '鮭',
+    '脚': '腳', '连': '連', '带': '帶', '叶': '葉',
+    '绿': '綠', '红': '紅', '黄': '黃', '蓝': '藍',
+    // 費用 / 商業
+    '费': '費', '钱': '錢', '块': '塊', '万': '萬',
+    '购': '購', '货': '貨', '进': '進', '单': '單',
+    '发': '發', '产': '產', '来': '來', '时': '時',
+    '车': '車', '洁': '潔', '务': '務', '营': '營',
+    '业': '業', '经': '經', '长': '長', '类': '類',
+    '员': '員', '总': '總', '净': '淨',
+};
+
+function normalizeS2T(text: string): string {
+    return text.split('').map(c => S2T_MAP[c] ?? c).join('');
+}
+
 // 中文 fuzzy 比對分數（0~1）
 function fuzzyScore(query: string, target: string): number {
-    const q = query.trim().toLowerCase();
+    const q = normalizeS2T(query.trim().toLowerCase());
     const t = target.trim().toLowerCase();
     if (!q || !t) return 0;
     if (t === q) return 1.0;
