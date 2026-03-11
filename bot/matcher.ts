@@ -150,9 +150,16 @@ export async function enrichEntry(entry: ParsedEntry, ctx: DbContext): Promise<P
     if (entry.type === 'PURCHASE') {
         // 若 itemId 為 null，用 itemName 做 fuzzy matching
         if (!enriched.itemId && (entry.itemName || entry.rawInput)) {
-            // 若 LLM 輸出了 itemName，優先用它；否則從 rawInput 提取
-            // 額外：同時準備 rawInput 提取的名稱作為備用（防止 LLM 輸出簡體字）
-            const llmName = entry.itemName ?? '';
+            // 清除 LLM itemName 污染並提取備註（與 EXPENSE 同樣可能發生）
+            let cleanedLlmName = entry.itemName ?? '';
+            if (cleanedLlmName) {
+                const noteInName = cleanedLlmName.match(/備註(.+)/);
+                if (noteInName && !enriched.note) {
+                    enriched.note = noteInName[1].trim();
+                }
+                cleanedLlmName = cleanedLlmName.replace(/備註.*/g, '').replace(/廠商\S+/g, '').trim();
+            }
+            const llmName = cleanedLlmName;
             const rawName = entry.rawInput ? extractNameFromRaw(entry.rawInput) : '';
 
             // 決定主要查詢名稱：LLM 名稱優先，但同時也對 rawName 打分做比較
@@ -304,7 +311,13 @@ export async function enrichEntry(entry: ParsedEntry, ctx: DbContext): Promise<P
         let expenseQuery: string | null = entry.itemName ?? null;
 
         // 清除 LLM itemName 中常見的污染：LLM 有時把「備註XXX」混進 itemName
+        // 同時：若 itemName 含「備註XXX」且 note 尚未設定，則順便提取備註
         if (expenseQuery) {
+            const noteInName = expenseQuery.match(/備註(.+)/);
+            if (noteInName && !enriched.note) {
+                enriched.note = noteInName[1].trim();
+                console.log(`[Matcher] extracted note from itemName: "${enriched.note}"`);
+            }
             expenseQuery = expenseQuery
                 .replace(/備註.*/g, '')
                 .replace(/廠商\S+/g, '')

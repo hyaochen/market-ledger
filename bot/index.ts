@@ -820,18 +820,52 @@ bot.on('callback_query', async (query) => {
         return;
     }
 
-    // ── 選擇已有支出類型 ─────────────────────────────────────
+    // ── 選擇已有支出類型 → 顯示最終確認 ──────────────────────
     if (data.startsWith('expense_type_select_')) {
         const pending = state.newItemPending;
         if (!pending) return;
         const value = data.replace('expense_type_select_', '');
         const et = ctx.expenseTypes.find(e => e.value === value);
         if (!et) { await bot.sendMessage(chatId, '❌ 找不到該支出類型'); return; }
-        addToConfirmed(chatId, { ...pending.entry, expenseType: value });
-        await bot.sendMessage(chatId, `✅ 支出類型：${et.label}`);
+
+        // 更新 pending entry（含支出類型），顯示確認訊息讓使用者最終確認
+        const finalEntry = { ...pending.entry, expenseType: value };
+        setState(chatId, {
+            phase: 'awaiting_new_expense',
+            newItemPending: { ...pending, entry: finalEntry },
+        });
+        const display = formatEntry(finalEntry, ctx);
+        await bot.sendMessage(chatId,
+            `📋 即將儲存：\n*${display}*\n\n確認儲存嗎？`,
+            {
+                parse_mode: 'Markdown',
+                reply_markup: { inline_keyboard: [[
+                    { text: '✅ 確認儲存', callback_data: 'expense_save_confirm' },
+                    { text: '↩️ 重選類型', callback_data: 'expense_reselect' },
+                    { text: '❌ 取消', callback_data: 'new_item_no' },
+                ]] },
+            },
+        );
+        return;
+    }
+
+    // ── 支出：確認儲存 ────────────────────────────────────────
+    if (data === 'expense_save_confirm') {
+        const pending = state.newItemPending;
+        if (!pending) return;
+        addToConfirmed(chatId, pending.entry);
         const next = exitNewItemFlow(chatId);
         if (next) await sendUncertainPrompt(chatId, next, 0, ctx);
         else await finalizeEntries(chatId, session);
+        return;
+    }
+
+    // ── 支出：重選類型 ────────────────────────────────────────
+    if (data === 'expense_reselect') {
+        const pending = state.newItemPending;
+        if (!pending) return;
+        const hint = pending.entry.itemName ? `「${pending.entry.itemName}」屬於哪種支出？` : '請選擇支出類型：';
+        await bot.sendMessage(chatId, hint, { reply_markup: buildExpenseTypeKeyboard(ctx.expenseTypes) });
         return;
     }
 
