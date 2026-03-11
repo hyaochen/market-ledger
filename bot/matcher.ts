@@ -300,24 +300,37 @@ export async function enrichEntry(entry: ParsedEntry, ctx: DbContext): Promise<P
             }
         }
     } else if (entry.type === 'EXPENSE') {
-        // 用 itemName（LLM 提取的支出說明）做 fuzzy matching 找支出類型
-        // Fallback：若 itemName 為 null，嘗試從 rawInput 提取（去除日期/數字/備註後剩餘）
-        let expenseQuery = entry.itemName;
-        if (!expenseQuery && entry.rawInput) {
-            const stripped = entry.rawInput
-                .replace(/\d+[月日號]\d*[月日號]?/g, '')   // 日期：3月4號、4日
-                .replace(/\d+\/\d+/g, '')                   // M/D
-                .replace(/備註.*/g, '')                      // 備註及其後
-                .replace(/廠商\S+/g, '')                     // 廠商XXX
-                .replace(/[\d,，.。]/g, '')                   // 數字
-                .replace(/[臺台斤公斤kgKG個包條份箱罐瓶桶組片顆克袋]/g, '') // 單位
-                .trim();
-            if (stripped.length > 0) {
-                expenseQuery = stripped;
-                console.log(`[Matcher] expense itemName=null, extracted from rawInput: "${stripped}"`);
+        // Step 1：取得支出查詢名稱（清除 LLM 污染 → rawInput 備援）
+        let expenseQuery: string | null = entry.itemName ?? null;
+
+        // 清除 LLM itemName 中常見的污染：LLM 有時把「備註XXX」混進 itemName
+        if (expenseQuery) {
+            expenseQuery = expenseQuery
+                .replace(/備註.*/g, '')
+                .replace(/廠商\S+/g, '')
+                .trim() || null;
+            if (entry.itemName && !expenseQuery) {
+                console.log(`[Matcher] expense itemName "${entry.itemName}" was all artifact, cleared`);
             }
         }
 
+        // Fallback：若 itemName 為 null 或被清空，嘗試從 rawInput 提取
+        if (!expenseQuery && entry.rawInput) {
+            const stripped = entry.rawInput
+                .replace(/\d+[月日號]\d*[月日號]?/g, '')
+                .replace(/\d+\/\d+/g, '')
+                .replace(/備註.*/g, '')
+                .replace(/廠商\S+/g, '')
+                .replace(/[\d,，.。]/g, '')
+                .replace(/[臺台斤公斤kgKG個包條份箱罐瓶桶組片顆克袋]/g, '')
+                .trim();
+            if (stripped.length > 0) {
+                expenseQuery = stripped;
+                console.log(`[Matcher] expense query from rawInput: "${stripped}"`);
+            }
+        }
+
+        // Step 2：fuzzy 比對（閾值 0.6，避免「備註潮州」誤判「潮州電費」等假陽性）
         if (!enriched.expenseType && expenseQuery) {
             let bestScore = 0;
             let bestType: typeof ctx.expenseTypes[0] | null = null;
@@ -328,7 +341,7 @@ export async function enrichEntry(entry: ParsedEntry, ctx: DbContext): Promise<P
                 );
                 if (score > bestScore) { bestScore = score; bestType = et; }
             }
-            if (bestType && bestScore >= 0.4) {
+            if (bestType && bestScore >= 0.6) {
                 enriched.expenseType = bestType.value;
                 if (bestScore < 0.9) {
                     enriched.confident = false;
@@ -336,15 +349,17 @@ export async function enrichEntry(entry: ParsedEntry, ctx: DbContext): Promise<P
                 }
                 console.log(`[Matcher] expense "${expenseQuery}" → "${bestType.label}" (score=${bestScore.toFixed(2)})`);
             } else {
+                // 分數不夠高 → 不猜測，讓使用者從清單中選擇
                 enriched.confident = false;
-                enriched.uncertainReason = `找不到支出類型「${expenseQuery}」，請確認`;
-                console.log(`[Matcher] expense "${expenseQuery}" no match (best score=${bestScore.toFixed(2)})`);
+                const hint = bestType ? `（最接近：${bestType.label} ${(bestScore * 100).toFixed(0)}%）` : '';
+                enriched.uncertainReason = `「${expenseQuery}」無法確認支出類型${hint}，請選擇`;
+                console.log(`[Matcher] expense "${expenseQuery}" no confident match (best=${bestScore.toFixed(2)})`);
             }
         }
 
         if (!enriched.expenseType) {
             enriched.confident = false;
-            enriched.uncertainReason = enriched.uncertainReason ?? '無法識別支出類型';
+            enriched.uncertainReason = enriched.uncertainReason ?? '無法識別支出類型，請選擇';
         }
 
         // 重複偵測（支出）

@@ -78,6 +78,20 @@ const NEW_ITEM_KEYBOARD = {
     ]],
 };
 
+// ── 建立支出類型選擇鍵盤 ────────────────────────────────────────
+function buildExpenseTypeKeyboard(expenseTypes: { value: string; label: string }[]) {
+    const rows: { text: string; callback_data: string }[][] = [];
+    for (let i = 0; i < expenseTypes.length; i += 2) {
+        rows.push(expenseTypes.slice(i, i + 2).map(et => ({
+            text: et.label,
+            callback_data: `expense_type_select_${et.value}`,
+        })));
+    }
+    rows.push([{ text: '➕ 新增支出類型', callback_data: 'new_expense_create' }]);
+    rows.push([{ text: '❌ 略過', callback_data: 'new_item_no' }]);
+    return { inline_keyboard: rows };
+}
+
 // 找不到品項時，詢問類型的鍵盤
 const UNKNOWN_ITEM_KEYBOARD = {
     inline_keyboard: [
@@ -195,15 +209,13 @@ async function handleAcceptedEntry(
     ctx: DbContext,
     session: SessionData,
 ): Promise<boolean> {
-    // EXPENSE 找不到支出類型 → 問是否新增
-    if (accepted.type === 'EXPENSE' && !accepted.expenseType && accepted.itemName) {
-        removeLastConfirmed(chatId); // 先從 confirmed 移除，等建立後再加回
-        enterNewItemFlow(chatId, { entry: accepted, suggestedName: accepted.itemName, nextUncertain: next });
-        await bot.sendMessage(
-            chatId,
-            `「${accepted.itemName}」不在支出清單中。\n要新增為支出項目並記錄 $${accepted.price} 嗎？`,
-            { reply_markup: NEW_ITEM_KEYBOARD },
-        );
+    // EXPENSE 找不到支出類型 → 顯示所有支出類型讓使用者選
+    if (accepted.type === 'EXPENSE' && !accepted.expenseType) {
+        removeLastConfirmed(chatId);
+        const suggestedName = accepted.itemName ?? '';
+        enterNewItemFlow(chatId, { entry: accepted, suggestedName, nextUncertain: next });
+        const hint = suggestedName ? `「${suggestedName}」屬於哪種支出？` : '請選擇支出類型：';
+        await bot.sendMessage(chatId, hint, { reply_markup: buildExpenseTypeKeyboard(ctx.expenseTypes) });
         return true;
     }
 
@@ -805,6 +817,21 @@ bot.on('callback_query', async (query) => {
         if (!pending) return;
         setState(chatId, { phase: 'awaiting_new_vendor_input' });
         await bot.sendMessage(chatId, '請輸入新廠商名稱（或輸入「略過」不填廠商）：');
+        return;
+    }
+
+    // ── 選擇已有支出類型 ─────────────────────────────────────
+    if (data.startsWith('expense_type_select_')) {
+        const pending = state.newItemPending;
+        if (!pending) return;
+        const value = data.replace('expense_type_select_', '');
+        const et = ctx.expenseTypes.find(e => e.value === value);
+        if (!et) { await bot.sendMessage(chatId, '❌ 找不到該支出類型'); return; }
+        addToConfirmed(chatId, { ...pending.entry, expenseType: value });
+        await bot.sendMessage(chatId, `✅ 支出類型：${et.label}`);
+        const next = exitNewItemFlow(chatId);
+        if (next) await sendUncertainPrompt(chatId, next, 0, ctx);
+        else await finalizeEntries(chatId, session);
         return;
     }
 
