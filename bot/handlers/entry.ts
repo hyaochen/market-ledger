@@ -4,6 +4,7 @@ import prisma from '../../src/lib/prisma';
 import type { ParsedEntry, SessionData } from '../types';
 import { checkDuplicate } from '../matcher';
 import type { DbContext } from '../types';
+import { formatJinLiang, jinLiangToKg } from '../../src/lib/units';
 
 // 格式化單筆記錄顯示文字
 export function formatEntry(e: ParsedEntry, ctx: DbContext): string {
@@ -20,9 +21,12 @@ export function formatEntry(e: ParsedEntry, ctx: DbContext): string {
         const item = ctx.items.find(i => i.id === e.itemId);
         const vendor = e.vendorId ? ctx.vendors.find(v => v.id === e.vendorId) : null;
         const unitName = e.unit ? (ctx.units.find(u => u.code === e.unit)?.name ?? e.unit) : '';
+        const qtyDisplay = e.quantity != null
+            ? (e.unit === 'jl' ? formatJinLiang(e.quantity) : `${e.quantity}${unitName}`)
+            : '';
         const parts = [
             item?.name ?? e.itemName ?? '未知品項',
-            e.quantity != null ? `${e.quantity}${unitName}` : '',
+            qtyDisplay,
             `$${e.price}`,
             vendor ? `（${vendor.name}）` : '',
             e.note ? `備註：${e.note}` : '',
@@ -88,20 +92,27 @@ export async function saveEntry(entry: ParsedEntry, session: SessionData): Promi
 
             // 計算標準重量（若有換算率）
             if (entry.quantity && entry.unit) {
-                const unitDict = await prisma.dictionary.findFirst({
-                    where: { category: 'unit', value: entry.unit, tenantId: session.tenantId },
-                });
-                if (unitDict?.meta) {
-                    try {
-                        const meta = JSON.parse(unitDict.meta);
-                        if (typeof meta.toKg === 'number') {
-                            data.standardWeight = entry.quantity * meta.toKg;
-                            data.unitPrice = entry.price / (entry.quantity * meta.toKg);
-                        }
-                    } catch { /* ignore */ }
-                }
-                if (!data.unitPrice && entry.quantity > 0) {
-                    data.unitPrice = entry.price / entry.quantity;
+                if (entry.unit === 'jl') {
+                    // jl = 斤兩，encoded as jin*100+liang
+                    const kg = jinLiangToKg(entry.quantity);
+                    data.standardWeight = Math.round(kg * 10000) / 10000;
+                    data.unitPrice = kg > 0 ? entry.price / kg : null;
+                } else {
+                    const unitDict = await prisma.dictionary.findFirst({
+                        where: { category: 'unit', value: entry.unit, tenantId: session.tenantId },
+                    });
+                    if (unitDict?.meta) {
+                        try {
+                            const meta = JSON.parse(unitDict.meta);
+                            if (typeof meta.toKg === 'number') {
+                                data.standardWeight = entry.quantity * meta.toKg;
+                                data.unitPrice = entry.price / (entry.quantity * meta.toKg);
+                            }
+                        } catch { /* ignore */ }
+                    }
+                    if (!data.unitPrice && entry.quantity > 0) {
+                        data.unitPrice = entry.price / entry.quantity;
+                    }
                 }
             }
         } else {

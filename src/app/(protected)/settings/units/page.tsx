@@ -7,8 +7,10 @@ import { parseUnitMeta } from "@/lib/units";
 import { toggleDictionaryStatus } from "@/app/actions/catalog";
 
 export default async function UnitsPage() {
+    const { getTenantId } = await import("@/lib/auth");
+    const tenantId = await getTenantId();
     const unitRows = await prisma.dictionary.findMany({
-        where: { category: "unit" },
+        where: { category: "unit", tenantId },
         orderBy: { sortOrder: "asc" },
     });
 

@@ -1,15 +1,14 @@
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { PlusCircle } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import prisma from "@/lib/prisma";
-import { formatPrice, getUnitLabel } from "@/lib/units";
+import { formatPrice, formatQuantityDisplay } from "@/lib/units";
 import { getUnits } from "@/app/actions/catalog";
 import { getCurrentUser } from "@/lib/auth";
 import InventoryEntryActions from "./InventoryEntryActions";
 import ScrollToTop from "./ScrollToTop";
 
-// Force dynamic rendering
 export const dynamic = 'force-dynamic';
 
 export default async function InventoryPage({
@@ -37,7 +36,6 @@ export default async function InventoryPage({
     const expenseTypeMap = new Map(expenseTypes.map((item) => [item.value, item.label]));
     const EXPENSE_FILTER = "expense";
 
-    // 獲取最近 50 筆進貨/支出
     const entries = await prisma.entry.findMany({
         where: {
             tenantId,
@@ -52,19 +50,19 @@ export default async function InventoryPage({
             vendor: true,
             user: true,
         },
-        orderBy: {
-            date: 'desc'
-        },
-        take: 50
+        orderBy: { date: 'desc' },
+        take: 50,
     });
 
     return (
-        <div className="space-y-6 pb-20 animate-in fade-in zoom-in duration-500">
+        <div className="space-y-5 pb-20 animate-in fade-in zoom-in duration-500">
             <ScrollToTop id={categoryFilter} />
+
+            {/* Header */}
             <header className="flex justify-between items-center">
                 <div>
                     <h1 className="text-2xl font-bold tracking-tight">進貨記錄</h1>
-                    <p className="text-muted-foreground text-sm">最近 {entries.length} 筆記錄</p>
+                    <p className="text-muted-foreground text-sm mt-0.5">最近 {entries.length} 筆記錄</p>
                 </div>
                 <Link href="/entry/new">
                     <Button size="sm" className="gap-1">
@@ -74,37 +72,44 @@ export default async function InventoryPage({
                 </Link>
             </header>
 
-            {/* 篩選器 - sticky 貼在 header 下方 (header 高度 = py-3 + h-9 + border = 61px) */}
-            <div className="sticky top-[61px] z-30 bg-background -mx-4 px-4 py-2 flex gap-2 overflow-x-auto border-b mb-2 shadow-sm">
+            {/* Category Filter - Pill Style */}
+            <div className="sticky top-[61px] z-30 bg-background -mx-4 px-4 py-2.5 flex gap-2 overflow-x-auto border-b shadow-sm">
                 <Link href="/inventory">
-                    <Button variant={categoryFilter === 'all' ? "outline" : "ghost"} size="sm" className="rounded-full">
+                    <button className={[
+                        "px-4 py-2 rounded-xl text-sm font-medium whitespace-nowrap transition-all active:scale-95",
+                        categoryFilter === 'all'
+                            ? "bg-primary text-primary-foreground shadow-sm"
+                            : "bg-accent/40 hover:bg-accent/70 text-foreground"
+                    ].join(" ")}>
                         全部
-                    </Button>
+                    </button>
                 </Link>
                 {categories.map((category) => (
                     <Link key={category.id} href={`/inventory?category=${category.id}`}>
-                        <Button
-                            variant={categoryFilter === category.id ? "outline" : "ghost"}
-                            size="sm"
-                            className="rounded-full"
-                        >
+                        <button className={[
+                            "px-4 py-2 rounded-xl text-sm font-medium whitespace-nowrap transition-all active:scale-95",
+                            categoryFilter === category.id
+                                ? "bg-primary text-primary-foreground shadow-sm"
+                                : "bg-accent/40 hover:bg-accent/70 text-foreground"
+                        ].join(" ")}>
                             {category.name}
-                        </Button>
+                        </button>
                     </Link>
                 ))}
                 <Link href={`/inventory?category=${EXPENSE_FILTER}`}>
-                    <Button
-                        variant={categoryFilter === EXPENSE_FILTER ? "outline" : "ghost"}
-                        size="sm"
-                        className="rounded-full"
-                    >
+                    <button className={[
+                        "px-4 py-2 rounded-xl text-sm font-medium whitespace-nowrap transition-all active:scale-95",
+                        categoryFilter === EXPENSE_FILTER
+                            ? "bg-primary text-primary-foreground shadow-sm"
+                            : "bg-accent/40 hover:bg-accent/70 text-foreground"
+                    ].join(" ")}>
                         其他支出
-                    </Button>
+                    </button>
                 </Link>
             </div>
 
-            {/* 列表內容 */}
-            <div className="space-y-4">
+            {/* Entry List - Compact Card Style (matching Reports) */}
+            <div className="space-y-2">
                 {entries.length === 0 ? (
                     <Card>
                         <CardContent className="flex flex-col items-center justify-center py-10 text-center text-muted-foreground space-y-4">
@@ -118,70 +123,86 @@ export default async function InventoryPage({
                         </CardContent>
                     </Card>
                 ) : (
-                    entries.map(entry => (
-                        <Card key={entry.id} className="overflow-hidden">
-                            <div className="flex border-l-4 border-primary">
-                                <div className="flex-1 p-4">
-                                    <div className="flex justify-between items-start mb-1">
-                                        <h3 className="font-semibold text-base">
+                    entries.map((entry) => (
+                        <Card key={entry.id} className="hover:shadow-sm transition-shadow">
+                            <CardContent className="flex items-center gap-3 p-3 sm:p-4">
+                                {/* Type Badge */}
+                                <div className={[
+                                    "flex-shrink-0 w-10 h-10 rounded-lg flex items-center justify-center text-xs font-bold",
+                                    entry.type === "PURCHASE"
+                                        ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                                        : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                                ].join(" ")}>
+                                    {entry.type === "PURCHASE" ? "進" : "支"}
+                                </div>
+
+                                {/* Content */}
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex items-baseline justify-between gap-2">
+                                        <span className="font-semibold truncate">
                                             {entry.type === "PURCHASE"
                                                 ? entry.item?.name || '未知品項'
                                                 : expenseTypeMap.get(entry.expenseType || "") || entry.expenseType || "其他支出"}
-                                        </h3>
-                                        <span className="font-bold text-primary">{formatPrice(entry.totalPrice)}</span>
-                                    </div>
-
-                                    <div className="flex justify-between text-sm text-muted-foreground">
-                                        <span>
-                                            {entry.type === "PURCHASE"
-                                                ? `${entry.inputQuantity ?? 0} ${getUnitLabel(entry.inputUnit || '', units)}`
-                                                : entry.inputQuantity
-                                                    ? `${entry.inputQuantity} ${getUnitLabel(entry.inputUnit || '', units)} · 支出`
-                                                    : "支出"}
                                         </span>
-                                        <span>{new Date(entry.date).toLocaleDateString('zh-TW')}</span>
+                                        <span className="font-bold text-primary whitespace-nowrap">
+                                            {formatPrice(entry.totalPrice)}
+                                        </span>
                                     </div>
-
-                                    {entry.type === "PURCHASE" && entry.item?.category?.name && (
-                                        <div className="mt-2 text-xs text-muted-foreground">
-                                            類別：{entry.item.category.name}
-                                        </div>
-                                    )}
-
-                                    {entry.type === "PURCHASE" && entry.vendor && (
-                                        <div className="mt-2 text-xs text-muted-foreground bg-muted inline-block px-2 py-1 rounded">
-                                            {entry.vendor.name}
-                                        </div>
-                                    )}
-                                    <div className="mt-3 flex items-center justify-between gap-2">
-                                        {canEdit ? (
-                                            <InventoryEntryActions
-                                                entry={{
-                                                    id: entry.id,
-                                                    date: entry.date.toISOString(),
-                                                    type: entry.type,
-                                                    itemId: entry.itemId,
-                                                    vendorId: entry.vendorId,
-                                                    inputQuantity: entry.inputQuantity,
-                                                    inputUnit: entry.inputUnit,
-                                                    totalPrice: entry.totalPrice,
-                                                    note: entry.note,
-                                                    expenseType: entry.expenseType,
-                                                }}
-                                                items={items}
-                                                vendors={vendors}
-                                                expenseTypes={expenseTypes}
-                                                units={units}
-                                            />
-                                        ) : (
-                                            <div />
+                                    <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5 flex-wrap">
+                                        <span>{new Date(entry.date).toLocaleDateString('zh-TW')}</span>
+                                        {entry.type === "PURCHASE" && (
+                                            <>
+                                                <span>·</span>
+                                                <span>{formatQuantityDisplay(entry.inputQuantity, entry.inputUnit)}</span>
+                                                {entry.item?.category?.name && (
+                                                    <>
+                                                        <span>·</span>
+                                                        <span>{entry.item.category.name}</span>
+                                                    </>
+                                                )}
+                                                {entry.vendor && (
+                                                    <>
+                                                        <span>·</span>
+                                                        <span>{entry.vendor.name}</span>
+                                                    </>
+                                                )}
+                                            </>
                                         )}
-                                        <div className="text-xs text-muted-foreground">
-                                            記錄者：{entry.user?.realName || entry.user?.username || "未知"}
-                                        </div>
+                                        {entry.note && (
+                                            <>
+                                                <span>·</span>
+                                                <span className="truncate">{entry.note}</span>
+                                            </>
+                                        )}
+                                        <span>·</span>
+                                        <span>{entry.user?.realName || entry.user?.username || "未知"}</span>
                                     </div>
                                 </div>
-                            </div>
+
+                                {/* Actions */}
+                                {canEdit && (
+                                    <div className="flex-shrink-0">
+                                        <InventoryEntryActions
+                                            entry={{
+                                                id: entry.id,
+                                                date: entry.date.toISOString(),
+                                                type: entry.type,
+                                                itemId: entry.itemId,
+                                                vendorId: entry.vendorId,
+                                                inputQuantity: entry.inputQuantity,
+                                                inputUnit: entry.inputUnit,
+                                                totalPrice: entry.totalPrice,
+                                                note: entry.note,
+                                                expenseType: entry.expenseType,
+                                            }}
+                                            items={items}
+                                            vendors={vendors}
+                                            expenseTypes={expenseTypes}
+                                            units={units}
+                                        />
+                                    </div>
+                                )}
+                            </CardContent>
                         </Card>
                     ))
                 )}

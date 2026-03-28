@@ -32,6 +32,8 @@ export type ParsedEntry = {
     _vendorCandidates?: { id: string; name: string }[];
     // 暫存：品項候選清單（多相似品項時使用，不寫入 DB）
     _itemCandidates?: { id: string; name: string }[];
+    // 暫存：使用者原始輸入的品項名稱（用於確認後自動儲存 alias，不寫入 DB）
+    _originalSearchName?: string;
 };
 
 export type SessionData = {
@@ -71,6 +73,7 @@ export type ChatState = {
     currentUncertain: ParsedEntry | null;
     session: SessionData | null;
     newItemPending: NewItemPending | null;
+    muteMode: boolean;               // 靜音模式：品項已知則直接記錄，不再詢問廠商/確認
 };
 
 export type DbContext = {

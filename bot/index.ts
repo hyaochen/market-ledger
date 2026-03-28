@@ -1,5 +1,7 @@
 // Telegram Bot 主入口（polling 模式）
 import 'dotenv/config';
+import fs from 'fs';
+import path from 'path';
 import TelegramBot from 'node-telegram-bot-api';
 import prisma from '../src/lib/prisma';
 import {
@@ -19,7 +21,17 @@ import {
 import {
     detectQueryDate, isQueryIntent, queryByDate, queryRecent,
 } from './handlers/query';
+import { saveAlias } from './aliases';
 import type { SessionData, DbContext, ParsedEntry } from './types';
+
+// ── 持久化 Log（寫入 /app/data/bot.log，方便事後查閱）──────────
+const LOG_FILE = path.join(process.env.BOT_DATA_DIR ?? '/app/data', 'bot.log');
+function logLine(tag: string, chatId: number | string, msg: string) {
+    const ts = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
+    const line = `[${ts}] [${tag}] (${chatId}) ${msg}\n`;
+    try { fs.appendFileSync(LOG_FILE, line); } catch { /* ignore write errors */ }
+    console.log(line.trimEnd());
+}
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 if (!TOKEN) {
@@ -58,6 +70,7 @@ const HELP_TEXT = `📖 *使用說明*
 
 *🔧 指令*：
 • /today — 今天記錄
+• /mute — 切換靜音模式（品項已知直接記錄，不詢問廠商）
 • /logout — 登出
 • /help — 說明
 
@@ -284,6 +297,24 @@ async function handleAcceptedEntry(
     return false;
 }
 
+// ── 靜音模式：品項已知直接記錄，不詢問廠商/確認 ────────────────
+function applyMuteMode(entries: ParsedEntry[]): ParsedEntry[] {
+    return entries.map(e => {
+        // PURCHASE：itemId 為 null（真的找不到品項）才保留 uncertain
+        if (e.type === 'PURCHASE' && !e.itemId) return e;
+        // EXPENSE：expenseType 為 null（找不到支出類型）才保留 uncertain
+        if (e.type === 'EXPENSE' && !e.expenseType) return e;
+        // 其餘情況（itemId/expenseType/locationId 已解析）→ 強制 confident，清除廠商選擇
+        return {
+            ...e,
+            confident: true,
+            uncertainReason: null,
+            _vendorCandidates: undefined,
+            _itemCandidates: undefined,
+        };
+    });
+}
+
 // ── 主要訊息處理 ──────────────────────────────────────────────
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
@@ -291,6 +322,11 @@ bot.on('message', async (msg) => {
     const text = (msg.text ?? '').trim();
 
     if (!telegramId || !text) return;
+
+    logLine('IN', chatId, `[${msg.from?.username ?? telegramId}] ${text.slice(0, 120)}`);
+
+    try {
+    // ── handler body start ──────────────────────────────
 
     // 指令處理
     if (text === '/start') {
@@ -315,6 +351,17 @@ bot.on('message', async (msg) => {
         setSession(chatId, null);
         resetToIdle(chatId);
         await bot.sendMessage(chatId, '👋 已登出。');
+        return;
+    }
+
+    if (text === '/mute') {
+        const current = getState(chatId).muteMode;
+        setState(chatId, { muteMode: !current });
+        await bot.sendMessage(chatId,
+            !current
+                ? '🔇 靜音模式已開啟\n品項已知時直接記錄，不再詢問廠商或二次確認。\n再傳 /mute 可關閉。'
+                : '🔔 靜音模式已關閉\n恢復正常確認流程。',
+        );
         return;
     }
 
@@ -550,6 +597,7 @@ bot.on('message', async (msg) => {
     // ── 查詢意圖 ──────────────────────────────────────────
     if (isQueryIntent(text)) {
         const dateResult = detectQueryDate(text);
+        logLine('QUERY', chatId, `date=${dateResult === 'recent' ? 'recent' : dateResult?.toLocaleDateString('zh-TW') ?? 'null'}`);
         const ctx = await loadDbContext(session.tenantId);
         if (dateResult === 'recent') {
             const result = await queryRecent(session, ctx);
@@ -562,6 +610,7 @@ bot.on('message', async (msg) => {
     }
 
     // ── 解析記帳輸入 ──────────────────────────────────────
+    logLine('PARSE', chatId, text.slice(0, 120));
     await bot.sendMessage(chatId, '🔄 解析中，請稍候...');
 
     const ctx = await loadDbContext(session.tenantId);
@@ -575,7 +624,10 @@ bot.on('message', async (msg) => {
     }
 
     // 逐筆 enrichment
-    const enriched = await Promise.all(rawEntries.map(e => enrichEntry(e, ctx)));
+    const enrichedRaw = await Promise.all(rawEntries.map(e => enrichEntry(e, ctx)));
+
+    // 靜音模式：品項已知則強制 confident，跳過廠商選擇與二次確認
+    const enriched = getState(chatId).muteMode ? applyMuteMode(enrichedRaw) : enrichedRaw;
 
     const { confident, uncertain } = startConfirmation(chatId, enriched);
 
@@ -594,6 +646,11 @@ bot.on('message', async (msg) => {
             await sendUncertainPrompt(chatId, first, 0, ctx);
         }
     }
+    // ── handler body end ────────────────────────────────
+    } catch (err) {
+        console.error('[MessageHandler Error]', err);
+        try { await bot.sendMessage(chatId, '⚠️ 處理時發生錯誤，請重新輸入。'); } catch { /* ignore */ }
+    }
 });
 
 // ── Inline Keyboard 回調 ──────────────────────────────────────
@@ -603,7 +660,11 @@ bot.on('callback_query', async (query) => {
     const data = query.data ?? '';
 
     if (!chatId) return;
-    await bot.answerCallbackQuery(query.id);
+    // answerCallbackQuery 可能因 query 過期（>30秒）而失敗，不讓它中斷後續流程
+    try { await bot.answerCallbackQuery(query.id); } catch { /* query too old — ignore */ }
+
+    try {
+    // ── callback handler body start ─────────────────────
 
     const session = await getSession(telegramId);
     if (!session) {
@@ -908,6 +969,10 @@ bot.on('callback_query', async (query) => {
     // ── 一般確認流程 ────────────────────────────────────────
     if (data.startsWith('confirm_yes_')) {
         const { accepted, next } = acceptCurrent(chatId);
+        // 使用者確認了模糊比對 → 儲存 alias 供下次自動命中
+        if (accepted?.type === 'PURCHASE' && accepted._originalSearchName && accepted.itemId && accepted.itemName) {
+            saveAlias(session.tenantId, accepted._originalSearchName, accepted.itemId, accepted.itemName);
+        }
         if (accepted && await handleAcceptedEntry(chatId, accepted, next, ctx, session)) return;
         if (next) {
             await sendUncertainPrompt(chatId, next, 0, ctx);
@@ -921,6 +986,11 @@ bot.on('callback_query', async (query) => {
         } else {
             await finalizeEntries(chatId, session, ctx);
         }
+    }
+    // ── callback handler body end ───────────────────────
+    } catch (err) {
+        console.error('[CallbackHandler Error]', err);
+        try { await bot.sendMessage(chatId, '⚠️ 操作失敗，請重試。'); } catch { /* ignore */ }
     }
 });
 

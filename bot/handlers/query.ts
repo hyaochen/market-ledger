@@ -2,10 +2,26 @@
 
 import prisma from '../../src/lib/prisma';
 import type { SessionData, DbContext } from '../types';
+import { formatJinLiang } from '../../src/lib/units';
+
+// 中文月份轉數字（「三月」→「3月」、「十一月」→「11月」）
+function normalizeChineseDate(text: string): string {
+    return text
+        .replace(/十二月/, '12月')
+        .replace(/十一月/, '11月')
+        .replace(/十月/, '10月')
+        .replace(/([一二兩三四五六七八九])月/, (_, cn: string) => {
+            const map: Record<string, string> = {
+                '一':'1','二':'2','兩':'2','三':'3','四':'4',
+                '五':'5','六':'6','七':'7','八':'8','九':'9',
+            };
+            return (map[cn] ?? cn) + '月';
+        });
+}
 
 // 偵測查詢意圖，回傳目標日期（或 null 代表非查詢）
 export function detectQueryDate(text: string): Date | 'recent' | null {
-    const t = text.trim();
+    const t = normalizeChineseDate(text.trim());
 
     // 今天
     if (/今天|今日|today/.test(t)) {
@@ -44,7 +60,7 @@ export function detectQueryDate(text: string): Date | 'recent' | null {
 
 // 是否為查詢指令
 export function isQueryIntent(text: string): boolean {
-    const t = text.trim();
+    const t = normalizeChineseDate(text.trim());
     // 純日期詞直接觸發查詢（不需要額外關鍵字）
     if (/^(今天|今日|昨天|昨日|最近|近期)$/.test(t)) return true;
     return detectQueryDate(text) !== null &&
@@ -98,10 +114,11 @@ export async function queryByDate(date: Date, session: SessionData, ctx: DbConte
     for (const e of entries) {
         if (e.type === 'PURCHASE') {
             purchaseTotal += e.totalPrice;
-            const unitName = e.inputUnit
-                ? (ctx.units.find(u => u.code === e.inputUnit)?.name ?? e.inputUnit)
+            const qty = e.inputQuantity != null
+                ? (e.inputUnit === 'jl'
+                    ? `${formatJinLiang(e.inputQuantity)} `
+                    : `${e.inputQuantity}${e.inputUnit ? (ctx.units.find(u => u.code === e.inputUnit)?.name ?? e.inputUnit) : ''} `)
                 : '';
-            const qty = e.inputQuantity != null ? `${e.inputQuantity}${unitName} ` : '';
             const vendor = e.vendor ? `（${e.vendor.name}）` : '';
             const note = e.note ? ` 備註：${e.note}` : '';
             lines.push(`  • ${e.item?.name ?? '?'} ${qty}$${e.totalPrice}${vendor}${note}`);

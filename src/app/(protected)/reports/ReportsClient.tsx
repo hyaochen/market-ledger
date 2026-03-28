@@ -1,6 +1,6 @@
-﻿"use client";
+"use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
     LineChart,
@@ -30,11 +30,185 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/components/ui/use-toast";
-import { formatPrice, getUnitLabel, type UnitDef } from "@/lib/units";
+import { formatPrice, getUnitLabel, formatQuantityDisplay, type UnitDef } from "@/lib/units";
 import { deleteEntry, updateEntry } from "@/app/actions/entry";
 import { deleteRevenue, updateRevenue } from "@/app/actions/revenue";
 
 const PIE_COLORS = ["#F97316", "#22C55E", "#0EA5E9", "#F59E0B", "#8B5CF6", "#EC4899", "#10B981"];
+
+/* ─── Calendar Picker Component ─── */
+
+function CalendarPicker({
+    value,
+    onChange,
+    label,
+    minDate,
+}: {
+    value: string;
+    onChange: (date: string) => void;
+    label: string;
+    minDate?: string;
+}) {
+    const [open, setOpen] = useState(false);
+    const [viewYear, setViewYear] = useState(() => {
+        const d = value ? new Date(value + "T00:00:00") : new Date();
+        return d.getFullYear();
+    });
+    const [viewMonth, setViewMonth] = useState(() => {
+        const d = value ? new Date(value + "T00:00:00") : new Date();
+        return d.getMonth();
+    });
+
+    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+
+    const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+    const firstDayOfWeek = new Date(viewYear, viewMonth, 1).getDay();
+
+    const displayDate = value
+        ? (() => {
+            const d = new Date(value + "T00:00:00");
+            return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}`;
+        })()
+        : "選擇日期";
+
+    const weekDays = ["日", "一", "二", "三", "四", "五", "六"];
+
+    const handleSelect = (day: number) => {
+        const selected = fmt(new Date(viewYear, viewMonth, day));
+        onChange(selected);
+        setOpen(false);
+    };
+
+    const prevMonth = () => {
+        if (viewMonth === 0) {
+            setViewYear(viewYear - 1);
+            setViewMonth(11);
+        } else {
+            setViewMonth(viewMonth - 1);
+        }
+    };
+
+    const nextMonth = () => {
+        if (viewMonth === 11) {
+            setViewYear(viewYear + 1);
+            setViewMonth(0);
+        } else {
+            setViewMonth(viewMonth + 1);
+        }
+    };
+
+    const isSelected = (day: number) => {
+        if (!value) return false;
+        return value === fmt(new Date(viewYear, viewMonth, day));
+    };
+
+    const isToday = (day: number) => {
+        const today = new Date();
+        return (
+            today.getFullYear() === viewYear &&
+            today.getMonth() === viewMonth &&
+            today.getDate() === day
+        );
+    };
+
+    return (
+        <div className="relative">
+            <Label className="text-xs text-muted-foreground mb-1 block">{label}</Label>
+            <button
+                type="button"
+                onClick={() => setOpen(!open)}
+                className="flex items-center justify-between w-full h-12 px-4 rounded-lg border border-input bg-background text-base font-medium hover:bg-accent/50 transition-colors active:scale-[0.98]"
+            >
+                <span className={value ? "" : "text-muted-foreground"}>{displayDate}</span>
+                <svg className="w-5 h-5 text-muted-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+            </button>
+
+            {open && (
+                <>
+                    <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+                    <div className="absolute z-50 top-full left-0 mt-2 w-full min-w-[280px] bg-background border border-border rounded-xl shadow-lg p-3 animate-in fade-in zoom-in-95 duration-150">
+                        {/* Month/Year Header */}
+                        <div className="flex items-center justify-between mb-3">
+                            <button
+                                type="button"
+                                onClick={prevMonth}
+                                className="h-9 w-9 flex items-center justify-center rounded-lg hover:bg-accent active:scale-95 transition-all"
+                            >
+                                ‹
+                            </button>
+                            <span className="text-sm font-semibold">
+                                {viewYear} 年 {viewMonth + 1} 月
+                            </span>
+                            <button
+                                type="button"
+                                onClick={nextMonth}
+                                className="h-9 w-9 flex items-center justify-center rounded-lg hover:bg-accent active:scale-95 transition-all"
+                            >
+                                ›
+                            </button>
+                        </div>
+
+                        {/* Weekday Headers */}
+                        <div className="grid grid-cols-7 gap-0.5 mb-1">
+                            {weekDays.map((d) => (
+                                <div key={d} className="text-center text-xs text-muted-foreground font-medium py-1">
+                                    {d}
+                                </div>
+                            ))}
+                        </div>
+
+                        {/* Day Grid */}
+                        <div className="grid grid-cols-7 gap-0.5">
+                            {Array.from({ length: firstDayOfWeek }).map((_, i) => (
+                                <div key={`empty-${i}`} />
+                            ))}
+                            {Array.from({ length: daysInMonth }).map((_, i) => {
+                                const day = i + 1;
+                                const selected = isSelected(day);
+                                const today = isToday(day);
+                                return (
+                                    <button
+                                        key={day}
+                                        type="button"
+                                        onClick={() => handleSelect(day)}
+                                        className={[
+                                            "h-9 w-full rounded-lg text-sm font-medium transition-all active:scale-90",
+                                            selected
+                                                ? "bg-primary text-primary-foreground shadow-sm"
+                                                : today
+                                                    ? "bg-accent text-accent-foreground font-bold"
+                                                    : "hover:bg-accent/60",
+                                        ].join(" ")}
+                                    >
+                                        {day}
+                                    </button>
+                                );
+                            })}
+                        </div>
+
+                        {/* Quick Jump to Today */}
+                        <button
+                            type="button"
+                            onClick={() => {
+                                const now = new Date();
+                                setViewYear(now.getFullYear());
+                                setViewMonth(now.getMonth());
+                                handleSelect(now.getDate());
+                            }}
+                            className="w-full mt-2 h-8 text-xs text-primary hover:bg-accent rounded-lg transition-colors"
+                        >
+                            今天
+                        </button>
+                    </div>
+                </>
+            )}
+        </div>
+    );
+}
+
+/* ─── Main Component ─── */
 
 type ReportsClientProps = {
     roleCode: "read" | "write" | "admin";
@@ -90,6 +264,8 @@ export default function ReportsClient({
     const router = useRouter();
     const { toast } = useToast();
 
+    const [customFrom, setCustomFrom] = useState(range.from);
+    const [customTo, setCustomTo] = useState(range.to);
     const [entryDialogOpen, setEntryDialogOpen] = useState(false);
     const [revenueDialogOpen, setRevenueDialogOpen] = useState(false);
     const [entryForm, setEntryForm] = useState<ReportsClientProps["entries"][number] | null>(null);
@@ -100,9 +276,10 @@ export default function ReportsClient({
     const [revenueDeleting, setRevenueDeleting] = useState<string | null>(null);
     const [entryFilter, setEntryFilter] = useState<"all" | "PURCHASE" | "EXPENSE">("all");
     const [search, setSearch] = useState("");
+    const [chartTab, setChartTab] = useState<"line" | "bar" | "pie">("line");
 
     const expenseTypeMap = useMemo(
-        () => new Map(expenseTypes.map((item) => [item.value, item.label])),
+        () => new Map(expenseTypes.map((item: any) => [item.value, item.label])),
         [expenseTypes]
     );
 
@@ -117,11 +294,40 @@ export default function ReportsClient({
         });
     }, [entries, entryFilter, expenseTypeMap, search]);
 
+    const canEdit = roleCode === "write" || roleCode === "admin";
+
+    /* ─── Preset helpers ─── */
+    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+    const now = new Date();
+    const dayOfWeek = now.getDay() || 7;
+    const weekStart = new Date(now);
+    weekStart.setDate(now.getDate() - dayOfWeek + 1);
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+    const yearStart = new Date(now.getFullYear(), 0, 1);
+    const yearEnd = new Date(now.getFullYear(), 11, 31);
+
+    const presets: { label: string; from: string; to: string; icon: string }[] = [
+        { label: "今日", from: fmt(now), to: fmt(now), icon: "📅" },
+        { label: "本週", from: fmt(weekStart), to: fmt(now), icon: "📆" },
+        { label: "本月", from: fmt(monthStart), to: fmt(now), icon: "🗓" },
+        { label: "上月", from: fmt(lastMonthStart), to: fmt(lastMonthEnd), icon: "⏪" },
+        { label: "今年", from: fmt(yearStart), to: fmt(yearEnd), icon: "📊" },
+    ];
+    if (earliestDate) {
+        presets.push({ label: "全部", from: earliestDate, to: fmt(now), icon: "🗃" });
+    }
+
+    const isActivePreset = (p: { from: string; to: string }) => p.from === range.from && p.to === range.to;
+
+    const goToRange = (from: string, to: string) => {
+        router.push(`/reports?from=${from}&to=${to}`);
+    };
+
+    /* ─── Edit Handlers ─── */
     const openEntryEditor = (entry: ReportsClientProps["entries"][number]) => {
-        setEntryForm({
-            ...entry,
-            inputUnit: entry.inputUnit || units[0]?.code || "kg",
-        });
+        setEntryForm({ ...entry, inputUnit: entry.inputUnit || units[0]?.code || "kg" });
         setEntryDialogOpen(true);
     };
 
@@ -130,8 +336,6 @@ export default function ReportsClient({
         setRevenueDialogOpen(true);
     };
 
-    const canEdit = roleCode === "write" || roleCode === "admin";
-
     const handleEntrySave = async () => {
         if (!entryForm) return;
         if (!canEdit) {
@@ -139,11 +343,9 @@ export default function ReportsClient({
             return;
         }
         setEntryLoading(true);
-
         const formData = new FormData();
         formData.append("type", entryForm.type);
         formData.append("date", entryForm.date);
-
         if (entryForm.type === "PURCHASE") {
             formData.append("itemId", entryForm.itemId);
             formData.append("vendorId", entryForm.vendorId || "none");
@@ -156,10 +358,8 @@ export default function ReportsClient({
             formData.append("amount", entryForm.totalPrice.toString());
             formData.append("note", entryForm.note || "");
         }
-
         const result = await updateEntry(entryForm.id, formData);
         setEntryLoading(false);
-
         if (result.success) {
             toast({ title: "已更新", description: "記錄已儲存" });
             setEntryDialogOpen(false);
@@ -178,7 +378,6 @@ export default function ReportsClient({
         setEntryDeleting(entryId);
         const result = await deleteEntry(entryId);
         setEntryDeleting(null);
-
         if (result.success) {
             toast({ title: "已刪除", description: "記錄已刪除" });
             router.refresh();
@@ -194,15 +393,12 @@ export default function ReportsClient({
             return;
         }
         setRevenueLoading(true);
-
         const formData = new FormData();
         formData.append("date", revenueForm.date);
         formData.append("amount", revenueForm.amount.toString());
         if (revenueForm.isDayOff) formData.append("isDayOff", "on");
-
         const result = await updateRevenue(revenueForm.id, formData);
         setRevenueLoading(false);
-
         if (result.success) {
             toast({ title: "已更新", description: "營收已更新" });
             setRevenueDialogOpen(false);
@@ -221,7 +417,6 @@ export default function ReportsClient({
         setRevenueDeleting(recordId);
         const result = await deleteRevenue(recordId);
         setRevenueDeleting(null);
-
         if (result.success) {
             toast({ title: "已刪除", description: "營收記錄已刪除" });
             router.refresh();
@@ -231,246 +426,269 @@ export default function ReportsClient({
     };
 
     return (
-        <div className="space-y-6 pb-24">
-            <header className="space-y-1">
+        <div className="space-y-5 pb-24">
+            {/* ─── Header ─── */}
+            <header>
                 <h1 className="text-2xl font-bold tracking-tight">報表與分析</h1>
-                <p className="text-muted-foreground text-sm">查詢、統計並快速修正資料。</p>
+                <p className="text-muted-foreground text-sm mt-0.5">查詢、統計並快速修正資料</p>
             </header>
 
+            {/* ─── Date Selection Panel ─── */}
             <Card>
-                <CardContent className="space-y-4 p-4">
-                    <div className="flex flex-wrap gap-2">
-                        {(() => {
-                            const now = new Date();
-                            const fmt = (d: Date) => d.toISOString().slice(0, 10);
-                            const dayOfWeek = now.getDay() || 7;
-                            const weekStart = new Date(now);
-                            weekStart.setDate(now.getDate() - dayOfWeek + 1);
-                            const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
-                            const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-                            const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
-                            const yearStart = new Date(now.getFullYear(), 0, 1);
-                            const yearEnd = new Date(now.getFullYear(), 11, 31);
-
-                            const presets: { label: string; from: string; to: string }[] = [
-                                { label: "今日", from: fmt(now), to: fmt(now) },
-                                { label: "本週", from: fmt(weekStart), to: fmt(now) },
-                                { label: "本月", from: fmt(monthStart), to: fmt(now) },
-                                { label: "上月", from: fmt(lastMonthStart), to: fmt(lastMonthEnd) },
-                                { label: "今年", from: fmt(yearStart), to: fmt(yearEnd) },
-                            ];
-                            if (earliestDate) {
-                                presets.push({ label: "全部", from: earliestDate, to: fmt(now) });
-                            }
-
-                            return presets.map((p) => (
-                                <Button
-                                    key={p.label}
-                                    variant="outline"
-                                    size="sm"
-                                    className="h-9 text-sm"
-                                    onClick={() => router.push(`/reports?from=${p.from}&to=${p.to}`)}
-                                >
-                                    {p.label}
-                                </Button>
-                            ));
-                        })()}
+                <CardContent className="p-4 space-y-4">
+                    {/* Quick Presets */}
+                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+                        {presets.map((p) => (
+                            <button
+                                key={p.label}
+                                onClick={() => goToRange(p.from, p.to)}
+                                className={[
+                                    "flex flex-col items-center justify-center gap-0.5 py-3 px-2 rounded-xl text-sm font-medium transition-all active:scale-95",
+                                    isActivePreset(p)
+                                        ? "bg-primary text-primary-foreground shadow-md"
+                                        : "bg-accent/40 hover:bg-accent/70 text-foreground",
+                                ].join(" ")}
+                            >
+                                <span className="text-lg leading-none">{p.icon}</span>
+                                <span>{p.label}</span>
+                            </button>
+                        ))}
                     </div>
-                    <form className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end" method="get">
-                        <div className="space-y-1">
-                            <Label>起始日期</Label>
-                            <Input type="date" name="from" defaultValue={range.from} className="h-12 text-base" />
+
+                    {/* Custom Date Range */}
+                    <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] items-end">
+                        <CalendarPicker
+                            label="起始日期"
+                            value={customFrom}
+                            onChange={setCustomFrom}
+                        />
+                        <CalendarPicker
+                            label="結束日期"
+                            value={customTo}
+                            onChange={setCustomTo}
+                        />
+                        <Button
+                            onClick={() => goToRange(customFrom, customTo)}
+                            className="h-12 text-base font-semibold"
+                        >
+                            查詢
+                        </Button>
+                    </div>
+
+                    {/* Current Range Display + Export */}
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="text-sm text-muted-foreground">
+                            查詢範圍：<span className="font-medium text-foreground">{range.from}</span>
+                            {" ~ "}
+                            <span className="font-medium text-foreground">{range.to}</span>
                         </div>
-                        <div className="space-y-1">
-                            <Label>結束日期</Label>
-                            <Input type="date" name="to" defaultValue={range.to} className="h-12 text-base" />
+                        <div className="flex gap-2">
+                            <a href={`/reports/export?from=${range.from}&to=${range.to}&type=entries`}>
+                                <Button variant="outline" size="sm">匯出進貨/支出</Button>
+                            </a>
+                            <a href={`/reports/export?from=${range.from}&to=${range.to}&type=revenues`}>
+                                <Button variant="outline" size="sm">匯出營收</Button>
+                            </a>
                         </div>
-                        <Button type="submit" className="w-full sm:w-auto h-12 text-base">查詢</Button>
-                    </form>
-                    <div className="flex flex-col gap-2 sm:flex-row">
-                        <a href={`/reports/export?from=${range.from}&to=${range.to}&type=entries`}>
-                            <Button variant="outline" className="w-full">匯出進貨/支出 (CSV)</Button>
-                        </a>
-                        <a href={`/reports/export?from=${range.from}&to=${range.to}&type=revenues`}>
-                            <Button variant="outline" className="w-full">匯出營收 (CSV)</Button>
-                        </a>
                     </div>
                 </CardContent>
             </Card>
 
-            <div className="grid gap-4 sm:grid-cols-3">
-                <Card>
-                    <CardHeader className="pb-2">
-                        <CardTitle className="text-sm text-muted-foreground">總營收</CardTitle>
-                    </CardHeader>
-                    <CardContent className="text-2xl font-bold text-primary">
-                        {formatPrice(totals.revenue)}
+            {/* ─── Summary Cards ─── */}
+            <div className="grid gap-3 grid-cols-3">
+                <Card className="relative overflow-hidden">
+                    <div className="absolute inset-0 bg-gradient-to-br from-sky-500/10 to-transparent" />
+                    <CardContent className="p-4 relative">
+                        <p className="text-xs text-muted-foreground mb-1">總營收</p>
+                        <p className="text-lg sm:text-2xl font-bold text-sky-600">{formatPrice(totals.revenue)}</p>
                     </CardContent>
                 </Card>
-                <Card>
-                    <CardHeader className="pb-2">
-                        <CardTitle className="text-sm text-muted-foreground">總成本</CardTitle>
-                    </CardHeader>
-                    <CardContent className="text-2xl font-bold">
-                        {formatPrice(totals.cost)}
+                <Card className="relative overflow-hidden">
+                    <div className="absolute inset-0 bg-gradient-to-br from-orange-500/10 to-transparent" />
+                    <CardContent className="p-4 relative">
+                        <p className="text-xs text-muted-foreground mb-1">總成本</p>
+                        <p className="text-lg sm:text-2xl font-bold text-orange-600">{formatPrice(totals.cost)}</p>
                     </CardContent>
                 </Card>
-                <Card>
-                    <CardHeader className="pb-2">
-                        <CardTitle className="text-sm text-muted-foreground">預估獲利</CardTitle>
-                    </CardHeader>
-                    <CardContent className="text-2xl font-bold">
-                        {formatPrice(totals.profit)}
+                <Card className="relative overflow-hidden">
+                    <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/10 to-transparent" />
+                    <CardContent className="p-4 relative">
+                        <p className="text-xs text-muted-foreground mb-1">預估獲利</p>
+                        <p className={`text-lg sm:text-2xl font-bold ${totals.profit >= 0 ? "text-emerald-600" : "text-red-500"}`}>
+                            {formatPrice(totals.profit)}
+                        </p>
                     </CardContent>
                 </Card>
             </div>
 
-            <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
-                <Card>
-                    <CardHeader>
-                        <CardTitle className="text-base">每日營收與成本</CardTitle>
-                    </CardHeader>
-                    <CardContent className="h-72">
-                        <ResponsiveContainer width="100%" height="100%">
-                            <LineChart data={dailyStats} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-                                <CartesianGrid strokeDasharray="3 3" />
-                                <XAxis dataKey="date" tick={{ fontSize: 12 }} />
-                                <YAxis tick={{ fontSize: 12 }} />
-                                <Tooltip formatter={(value: number) => formatPrice(value)} />
-                                <Line type="monotone" dataKey="revenue" name="營收" stroke="#0EA5E9" strokeWidth={2} />
-                                <Line type="monotone" dataKey="cost" name="成本" stroke="#F97316" strokeWidth={2} />
-                            </LineChart>
-                        </ResponsiveContainer>
-                    </CardContent>
-                </Card>
+            {/* ─── Charts ─── */}
             <Card>
-                <CardHeader>
-                    <CardTitle className="text-base">支出類型占比</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                    <div className="h-64">
-                        {expenseBreakdown.length === 0 ? (
-                            <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
-                                尚無支出資料
-                            </div>
-                        ) : (
-                            <ResponsiveContainer width="100%" height="100%">
-                                <PieChart>
-                                    <Pie
-                                        data={expenseBreakdown}
-                                        dataKey="total"
-                                        nameKey="label"
-                                        innerRadius={50}
-                                        outerRadius={90}
-                                        paddingAngle={3}
-                                    >
-                                        {expenseBreakdown.map((_, index) => (
-                                            <Cell key={index} fill={PIE_COLORS[index % PIE_COLORS.length]} />
-                                        ))}
-                                    </Pie>
-                                    <Tooltip formatter={(value: number) => formatPrice(value)} />
-                                </PieChart>
-                            </ResponsiveContainer>
-                        )}
-                    </div>
-                    {expenseBreakdown.length > 0 && (
-                        <div className="space-y-2 text-sm">
-                            {expenseBreakdown.map((item) => (
-                                <div key={item.type} className="flex justify-between">
-                                    <span className="text-muted-foreground">{item.label}</span>
-                                    <span className="font-medium">{formatPrice(item.total)}</span>
-                                </div>
+                <CardHeader className="pb-2">
+                    <div className="flex items-center justify-between">
+                        <CardTitle className="text-base">數據圖表</CardTitle>
+                        <div className="flex gap-1">
+                            {([
+                                { key: "line", label: "趨勢" },
+                                { key: "bar", label: "品項" },
+                                { key: "pie", label: "支出" },
+                            ] as const).map((tab) => (
+                                <button
+                                    key={tab.key}
+                                    onClick={() => setChartTab(tab.key)}
+                                    className={[
+                                        "px-3 py-1.5 text-xs font-medium rounded-lg transition-all",
+                                        chartTab === tab.key
+                                            ? "bg-primary text-primary-foreground"
+                                            : "text-muted-foreground hover:bg-accent",
+                                    ].join(" ")}
+                                >
+                                    {tab.label}
+                                </button>
                             ))}
                         </div>
-                    )}
-                </CardContent>
-            </Card>
-            </div>
-
-            <Card>
-                <CardHeader>
-                    <CardTitle className="text-base">高成本品項</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                    <div className="h-56">
-                        {topItems.length === 0 ? (
-                            <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
-                                尚無進貨資料
-                            </div>
-                        ) : (
-                            <ResponsiveContainer width="100%" height="100%">
-                                <BarChart data={topItems} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-                                    <CartesianGrid strokeDasharray="3 3" />
-                                    <XAxis dataKey="name" tick={{ fontSize: 12 }} />
-                                    <YAxis tick={{ fontSize: 12 }} />
-                                    <Tooltip formatter={(value: number) => formatPrice(value)} />
-                                    <Bar dataKey="totalCost" name="成本" fill="#6366F1" radius={[6, 6, 0, 0]} />
-                                </BarChart>
-                            </ResponsiveContainer>
-                        )}
                     </div>
-                    {topItems.length > 0 && (
-                        <div className="space-y-2 text-sm">
-                            {topItems.map((item) => {
-                                const quantityLabel = item.totalWeightKg > 0
-                                    ? `${item.totalWeightKg.toFixed(2)} 公斤`
-                                    : `${item.totalQuantity} ${getUnitLabel(item.unit, units)}`;
-                                return (
-                                    <div key={item.name} className="flex justify-between">
-                                        <span className="text-muted-foreground">{item.name}</span>
-                                        <span className="font-medium">
-                                            {formatPrice(item.totalCost)} · {quantityLabel}
-                                        </span>
+                </CardHeader>
+                <CardContent>
+                    {/* Line Chart - Daily Revenue & Cost */}
+                    {chartTab === "line" && (
+                        <div className="h-64 sm:h-80">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <LineChart data={dailyStats} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+                                    <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
+                                    <XAxis dataKey="date" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
+                                    <YAxis tick={{ fontSize: 11 }} width={60} />
+                                    <Tooltip formatter={(value: number) => formatPrice(value)} />
+                                    <Line type="monotone" dataKey="revenue" name="營收" stroke="#0EA5E9" strokeWidth={2} dot={false} />
+                                    <Line type="monotone" dataKey="cost" name="成本" stroke="#F97316" strokeWidth={2} dot={false} />
+                                </LineChart>
+                            </ResponsiveContainer>
+                        </div>
+                    )}
+
+                    {/* Bar Chart - Top Items */}
+                    {chartTab === "bar" && (
+                        <div className="space-y-4">
+                            <div className="h-64 sm:h-72">
+                                {topItems.length === 0 ? (
+                                    <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
+                                        尚無進貨資料
                                     </div>
-                                );
-                            })}
+                                ) : (
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <BarChart data={topItems} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+                                            <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
+                                            <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+                                            <YAxis tick={{ fontSize: 11 }} width={60} />
+                                            <Tooltip formatter={(value: number) => formatPrice(value)} />
+                                            <Bar dataKey="totalCost" name="成本" fill="#6366F1" radius={[6, 6, 0, 0]} />
+                                        </BarChart>
+                                    </ResponsiveContainer>
+                                )}
+                            </div>
+                            {topItems.length > 0 && (
+                                <div className="grid gap-2 sm:grid-cols-2 text-sm">
+                                    {topItems.map((item) => {
+                                        const quantityLabel = item.totalWeightKg > 0
+                                            ? `${item.totalWeightKg.toFixed(2)} 公斤`
+                                            : `${item.totalQuantity} ${getUnitLabel(item.unit, units)}`;
+                                        return (
+                                            <div key={item.name} className="flex justify-between py-1.5 px-3 rounded-lg bg-accent/30">
+                                                <span className="text-muted-foreground truncate mr-2">{item.name}</span>
+                                                <span className="font-medium whitespace-nowrap">{formatPrice(item.totalCost)} · {quantityLabel}</span>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* Pie Chart - Expense Breakdown */}
+                    {chartTab === "pie" && (
+                        <div className="space-y-4">
+                            <div className="h-64 sm:h-72">
+                                {expenseBreakdown.length === 0 ? (
+                                    <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
+                                        尚無支出資料
+                                    </div>
+                                ) : (
+                                    <ResponsiveContainer width="100%" height="100%">
+                                        <PieChart>
+                                            <Pie
+                                                data={expenseBreakdown}
+                                                dataKey="total"
+                                                nameKey="label"
+                                                innerRadius="40%"
+                                                outerRadius="75%"
+                                                paddingAngle={3}
+                                            >
+                                                {expenseBreakdown.map((_, index) => (
+                                                    <Cell key={index} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                                                ))}
+                                            </Pie>
+                                            <Tooltip formatter={(value: number) => formatPrice(value)} />
+                                        </PieChart>
+                                    </ResponsiveContainer>
+                                )}
+                            </div>
+                            {expenseBreakdown.length > 0 && (
+                                <div className="grid gap-2 sm:grid-cols-2 text-sm">
+                                    {expenseBreakdown.map((item, i) => (
+                                        <div key={item.type} className="flex items-center justify-between py-1.5 px-3 rounded-lg bg-accent/30">
+                                            <div className="flex items-center gap-2">
+                                                <div
+                                                    className="w-3 h-3 rounded-full flex-shrink-0"
+                                                    style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }}
+                                                />
+                                                <span className="text-muted-foreground">{item.label}</span>
+                                            </div>
+                                            <span className="font-medium">{formatPrice(item.total)}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                     )}
                 </CardContent>
             </Card>
 
+            {/* ─── Data Records ─── */}
             <Tabs defaultValue="entries" className="w-full">
                 <TabsList className="grid w-full grid-cols-2">
-                    <TabsTrigger value="entries">進貨/支出記錄</TabsTrigger>
-                    <TabsTrigger value="revenues">營收記錄</TabsTrigger>
+                    <TabsTrigger value="entries">進貨/支出記錄 ({entries.length})</TabsTrigger>
+                    <TabsTrigger value="revenues">營收記錄 ({revenues.length})</TabsTrigger>
                 </TabsList>
 
-                <TabsContent value="entries" className="space-y-4">
-                    <Card>
-                        <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
-                            <div className="flex gap-2">
+                <TabsContent value="entries" className="space-y-3 mt-3">
+                    {/* Filters */}
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex gap-1.5">
+                            {([
+                                { key: "all", label: "全部" },
+                                { key: "PURCHASE", label: "進貨" },
+                                { key: "EXPENSE", label: "支出" },
+                            ] as const).map((f) => (
                                 <Button
-                                    variant={entryFilter === "all" ? "default" : "outline"}
+                                    key={f.key}
+                                    variant={entryFilter === f.key ? "default" : "outline"}
                                     size="sm"
-                                    onClick={() => setEntryFilter("all")}
+                                    className="h-9"
+                                    onClick={() => setEntryFilter(f.key)}
                                 >
-                                    全部
+                                    {f.label}
                                 </Button>
-                                <Button
-                                    variant={entryFilter === "PURCHASE" ? "default" : "outline"}
-                                    size="sm"
-                                    onClick={() => setEntryFilter("PURCHASE")}
-                                >
-                                    進貨
-                                </Button>
-                                <Button
-                                    variant={entryFilter === "EXPENSE" ? "default" : "outline"}
-                                    size="sm"
-                                    onClick={() => setEntryFilter("EXPENSE")}
-                                >
-                                    支出
-                                </Button>
-                            </div>
-                            <Input
-                                placeholder="搜尋品項/廠商/備註"
-                                value={search}
-                                onChange={(e) => setSearch(e.target.value)}
-                                className="sm:max-w-xs"
-                            />
-                        </CardContent>
-                    </Card>
+                            ))}
+                        </div>
+                        <Input
+                            placeholder="搜尋品項/廠商/備註"
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                            className="sm:max-w-xs h-9"
+                        />
+                    </div>
 
-                    <div className="space-y-3">
+                    {/* Entry List */}
+                    <div className="space-y-2">
                         {filteredEntries.length === 0 ? (
                             <Card>
                                 <CardContent className="p-8 text-center text-muted-foreground">
@@ -479,45 +697,67 @@ export default function ReportsClient({
                             </Card>
                         ) : (
                             filteredEntries.map((entry) => (
-                                <Card key={entry.id}>
-                                    <CardContent className="flex flex-col gap-2 p-4">
-                                        <div className="flex items-start justify-between">
-                                            <div>
-                                                <div className="font-semibold">
+                                <Card key={entry.id} className="hover:shadow-sm transition-shadow">
+                                    <CardContent className="flex items-center gap-3 p-3 sm:p-4">
+                                        {/* Type Badge */}
+                                        <div className={[
+                                            "flex-shrink-0 w-10 h-10 rounded-lg flex items-center justify-center text-xs font-bold",
+                                            entry.type === "PURCHASE"
+                                                ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                                                : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                                        ].join(" ")}>
+                                            {entry.type === "PURCHASE" ? "進" : "支"}
+                                        </div>
+
+                                        {/* Content */}
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex items-baseline justify-between gap-2">
+                                                <span className="font-semibold truncate">
                                                     {entry.type === "PURCHASE"
                                                         ? entry.itemName || "未命名品項"
                                                         : expenseTypeMap.get(entry.expenseType) || entry.expenseType}
-                                                </div>
-                                                <div className="text-xs text-muted-foreground">{entry.date}</div>
+                                                </span>
+                                                <span className="font-bold text-primary whitespace-nowrap">
+                                                    {formatPrice(entry.totalPrice)}
+                                                </span>
                                             </div>
-                                            <div className="text-right">
-                                                <div className="font-bold text-primary">{formatPrice(entry.totalPrice)}</div>
-                                                <div className="text-xs text-muted-foreground">
-                                                    {entry.type === "PURCHASE"
-                                                        ? `${entry.inputQuantity} ${getUnitLabel(entry.inputUnit, units)}`
-                                                        : "其他支出"}
-                                                </div>
+                                            <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5">
+                                                <span>{entry.date}</span>
+                                                {entry.type === "PURCHASE" && (
+                                                    <>
+                                                        <span>·</span>
+                                                        <span>{formatQuantityDisplay(entry.inputQuantity, entry.inputUnit)}</span>
+                                                        {entry.vendorName && (
+                                                            <>
+                                                                <span>·</span>
+                                                                <span>{entry.vendorName}</span>
+                                                            </>
+                                                        )}
+                                                    </>
+                                                )}
+                                                {entry.note && (
+                                                    <>
+                                                        <span>·</span>
+                                                        <span className="truncate">{entry.note}</span>
+                                                    </>
+                                                )}
                                             </div>
                                         </div>
-                                        {entry.type === "PURCHASE" && (
-                                            <div className="text-xs text-muted-foreground">廠商：{entry.vendorName || "未填"}</div>
-                                        )}
-                                        {entry.note && (
-                                            <div className="text-xs text-muted-foreground">備註：{entry.note}</div>
-                                        )}
+
+                                        {/* Actions */}
                                         {canEdit && (
-                                            <div className="flex gap-2">
-                                                <Button variant="outline" size="sm" onClick={() => openEntryEditor(entry)}>
+                                            <div className="flex flex-col gap-1 flex-shrink-0">
+                                                <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => openEntryEditor(entry)}>
                                                     編輯
                                                 </Button>
                                                 <Button
                                                     variant="ghost"
                                                     size="sm"
-                                                    className="text-destructive"
+                                                    className="h-7 px-2 text-xs text-destructive"
                                                     disabled={entryDeleting === entry.id}
                                                     onClick={() => handleEntryDelete(entry.id)}
                                                 >
-                                                    {entryDeleting === entry.id ? "刪除中..." : "刪除"}
+                                                    {entryDeleting === entry.id ? "..." : "刪除"}
                                                 </Button>
                                             </div>
                                         )}
@@ -528,7 +768,7 @@ export default function ReportsClient({
                     </div>
                 </TabsContent>
 
-                <TabsContent value="revenues" className="space-y-3">
+                <TabsContent value="revenues" className="space-y-2 mt-3">
                     {revenues.length === 0 ? (
                         <Card>
                             <CardContent className="p-8 text-center text-muted-foreground">
@@ -537,33 +777,36 @@ export default function ReportsClient({
                         </Card>
                     ) : (
                         revenues.map((record) => (
-                            <Card key={record.id}>
-                                <CardContent className="flex items-center justify-between gap-4 p-4">
-                                    <div>
-                                        <div className="font-semibold">{record.locationName}</div>
-                                        <div className="text-xs text-muted-foreground">{record.date}</div>
+                            <Card key={record.id} className="hover:shadow-sm transition-shadow">
+                                <CardContent className="flex items-center gap-3 p-3 sm:p-4">
+                                    <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center text-xs font-bold text-emerald-700 dark:text-emerald-400">
+                                        營
                                     </div>
-                                    <div className="text-right">
-                                        <div className="font-bold text-primary">
-                                            {record.isDayOff ? "休假" : formatPrice(record.amount)}
+                                    <div className="flex-1 min-w-0">
+                                        <div className="flex items-baseline justify-between gap-2">
+                                            <span className="font-semibold">{record.locationName}</span>
+                                            <span className="font-bold text-primary whitespace-nowrap">
+                                                {record.isDayOff ? "休假" : formatPrice(record.amount)}
+                                            </span>
                                         </div>
-                                        {canEdit && (
-                                            <div className="flex gap-2">
-                                                <Button variant="outline" size="sm" onClick={() => openRevenueEditor(record)}>
-                                                    編輯
-                                                </Button>
-                                                <Button
-                                                    variant="ghost"
-                                                    size="sm"
-                                                    className="text-destructive"
-                                                    disabled={revenueDeleting === record.id}
-                                                    onClick={() => handleRevenueDelete(record.id)}
-                                                >
-                                                    {revenueDeleting === record.id ? "刪除中..." : "刪除"}
-                                                </Button>
-                                            </div>
-                                        )}
+                                        <div className="text-xs text-muted-foreground mt-0.5">{record.date}</div>
                                     </div>
+                                    {canEdit && (
+                                        <div className="flex flex-col gap-1 flex-shrink-0">
+                                            <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => openRevenueEditor(record)}>
+                                                編輯
+                                            </Button>
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                className="h-7 px-2 text-xs text-destructive"
+                                                disabled={revenueDeleting === record.id}
+                                                onClick={() => handleRevenueDelete(record.id)}
+                                            >
+                                                {revenueDeleting === record.id ? "..." : "刪除"}
+                                            </Button>
+                                        </div>
+                                    )}
                                 </CardContent>
                             </Card>
                         ))
@@ -571,37 +814,28 @@ export default function ReportsClient({
                 </TabsContent>
             </Tabs>
 
+            {/* ─── Entry Edit Dialog ─── */}
             <Dialog open={entryDialogOpen} onOpenChange={setEntryDialogOpen}>
-                <DialogContent className="max-h-[80vh] overflow-y-auto">
+                <DialogContent className="max-h-[85vh] overflow-y-auto">
                     <DialogHeader>
                         <DialogTitle>編輯記錄</DialogTitle>
                     </DialogHeader>
                     {entryForm && (
                         <div className="space-y-4">
-                            <div className="space-y-2">
-                                <Label>日期</Label>
-                                <Input
-                                    type="date"
-                                    value={entryForm.date}
-                                    onChange={(e) => setEntryForm({ ...entryForm, date: e.target.value })}
-                                />
-                            </div>
+                            <CalendarPicker
+                                label="日期"
+                                value={entryForm.date}
+                                onChange={(date) => setEntryForm({ ...entryForm, date })}
+                            />
                             {entryForm.type === "PURCHASE" ? (
                                 <>
                                     <div className="space-y-2">
                                         <Label>品項</Label>
-                                        <Select
-                                            value={entryForm.itemId}
-                                            onValueChange={(value) => setEntryForm({ ...entryForm, itemId: value })}
-                                        >
-                                            <SelectTrigger>
-                                                <SelectValue placeholder="選擇品項" />
-                                            </SelectTrigger>
+                                        <Select value={entryForm.itemId} onValueChange={(value) => setEntryForm({ ...entryForm, itemId: value })}>
+                                            <SelectTrigger><SelectValue placeholder="選擇品項" /></SelectTrigger>
                                             <SelectContent>
-                                                {items.map((item) => (
-                                                    <SelectItem key={item.id} value={item.id}>
-                                                        {item.name}
-                                                    </SelectItem>
+                                                {items.map((item: any) => (
+                                                    <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>
                                                 ))}
                                             </SelectContent>
                                         </Select>
@@ -610,19 +844,13 @@ export default function ReportsClient({
                                         <Label>廠商</Label>
                                         <Select
                                             value={entryForm.vendorId || "none"}
-                                            onValueChange={(value) =>
-                                                setEntryForm({ ...entryForm, vendorId: value === "none" ? "" : value })
-                                            }
+                                            onValueChange={(value) => setEntryForm({ ...entryForm, vendorId: value === "none" ? "" : value })}
                                         >
-                                            <SelectTrigger>
-                                                <SelectValue placeholder="選擇廠商" />
-                                            </SelectTrigger>
+                                            <SelectTrigger><SelectValue placeholder="選擇廠商" /></SelectTrigger>
                                             <SelectContent>
                                                 <SelectItem value="none">未指定</SelectItem>
-                                                {vendors.map((vendor) => (
-                                                    <SelectItem key={vendor.id} value={vendor.id}>
-                                                        {vendor.name}
-                                                    </SelectItem>
+                                                {vendors.map((vendor: any) => (
+                                                    <SelectItem key={vendor.id} value={vendor.id}>{vendor.name}</SelectItem>
                                                 ))}
                                             </SelectContent>
                                         </Select>
@@ -635,27 +863,17 @@ export default function ReportsClient({
                                                 value={entryForm.inputQuantity}
                                                 onChange={(e) => {
                                                     const value = Number.parseFloat(e.target.value);
-                                                    setEntryForm({
-                                                        ...entryForm,
-                                                        inputQuantity: Number.isFinite(value) ? value : 0,
-                                                    });
+                                                    setEntryForm({ ...entryForm, inputQuantity: Number.isFinite(value) ? value : 0 });
                                                 }}
                                             />
                                         </div>
                                         <div className="space-y-2">
                                             <Label>單位</Label>
-                                            <Select
-                                                value={entryForm.inputUnit}
-                                                onValueChange={(value) => setEntryForm({ ...entryForm, inputUnit: value })}
-                                            >
-                                                <SelectTrigger>
-                                                    <SelectValue />
-                                                </SelectTrigger>
+                                            <Select value={entryForm.inputUnit} onValueChange={(value) => setEntryForm({ ...entryForm, inputUnit: value })}>
+                                                <SelectTrigger><SelectValue /></SelectTrigger>
                                                 <SelectContent>
                                                     {units.map((unit) => (
-                                                        <SelectItem key={unit.code} value={unit.code}>
-                                                            {unit.name}
-                                                        </SelectItem>
+                                                        <SelectItem key={unit.code} value={unit.code}>{unit.name}</SelectItem>
                                                     ))}
                                                 </SelectContent>
                                             </Select>
@@ -668,10 +886,7 @@ export default function ReportsClient({
                                             value={entryForm.totalPrice}
                                             onChange={(e) => {
                                                 const value = Number.parseFloat(e.target.value);
-                                                setEntryForm({
-                                                    ...entryForm,
-                                                    totalPrice: Number.isFinite(value) ? value : 0,
-                                                });
+                                                setEntryForm({ ...entryForm, totalPrice: Number.isFinite(value) ? value : 0 });
                                             }}
                                         />
                                     </div>
@@ -680,18 +895,11 @@ export default function ReportsClient({
                                 <>
                                     <div className="space-y-2">
                                         <Label>支出項目</Label>
-                                        <Select
-                                            value={entryForm.expenseType}
-                                            onValueChange={(value) => setEntryForm({ ...entryForm, expenseType: value })}
-                                        >
-                                            <SelectTrigger>
-                                                <SelectValue placeholder="選擇支出" />
-                                            </SelectTrigger>
+                                        <Select value={entryForm.expenseType} onValueChange={(value) => setEntryForm({ ...entryForm, expenseType: value })}>
+                                            <SelectTrigger><SelectValue placeholder="選擇支出" /></SelectTrigger>
                                             <SelectContent>
-                                                {expenseTypes.map((item) => (
-                                                    <SelectItem key={item.value} value={item.value}>
-                                                        {item.label}
-                                                    </SelectItem>
+                                                {expenseTypes.map((item: any) => (
+                                                    <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
                                                 ))}
                                             </SelectContent>
                                         </Select>
@@ -703,10 +911,7 @@ export default function ReportsClient({
                                             value={entryForm.totalPrice}
                                             onChange={(e) => {
                                                 const value = Number.parseFloat(e.target.value);
-                                                setEntryForm({
-                                                    ...entryForm,
-                                                    totalPrice: Number.isFinite(value) ? value : 0,
-                                                });
+                                                setEntryForm({ ...entryForm, totalPrice: Number.isFinite(value) ? value : 0 });
                                             }}
                                         />
                                     </div>
@@ -729,6 +934,7 @@ export default function ReportsClient({
                 </DialogContent>
             </Dialog>
 
+            {/* ─── Revenue Edit Dialog ─── */}
             <Dialog open={revenueDialogOpen} onOpenChange={setRevenueDialogOpen}>
                 <DialogContent>
                     <DialogHeader>
@@ -736,14 +942,11 @@ export default function ReportsClient({
                     </DialogHeader>
                     {revenueForm && (
                         <div className="space-y-4">
-                            <div className="space-y-2">
-                                <Label>日期</Label>
-                                <Input
-                                    type="date"
-                                    value={revenueForm.date}
-                                    onChange={(e) => setRevenueForm({ ...revenueForm, date: e.target.value })}
-                                />
-                            </div>
+                            <CalendarPicker
+                                label="日期"
+                                value={revenueForm.date}
+                                onChange={(date) => setRevenueForm({ ...revenueForm, date })}
+                            />
                             <div className="space-y-2">
                                 <Label>金額 (TWD)</Label>
                                 <Input
@@ -760,11 +963,9 @@ export default function ReportsClient({
                                 <input
                                     type="checkbox"
                                     id="edit-dayoff"
-                                    className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                                    className="h-5 w-5 rounded border-gray-300 text-primary focus:ring-primary"
                                     checked={revenueForm.isDayOff}
-                                    onChange={(e) =>
-                                        setRevenueForm({ ...revenueForm, isDayOff: e.target.checked })
-                                    }
+                                    onChange={(e) => setRevenueForm({ ...revenueForm, isDayOff: e.target.checked })}
                                 />
                                 <Label htmlFor="edit-dayoff">此日休假</Label>
                             </div>

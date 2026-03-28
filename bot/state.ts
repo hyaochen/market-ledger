@@ -13,6 +13,7 @@ function getDefault(): ChatState {
         currentUncertain: null,
         session: null,
         newItemPending: null,
+        muteMode: false,
     };
 }
 
@@ -36,7 +37,8 @@ export function resetToIdle(chatId: number): void {
     const s = getState(chatId);
     states.set(chatId, {
         ...getDefault(),
-        session: s.session,  // 保留 session
+        session: s.session,   // 保留 session
+        muteMode: s.muteMode, // 保留靜音設定（不因記錄完成而重置）
     });
 }
 

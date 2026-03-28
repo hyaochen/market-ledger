@@ -11,6 +11,12 @@ export default async function ProtectedLayout({
     children: React.ReactNode;
 }) {
     const user = await requireAuth();
+
+    // Super admin without tenant context should go to /super-admin, not protected pages
+    if (user.isSuperAdmin && !user.tenantId) {
+        redirect("/super-admin");
+    }
+
     const displayName = user.realName || user.username;
     const isSuperAdminInTenant = user.isSuperAdmin && !!user.tenantId;
 

@@ -2,6 +2,7 @@
 
 import prisma from '../src/lib/prisma';
 import type { ParsedEntry, DbContext } from './types';
+import { loadAliases } from './aliases';
 
 // 載入租戶的完整 DB 上下文（品項、廠商、支出類型、單位、地點）
 export async function loadDbContext(tenantId: string): Promise<DbContext> {
@@ -111,16 +112,33 @@ function fuzzyScore(query: string, target: string): number {
     const tChars = new Set(t.split(''));
     const intersection = qChars.filter(c => tChars.has(c)).length;
     const baseScore = intersection / Math.max(qChars.length, tChars.size);
-    // 短詞懲罰：2字以下容易因單一共同字誤判（如醬油↔豬油）
+    // 短詞懲罰：1字以下容易因單一共同字誤判，2字詞不懲罰避免「肝連」↔「肝蓮」這類1字差誤識別
     const minLen = Math.min(q.length, t.length);
-    return minLen <= 2 ? baseScore * 0.75 : baseScore;
+    return minLen <= 1 ? baseScore * 0.75 : baseScore;
 }
 
 // 驗證並補全 Ollama 解析結果
 export async function enrichEntry(entry: ParsedEntry, ctx: DbContext): Promise<ParsedEntry> {
     const enriched = { ...entry };
 
-    if (entry.type === 'REVENUE') {
+    // EXPENSE 誤判修正：若 itemName 高分匹配到品項清單（食材/商品），強制改為 PURCHASE
+    // 例：LLM 把「頭皮3個350」誤判成 EXPENSE，但「頭皮」是已知品項
+    if (enriched.type === 'EXPENSE') {
+        const query = normalizeS2T(entry.itemName ?? '');
+        if (query) {
+            let bestScore = 0;
+            for (const item of ctx.items) {
+                const score = fuzzyScore(query, item.name);
+                if (score > bestScore) bestScore = score;
+            }
+            if (bestScore >= 0.8) {
+                console.log(`[Matcher] EXPENSE→PURCHASE reclassify: "${query}" matches catalog item (score=${bestScore.toFixed(2)})`);
+                enriched.type = 'PURCHASE';
+            }
+        }
+    }
+
+    if (enriched.type === 'REVENUE') {
         // 用 itemName（LLM 提取的地點名稱）fuzzy match location
         const queryName = entry.locationName ?? entry.itemName ?? '';
         if (queryName) {
@@ -147,7 +165,7 @@ export async function enrichEntry(entry: ParsedEntry, ctx: DbContext): Promise<P
         return enriched;
     }
 
-    if (entry.type === 'PURCHASE') {
+    if (enriched.type === 'PURCHASE') {
         // 若 itemId 為 null，用 itemName 做 fuzzy matching
         if (!enriched.itemId && (entry.itemName || entry.rawInput)) {
             // 清除 LLM itemName 污染並提取備註（與 EXPENSE 同樣可能發生）
@@ -170,6 +188,23 @@ export async function enrichEntry(entry: ParsedEntry, ctx: DbContext): Promise<P
                 return enriched;
             }
 
+            // ── Alias 快取優先查找 ──────────────────────────────────
+            // 使用者先前確認過「肝連」→「肝蓮」等習慣性錯字，直接命中
+            const aliases = loadAliases(ctx.tenantId);
+            const aliasMatch = aliases[llmName] ?? aliases[rawName] ?? null;
+            let hitAlias = false;
+            if (aliasMatch) {
+                const aliasedItem = ctx.items.find(i => i.id === aliasMatch.itemId);
+                if (aliasedItem) {
+                    enriched.itemId = aliasedItem.id;
+                    enriched.itemName = aliasedItem.name;
+                    console.log(`[Matcher] item "${searchName}" → "${aliasedItem.name}" via alias`);
+                    hitAlias = true;
+                }
+                // aliasedItem 找不到（品項可能已刪除），略過 alias 繼續正常比對
+            }
+
+            if (!hitAlias) {
             // 收集所有分數 >= 0.5 的候選品項（llmName 和 rawName 取最高分）
             const candidates: { item: typeof ctx.items[0]; score: number }[] = [];
             for (const item of ctx.items) {
@@ -199,6 +234,20 @@ export async function enrichEntry(entry: ParsedEntry, ctx: DbContext): Promise<P
                 enriched.itemId = candidates[0].item.id;
                 enriched.itemName = candidates[0].item.name;
                 console.log(`[Matcher] item "${searchName}" exact match → "${candidates[0].item.name}"`);
+
+                // rawInput 驗證：若使用者原始輸入中找不到比對到的品項名稱，
+                // 代表 LLM 做了「靜默翻譯」（如：大腸→大腸頭、乾連→肝連）→ 強制要求確認
+                if (entry.rawInput) {
+                    const normalizedRaw = normalizeS2T(entry.rawInput);
+                    const matchedName = candidates[0].item.name;
+                    if (!normalizedRaw.includes(matchedName)) {
+                        const displayInput = rawName || llmName;
+                        enriched._originalSearchName = displayInput; // 記錄原始名供 alias 儲存
+                        enriched.confident = false;
+                        enriched.uncertainReason = `「${displayInput}」→「${matchedName}」，請確認是否正確`;
+                        console.log(`[Matcher] rawInput validation: "${normalizedRaw.slice(0, 30)}" doesn't contain "${matchedName}" → require confirm`);
+                    }
+                }
             } else if (candidates.length >= 2) {
                 // 多個相似品項 → 讓使用者選擇
                 enriched._itemCandidates = candidates.map(c => ({ id: c.item.id, name: c.item.name }));
@@ -206,11 +255,12 @@ export async function enrichEntry(entry: ParsedEntry, ctx: DbContext): Promise<P
                 enriched.uncertainReason = `「${searchName}」有 ${candidates.length} 個相似品項，請選擇`;
                 console.log(`[Matcher] item "${searchName}" → ${candidates.length} candidates`);
             } else {
-                // 唯一候選，分數 >= 0.65 → 詢問確認；< 0.65 → 新增流程
+                // 唯一候選，分數 >= 0.5 → 詢問確認（使用者確認後自動學習 alias）；< 0.5 → 新增流程
                 const best = candidates[0];
-                if (best.score >= 0.65) {
+                if (best.score >= 0.5) {
                     enriched.itemId = best.item.id;
                     enriched.itemName = best.item.name;
+                    enriched._originalSearchName = searchName; // 記錄原始輸入名供 alias 儲存
                     enriched.confident = false;
                     enriched.uncertainReason = `「${searchName}」→「${best.item.name}」，請確認是否正確`;
                     console.log(`[Matcher] item "${searchName}" → "${best.item.name}" (score=${best.score.toFixed(2)})`);
@@ -220,6 +270,7 @@ export async function enrichEntry(entry: ParsedEntry, ctx: DbContext): Promise<P
                     console.log(`[Matcher] item "${searchName}" weak match only (best score=${best.score.toFixed(2)})`);
                 }
             }
+            } // end !hitAlias
         }
 
         // 設定預設單位
@@ -274,25 +325,15 @@ export async function enrichEntry(entry: ParsedEntry, ctx: DbContext): Promise<P
 
             const historyIds = [...vendorFreq.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id);
 
-            // 唯一廠商且歷史筆數夠多 → 自動帶入（不打擾使用者）
-            if (historyIds.length === 1 && recentEntries.length >= 3) {
-                const vendor = ctx.vendors.find(v => v.id === historyIds[0]);
-                if (vendor) {
-                    enriched.vendorId = vendor.id;
-                    enriched.vendorName = vendor.name;
-                    console.log(`[Matcher] vendor auto-inferred: "${vendor.name}" (${recentEntries.length} history)`);
-                }
-            } else {
-                // 歷史有多個廠商，或沒有歷史 → 顯示全部廠商讓使用者選
-                // 排序：有歷史的廠商優先（依頻率），其餘依名稱
-                const historyVendors = historyIds
-                    .map(id => ctx.vendors.find(v => v.id === id))
-                    .filter((v): v is { id: string; name: string } => v != null);
-                const otherVendors = ctx.vendors.filter(v => !vendorFreq.has(v.id));
-                enriched._vendorCandidates = [...historyVendors, ...otherVendors];
-                enriched.confident = false;
-                enriched.uncertainReason = `「${enriched.itemName}」請選擇廠商`;
-            }
+            // 未填廠商 → 一律顯示廠商選擇鍵盤，不自動帶入（避免靜默帶錯廠商）
+            // 排序：有歷史的廠商優先（依頻率），其餘依名稱
+            const historyVendors = historyIds
+                .map(id => ctx.vendors.find(v => v.id === id))
+                .filter((v): v is { id: string; name: string } => v != null);
+            const otherVendors = ctx.vendors.filter(v => !vendorFreq.has(v.id));
+            enriched._vendorCandidates = [...historyVendors, ...otherVendors];
+            enriched.confident = false;
+            enriched.uncertainReason = `「${enriched.itemName}」請選擇廠商`;
         }
 
         // 重複偵測（提前告知，讓使用者決定是否再記）
@@ -306,7 +347,7 @@ export async function enrichEntry(entry: ParsedEntry, ctx: DbContext): Promise<P
                     ? `${enriched.uncertainReason}；${reason}` : reason;
             }
         }
-    } else if (entry.type === 'EXPENSE') {
+    } else if (enriched.type === 'EXPENSE') {
         // Step 1：取得支出查詢名稱（清除 LLM 污染 → rawInput 備援）
         let expenseQuery: string | null = entry.itemName ?? null;
 
