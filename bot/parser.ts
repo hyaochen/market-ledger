@@ -17,7 +17,7 @@ function buildSystemPrompt(today: string, locationNames: string[]): string {
 
 ★ 最重要規則 ★
 1. 數字絕對不做任何計算、換算、四捨五入，直接從原文複製
-2. 識別方式：有重量/數量單位（臺斤/台斤/斤/公斤/kg/個/包/條/份/箱/罐/瓶）緊接的數字 → quantity；沒有單位的獨立數字 → price
+2. 識別方式：有重量/數量單位（臺斤/台斤/斤/公斤/kg/個/包/條/份/箱/罐/瓶/顆/袋/桶/組/片）緊接的數字 → quantity；沒有單位的獨立數字 → price
 3. 金額和數量的前後順序不影響判斷，完全依靠「有無單位」決定
 4. 【斤兩格式】遇到「X斤Y兩」（如「2斤10兩」「3斤5兩」），unit 填"斤兩"，quantity 填斤的數字（兩的部分系統自動處理）
 - 例：「180臺斤1500塊」→ quantity:180, unit:"臺斤", price:1500
@@ -56,6 +56,7 @@ EXPENSE 時：itemName 填支出名稱（如「薪資」「清潔費」「洗碗
 - 「漂白水2桶40」→ {"type":"EXPENSE","itemName":"漂白水","quantity":2,"unit":"桶","price":40}
 - 「肝連2.6台斤218廠商海豐」→ {"type":"PURCHASE","itemName":"肝連","quantity":2.6,"unit":"台斤","price":218,"vendorName":"海豐"}
 - 「頭皮3個350」→ {"type":"PURCHASE","itemName":"頭皮","quantity":3,"unit":"個","price":350}（食材品項+數量→PURCHASE，不是費用）
+- 「3月29號滷蛋600顆500備註測試」→ {"type":"PURCHASE","date":"YYYY-03-29","itemName":"滷蛋","quantity":600,"unit":"顆","price":500,"note":"測試"}
 
 輸出（只輸出JSON，不加任何說明文字）：
 {"entries":[{"type":"PURCHASE","date":"${today}","itemName":"品項名稱","quantity":2,"unit":"斤","price":6000,"vendorName":"廠商名稱","note":null,"rawInput":"原始文字"}]}`;
@@ -87,11 +88,14 @@ async function callOllama(systemPrompt: string, userText: string, model: string)
             return null;
         }
         const data = await response.json() as { message?: { content?: string } };
-        const content = data?.message?.content;
+        let content = data?.message?.content;
         if (!content) {
             console.error('[Parser] Empty content from model');
             return null;
         }
+
+        // qwen3 思考模式會在 JSON 前輸出 <think>...</think>，需要先移除
+        content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 
         console.log(`[Parser] Raw response: ${content.slice(0, 400)}`);
 
@@ -332,6 +336,45 @@ function fixRevenueFromNote(entry: RawExtracted): RawExtracted {
     return entry;
 }
 
+/** LLM 漏掉備註時，從 rawInput 中提取「備註XXX」 */
+function fixNoteFromRaw(entry: RawExtracted): RawExtracted {
+    if (entry.note) return entry; // LLM 已提取，不覆蓋
+    const raw = entry.rawInput ?? '';
+    const m = raw.match(/備註(.+)/);
+    if (m) {
+        const note = m[1].trim();
+        console.log(`[Parser] Note fix from raw: "${note}"`);
+        return { ...entry, note };
+    }
+    return entry;
+}
+
+/** LLM 誤判 EXPENSE 但 rawInput 含有數量+單位 → 改為 PURCHASE，並從原文重新提取品項名 */
+function fixMisclassifiedExpense(entry: RawExtracted): RawExtracted {
+    if (entry.type !== 'EXPENSE') return entry;
+    const raw = normalizeNumbers(entry.rawInput ?? '');
+    // 檢查 rawInput 是否含有數量+單位（食材特徵）
+    const qtyMatch = raw.match(QTY_UNIT_RE);
+    if (!qtyMatch) return entry;
+    // 已知費用關鍵字不修正
+    const expenseKeywords = ['薪資', '清潔費', '停車費', '油費', '洗攤', '洗碗精', '電費', '租金', '瓦斯', '漂白水', '打火機', '雜支', '幫提圈', '半斤內袋', '泉水', '塑膠袋'];
+    const rawClean = raw.replace(/\d+/g, '').replace(/[月號日\/]/g, '');
+    if (expenseKeywords.some(kw => rawClean.includes(kw))) return entry;
+    // 從 rawInput 提取品項名：去掉日期、數字+單位、備註、廠商
+    const itemName = raw
+        .replace(/\d{1,2}[月\/]\d{1,2}[日號]?/g, '')  // 去日期
+        .replace(/備註.*/g, '')                          // 去備註及之後
+        .replace(/廠商.*/g, '')                          // 去廠商及之後
+        .replace(QTY_UNIT_RE, '')                        // 去數量+單位
+        .replace(/\d+/g, '')                             // 去獨立數字
+        .trim();
+    if (itemName) {
+        console.log(`[Parser] EXPENSE→PURCHASE fix: "${raw}" → itemName="${itemName}"`);
+        return { ...entry, type: 'PURCHASE', itemName };
+    }
+    return entry;
+}
+
 // 主要解析函式：只用快速模型，不再 fallback 到 32b
 export async function parseEntries(userText: string, ctx: DbContext): Promise<ParsedEntry[]> {
     const today = new Date().toLocaleDateString('zh-TW', {
@@ -382,8 +425,8 @@ export async function parseEntries(userText: string, ctx: DbContext): Promise<Pa
         }
     }
 
-    // 後處理：斤兩格式 → 一般數字修正 → 單位正規化 → EXPENSE 金額欄位修正 → REVENUE 誤判修正
-    result = result.map(fixJinLiangFromRaw).map(fixNumbersFromRaw).map(normalizeUnit).map(fixExpenseAmountField).map(fixRevenueFromNote);
+    // 後處理：斤兩格式 → 一般數字修正 → 單位正規化 → EXPENSE 金額欄位修正 → REVENUE 誤判修正 → EXPENSE 誤分類修正 → 備註補救
+    result = result.map(fixJinLiangFromRaw).map(fixNumbersFromRaw).map(normalizeUnit).map(fixExpenseAmountField).map(fixRevenueFromNote).map(fixMisclassifiedExpense).map(fixNoteFromRaw);
 
     // 轉換為 ParsedEntry（itemId/vendorId/expenseType/locationId 留給 matcher.ts 填入）
     return result.map(entry => {

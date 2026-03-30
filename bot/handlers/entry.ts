@@ -6,8 +6,23 @@ import { checkDuplicate } from '../matcher';
 import type { DbContext } from '../types';
 import { formatJinLiang, jinLiangToKg } from '../../src/lib/units';
 
+// 判斷日期是否為今天（台北時區）
+function isToday(dateStr: string): boolean {
+    const today = new Date().toLocaleDateString('zh-TW', {
+        timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).replace(/\//g, '-');
+    return dateStr === today;
+}
+
+// 格式化日期為簡短顯示（如 3/29）
+function shortDate(dateStr: string): string {
+    const d = new Date(dateStr);
+    return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
 // 格式化單筆記錄顯示文字
 export function formatEntry(e: ParsedEntry, ctx: DbContext): string {
+    const datePrefix = e.date && !isToday(e.date) ? `📅${shortDate(e.date)} ` : '';
     if (e.type === 'REVENUE') {
         const loc = e.locationId ? ctx.locations.find(l => l.id === e.locationId) : null;
         const parts = [
@@ -15,7 +30,7 @@ export function formatEntry(e: ParsedEntry, ctx: DbContext): string {
             `$${e.price.toLocaleString()}`,
             e.note ? `備註：${e.note}` : '',
         ].filter(Boolean);
-        return parts.join(' ');
+        return datePrefix + parts.join(' ');
     }
     if (e.type === 'PURCHASE') {
         const item = ctx.items.find(i => i.id === e.itemId);
@@ -31,7 +46,7 @@ export function formatEntry(e: ParsedEntry, ctx: DbContext): string {
             vendor ? `（${vendor.name}）` : '',
             e.note ? `備註：${e.note}` : '',
         ].filter(Boolean);
-        return parts.join(' ');
+        return datePrefix + parts.join(' ');
     } else {
         const et = ctx.expenseTypes.find(t => t.value === e.expenseType);
         const parts = [
@@ -39,7 +54,7 @@ export function formatEntry(e: ParsedEntry, ctx: DbContext): string {
             `$${e.price}`,
             e.note ? `備註：${e.note}` : '',
         ].filter(Boolean);
-        return parts.join(' ');
+        return datePrefix + parts.join(' ');
     }
 }
 
