@@ -6,12 +6,24 @@ import { createHash } from "crypto";
 import { signSession } from "@/lib/session";
 import { resolveRoleCode } from "@/lib/auth";
 
+// Rate limiting
+const loginAttempts = new Map<string, { count: number; lastAttempt: number }>();
+const MAX_ATTEMPTS = 5;
+const LOCKOUT_MS = 15 * 60 * 1000;
+
 export async function login(formData: FormData) {
     const username = (formData.get("username") as string | null)?.trim();
     const password = formData.get("password") as string | null;
 
     if (!username || !password) {
         return { success: false, message: "請輸入帳號與密碼" };
+    }
+
+    // Rate limit check
+    const record = loginAttempts.get(username);
+    if (record && record.count >= MAX_ATTEMPTS && Date.now() - record.lastAttempt < LOCKOUT_MS) {
+        const remaining = Math.ceil((LOCKOUT_MS - (Date.now() - record.lastAttempt)) / 60000);
+        return { success: false, message: `登入嘗試過多，請 ${remaining} 分鐘後再試` };
     }
 
     // 查詢用戶（跨租戶搜尋，同一 username 在不同租戶中可能存在）
@@ -28,13 +40,22 @@ export async function login(formData: FormData) {
     });
 
     if (!user) {
-        return { success: false, message: "帳號不存在或已停用" };
+        const r = loginAttempts.get(username) || { count: 0, lastAttempt: 0 };
+        r.count++; r.lastAttempt = Date.now();
+        loginAttempts.set(username, r);
+        return { success: false, message: "帳號或密碼錯誤" };
     }
 
     const hashedPassword = createHash("sha256").update(password).digest("hex");
     if (user.password !== hashedPassword) {
-        return { success: false, message: "密碼錯誤" };
+        const r = loginAttempts.get(username) || { count: 0, lastAttempt: 0 };
+        r.count++; r.lastAttempt = Date.now();
+        loginAttempts.set(username, r);
+        return { success: false, message: "帳號或密碼錯誤" };
     }
+
+    // Clear rate limit on success
+    loginAttempts.delete(username);
 
     const roleCodes = user.roles.map((item) => item.role.code);
     const roleCode = resolveRoleCode(roleCodes);

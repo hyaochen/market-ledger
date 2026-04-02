@@ -43,6 +43,8 @@ export function verifySession(token?: string | null): SessionPayload | null {
         const payloadJson = decodeBase64Url(payloadBase64).toString("utf-8");
         const payload = JSON.parse(payloadJson) as SessionPayload;
         if (!payload.userId) return null;
+        // Session expiry: 30 days
+        if (payload.issuedAt && Date.now() - payload.issuedAt > 30 * 24 * 60 * 60 * 1000) return null;
         return payload;
     } catch {
         return null;

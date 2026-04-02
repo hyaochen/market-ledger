@@ -307,6 +307,8 @@ model Entry {
 
   @@index([date])
   @@index([type])
+  @@index([status])
+  @@index([userId])
   @@index([tenantId])
 }
 
