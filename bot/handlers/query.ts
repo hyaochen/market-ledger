@@ -141,8 +141,24 @@ export async function queryByDate(date: Date, session: SessionData, ctx: DbConte
 }
 
 // 偵測廠商+月份查詢意圖
+//
+// Pattern: "N月 廠商名", "廠商名 N月", "查 廠商名 N月", "4月阿明進了什麼"
+//
+// False-positive guard (2026-04-10): a raw entry like "4月9號潮州攤位9320"
+// was being swallowed by this detector and routed to the query handler
+// (the leading "4月" matched, and the rest got stuffed into vendorName).
+// That caused the revenue record to never reach the parser. We now reject
+// matches where:
+//   - the text contains "號" or "日" after the month (specific date, not a month-level query)
+//   - the extracted vendor name starts with a digit (nonsense — real vendor names don't)
+//   - the extracted vendor name contains a known location token like "攤位"
+//   - the extracted vendor name ends with pure digits (clearly an amount)
 export function detectVendorMonthQuery(text: string): { vendorName: string; month: number; year: number } | null {
     const t = normalizeChineseDate(text.trim());
+
+    // Quick reject: if a specific date marker follows the month, this is a dated entry, not a month query.
+    if (/\d{1,2}月\s*\d{1,2}\s*[日號]/.test(t)) return null;
+
     // Pattern: "N月 廠商名" or "廠商名 N月" or "查 廠商名 N月"
     const m1 = t.match(/(\d{1,2})月[份]?\s*(.+?)(?:\s*(?:叫|買|進|訂)了?什麼|的?(?:進貨|明細|記錄))?$/);
     const m2 = t.match(/(.+?)\s*(\d{1,2})月[份]?\s*(?:叫|買|進|訂)?了?(?:什麼|的?(?:進貨|明細|記錄))?$/);
@@ -152,6 +168,11 @@ export function detectVendorMonthQuery(text: string): { vendorName: string; mont
     const monthStr = m1 ? match[1] : match[2];
     const vendorStr = (m1 ? match[2] : match[1]).replace(/^[查查詢問]\s*/, '').trim();
     if (!vendorStr || vendorStr.length < 1) return null;
+
+    // False-positive guards on the extracted vendor name
+    if (/^\d/.test(vendorStr)) return null;                    // starts with digit → nonsense
+    if (/攤位|店面|攤販/.test(vendorStr)) return null;          // contains location keyword → probably a revenue entry
+    if (/\d+\s*$/.test(vendorStr)) return null;                // ends with digits → probably an amount
 
     const month = parseInt(monthStr);
     if (month < 1 || month > 12) return null;
