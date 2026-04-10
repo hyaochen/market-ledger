@@ -140,6 +140,247 @@ export async function queryByDate(date: Date, session: SessionData, ctx: DbConte
     return lines.join('\n');
 }
 
+// 偵測廠商+月份查詢意圖
+export function detectVendorMonthQuery(text: string): { vendorName: string; month: number; year: number } | null {
+    const t = normalizeChineseDate(text.trim());
+    // Pattern: "N月 廠商名" or "廠商名 N月" or "查 廠商名 N月"
+    const m1 = t.match(/(\d{1,2})月[份]?\s*(.+?)(?:\s*(?:叫|買|進|訂)了?什麼|的?(?:進貨|明細|記錄))?$/);
+    const m2 = t.match(/(.+?)\s*(\d{1,2})月[份]?\s*(?:叫|買|進|訂)?了?(?:什麼|的?(?:進貨|明細|記錄))?$/);
+    const match = m1 || m2;
+    if (!match) return null;
+
+    const monthStr = m1 ? match[1] : match[2];
+    const vendorStr = (m1 ? match[2] : match[1]).replace(/^[查查詢問]\s*/, '').trim();
+    if (!vendorStr || vendorStr.length < 1) return null;
+
+    const month = parseInt(monthStr);
+    if (month < 1 || month > 12) return null;
+
+    const now = new Date();
+    const year = month > now.getMonth() + 1 ? now.getFullYear() - 1 : now.getFullYear();
+    return { vendorName: vendorStr, month, year };
+}
+
+// 查詢某月份某廠商的進貨記錄（含單價換算）
+export async function queryByVendorMonth(
+    vendorName: string, month: number, year: number,
+    session: SessionData, ctx: DbContext
+): Promise<string> {
+    // Find matching vendor
+    const vendor = ctx.vendors.find(v =>
+        v.name.includes(vendorName) || vendorName.includes(v.name)
+    );
+    if (!vendor) {
+        const available = ctx.vendors.map(v => v.name).join('、');
+        return `❌ 找不到廠商「${vendorName}」\n\n目前有的廠商：${available || '（無）'}`;
+    }
+
+    const from = new Date(year, month - 1, 1);
+    const to = new Date(year, month, 1);
+
+    const entries = await prisma.entry.findMany({
+        where: {
+            tenantId: session.tenantId,
+            type: 'PURCHASE',
+            vendorId: vendor.id,
+            date: { gte: from, lt: to },
+        },
+        include: { item: true },
+        orderBy: { date: 'asc' },
+    });
+
+    if (entries.length === 0) {
+        return `📋 ${year}年${month}月 ${vendor.name}：無進貨記錄`;
+    }
+
+    const lines: string[] = [`📋 ${year}年${month}月 — ${vendor.name}（${entries.length} 筆）\n`];
+    let total = 0;
+
+    // Group by item, accumulate weight (in kg) and amount for unit price calculation
+    type ItemAgg = {
+        totalKg: number; unitCode: string; amount: number; count: number;
+        // For display: individual quantities
+        entries: { qty: number; unit: string }[];
+    };
+    const byItem = new Map<string, ItemAgg>();
+    for (const e of entries) {
+        const name = e.item?.name ?? '?';
+        const existing = byItem.get(name) || { totalKg: 0, unitCode: '', amount: 0, count: 0, entries: [] };
+        existing.unitCode = e.inputUnit ?? '';
+        existing.amount += e.totalPrice;
+        existing.count += 1;
+        existing.totalKg += e.standardWeight ?? 0;
+        if (e.inputQuantity != null) {
+            existing.entries.push({ qty: e.inputQuantity, unit: e.inputUnit ?? '' });
+        }
+        byItem.set(name, existing);
+        total += e.totalPrice;
+    }
+
+    const KG_PER_TAIJIN = 0.6; // 1台斤 = 0.6公斤
+
+    for (const [name, data] of byItem) {
+        // Format quantity display
+        let qtyStr = '';
+        if (data.entries.length > 0) {
+            const unitCode = data.entries[0].unit;
+            if (unitCode === 'jl') {
+                // 斤兩：decode each, sum in jin+liang, display as 斤兩
+                let totalJin = 0, totalLiang = 0;
+                for (const ent of data.entries) {
+                    totalJin += Math.floor(ent.qty / 100);
+                    totalLiang += Math.round(ent.qty % 100);
+                }
+                totalJin += Math.floor(totalLiang / 16);
+                totalLiang = totalLiang % 16;
+                const kgStr = data.totalKg > 0 ? `（${data.totalKg.toFixed(2)}kg）` : '';
+                qtyStr = ` ${totalJin}斤${totalLiang > 0 ? totalLiang + '兩' : ''}${kgStr}`;
+            } else {
+                const totalQty = data.entries.reduce((s, e) => s + e.qty, 0);
+                const unitName = ctx.units.find(u => u.code === unitCode)?.name ?? unitCode;
+                const kgStr = data.totalKg > 0 ? `（${data.totalKg.toFixed(2)}kg）` : '';
+                qtyStr = ` ${totalQty}${unitName}${kgStr}`;
+            }
+        }
+
+        let priceStr = '';
+        if (data.totalKg > 0 && data.amount > 0) {
+            const pricePerKg = data.amount / data.totalKg;
+            const pricePerTaiJin = pricePerKg * KG_PER_TAIJIN;
+            priceStr = `\n    💲 單價：$${Math.round(pricePerTaiJin)}/台斤 ｜ $${Math.round(pricePerKg)}/公斤`;
+        }
+
+        lines.push(`  • ${name}${qtyStr} — $${data.amount.toLocaleString()}（${data.count}筆）${priceStr}`);
+    }
+
+    lines.push(`\n💰 合計：$${total.toLocaleString()}`);
+    return lines.join('\n');
+}
+
+// 偵測日期範圍+地點查詢（例如「3月1號到3月31號屏東攤位的總營收」）
+export function detectDateRangeQuery(text: string): { from: Date; to: Date; locationName?: string; type?: string } | null {
+    const t = normalizeChineseDate(text.trim());
+
+    // Pattern: M月D號到M月D號 (地點) (營收/進貨/支出)
+    const m = t.match(/(\d{1,2})月(\d{1,2})[號日]?\s*(?:到|至|~|-)\s*(\d{1,2})月(\d{1,2})[號日]?\s*(.*)/);
+    if (!m) return null;
+
+    const now = new Date();
+    const year = now.getFullYear();
+    const from = new Date(year, parseInt(m[1]) - 1, parseInt(m[2]), 0, 0, 0, 0);
+    const to = new Date(year, parseInt(m[3]) - 1, parseInt(m[4]), 23, 59, 59, 999);
+    if (from > now) { from.setFullYear(year - 1); to.setFullYear(year - 1); }
+
+    const rest = m[5].trim();
+
+    // Extract location name and query type
+    let locationName: string | undefined;
+    let type: string | undefined;
+
+    if (/營收|營業額|收入/.test(rest)) type = 'revenue';
+    else if (/進貨|採購/.test(rest)) type = 'purchase';
+    else if (/支出|費用/.test(rest)) type = 'expense';
+
+    // Remove type keywords to get location
+    const locStr = rest.replace(/的?(?:總?營收|總?營業額|總?收入|總?進貨|總?支出|總?費用|記錄|明細|總計)/g, '').trim();
+    if (locStr.length >= 1) {
+        // Clean up common suffixes
+        locationName = locStr.replace(/攤位|門市|店/g, '').trim() || locStr;
+    }
+
+    return { from, to, locationName, type };
+}
+
+// 查詢日期範圍內的營收/進貨/支出
+export async function queryByDateRange(
+    from: Date, to: Date, locationName: string | undefined, type: string | undefined,
+    session: SessionData, ctx: DbContext
+): Promise<string> {
+    const fromStr = `${from.getMonth()+1}/${from.getDate()}`;
+    const toStr = `${to.getMonth()+1}/${to.getDate()}`;
+    const toNextDay = new Date(to); toNextDay.setDate(toNextDay.getDate() + 1); toNextDay.setHours(0,0,0,0);
+    const fromStart = new Date(from); fromStart.setHours(0,0,0,0);
+
+    // Find matching location if specified
+    let locationId: string | undefined;
+    if (locationName) {
+        const loc = ctx.locations?.find(l =>
+            l.name.includes(locationName) || locationName.includes(l.name.replace(/攤位|門市|店/g, ''))
+        );
+        if (loc) locationId = loc.id;
+    }
+
+    const lines: string[] = [];
+    const header = locationName ? `${locationName}` : '全部';
+    lines.push(`📊 ${fromStr} ~ ${toStr} ${header}\n`);
+
+    // Revenue
+    if (!type || type === 'revenue') {
+        const where: Record<string, unknown> = {
+            tenantId: session.tenantId,
+            date: { gte: fromStart, lt: toNextDay },
+        };
+        if (locationId) where.locationId = locationId;
+
+        const revenues = await prisma.revenue.findMany({
+            where, include: { location: true }, orderBy: { date: 'asc' },
+        });
+
+        if (revenues.length > 0) {
+            // Group by location
+            const byLoc = new Map<string, number>();
+            let total = 0;
+            for (const r of revenues) {
+                const name = r.location?.name ?? '未知';
+                byLoc.set(name, (byLoc.get(name) || 0) + r.amount);
+                total += r.amount;
+            }
+            lines.push(`💰 營業額（${revenues.length} 筆）：`);
+            for (const [name, amount] of byLoc) {
+                lines.push(`  • ${name}：$${amount.toLocaleString()}`);
+            }
+            lines.push(`  📍 小計：$${total.toLocaleString()}`);
+        } else if (type === 'revenue') {
+            lines.push('💰 此期間無營業額記錄');
+        }
+    }
+
+    // Purchases
+    if (!type || type === 'purchase') {
+        const entries = await prisma.entry.findMany({
+            where: {
+                tenantId: session.tenantId, type: 'PURCHASE',
+                date: { gte: fromStart, lt: toNextDay },
+            },
+            include: { item: true, vendor: true }, orderBy: { date: 'asc' },
+        });
+
+        if (entries.length > 0) {
+            const total = entries.reduce((s, e) => s + e.totalPrice, 0);
+            lines.push(`\n🛒 進貨（${entries.length} 筆）：$${total.toLocaleString()}`);
+        }
+    }
+
+    // Expenses
+    if (!type || type === 'expense') {
+        const entries = await prisma.entry.findMany({
+            where: {
+                tenantId: session.tenantId, type: 'EXPENSE',
+                date: { gte: fromStart, lt: toNextDay },
+            },
+            orderBy: { date: 'asc' },
+        });
+
+        if (entries.length > 0) {
+            const total = entries.reduce((s, e) => s + e.totalPrice, 0);
+            lines.push(`\n💸 支出（${entries.length} 筆）：$${total.toLocaleString()}`);
+        }
+    }
+
+    if (lines.length === 1) lines.push('此期間無記錄');
+    return lines.join('\n');
+}
+
 // 查詢最近 7 天
 export async function queryRecent(session: SessionData, ctx: DbContext): Promise<string> {
     const since = new Date();

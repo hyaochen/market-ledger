@@ -20,6 +20,8 @@ import {
 } from './handlers/entry';
 import {
     detectQueryDate, isQueryIntent, queryByDate, queryRecent,
+    detectVendorMonthQuery, queryByVendorMonth,
+    detectDateRangeQuery, queryByDateRange,
 } from './handlers/query';
 import { saveAlias } from './aliases';
 import type { SessionData, DbContext, ParsedEntry } from './types';
@@ -67,6 +69,10 @@ const HELP_TEXT = `📖 *使用說明*
 • \`今天記了什麼\`  /  \`今日\`
 • \`昨天的記錄\`  /  \`3/3 記錄\`
 • \`最近記錄\`
+• \`4月 阿明\` — 查某月份某廠商進貨
+• \`查阿明4月叫了什麼\`
+• \`3月1號到3月31號屏東的總營收\`
+• \`4月1號到4月8號總營收\`
 
 *🔧 指令*：
 • /today — 今天記錄
@@ -594,6 +600,26 @@ bot.on('message', async (msg) => {
         return;
     }
 
+    // ── 日期範圍查詢（例如「3月1號到3月31號屏東攤位的總營收」）──
+    const dateRange = detectDateRangeQuery(text);
+    if (dateRange) {
+        logLine('QUERY', chatId, `range=${dateRange.from.toLocaleDateString()}~${dateRange.to.toLocaleDateString()} loc=${dateRange.locationName || 'all'} type=${dateRange.type || 'all'}`);
+        const ctx = await loadDbContext(session.tenantId);
+        const result = await queryByDateRange(dateRange.from, dateRange.to, dateRange.locationName, dateRange.type, session, ctx);
+        await bot.sendMessage(chatId, result);
+        return;
+    }
+
+    // ── 廠商月份查詢（例如「4月 阿明」「查阿明4月進了什麼」）──
+    const vendorMonth = detectVendorMonthQuery(text);
+    if (vendorMonth) {
+        logLine('QUERY', chatId, `vendor=${vendorMonth.vendorName} month=${vendorMonth.month}`);
+        const ctx = await loadDbContext(session.tenantId);
+        const result = await queryByVendorMonth(vendorMonth.vendorName, vendorMonth.month, vendorMonth.year, session, ctx);
+        await bot.sendMessage(chatId, result);
+        return;
+    }
+
     // ── 查詢意圖 ──────────────────────────────────────────
     if (isQueryIntent(text)) {
         const dateResult = detectQueryDate(text);
@@ -968,6 +994,11 @@ bot.on('callback_query', async (query) => {
 
     // ── 一般確認流程 ────────────────────────────────────────
     if (data.startsWith('confirm_yes_')) {
+        // Guard: if state was lost (bot restart), inform user
+        if (state.phase === 'idle' && !state.currentUncertain) {
+            await bot.sendMessage(chatId, '⚠️ 暫存資料已過期（可能因機器人重啟），請重新輸入一次。');
+            return;
+        }
         const { accepted, next } = acceptCurrent(chatId);
         // 使用者確認了模糊比對 → 儲存 alias 供下次自動命中
         if (accepted?.type === 'PURCHASE' && accepted._originalSearchName && accepted.itemId && accepted.itemName) {
@@ -1004,7 +1035,7 @@ async function finalizeEntries(
     resetToIdle(chatId);
 
     if (confirmed.length === 0) {
-        await bot.sendMessage(chatId, '沒有任何記錄被儲存。');
+        await bot.sendMessage(chatId, '⚠️ 沒有任何記錄被儲存。\n（可能是機器人重新啟動導致暫存資料遺失，請重新輸入一次）');
         return;
     }
 

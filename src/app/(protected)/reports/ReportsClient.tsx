@@ -59,7 +59,8 @@ function CalendarPicker({
         return d.getMonth();
     });
 
-    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+    // Use local date format (not UTC) to avoid timezone offset issues
+    const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 
     const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
     const firstDayOfWeek = new Date(viewYear, viewMonth, 1).getDay();
@@ -297,7 +298,7 @@ export default function ReportsClient({
     const canEdit = roleCode === "write" || roleCode === "admin";
 
     /* ─── Preset helpers ─── */
-    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+    const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
     const now = new Date();
     const dayOfWeek = now.getDay() || 7;
     const weekStart = new Date(now);

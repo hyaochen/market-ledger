@@ -137,14 +137,14 @@ export default async function InventoryPage({
                                 </div>
 
                                 {/* Content */}
-                                <div className="flex-1 min-w-0">
+                                <div className="flex-1 min-w-0 overflow-hidden">
                                     <div className="flex items-baseline justify-between gap-2">
-                                        <span className="font-semibold truncate">
+                                        <span className="font-semibold truncate block max-w-[60%]">
                                             {entry.type === "PURCHASE"
                                                 ? entry.item?.name || '未知品項'
                                                 : expenseTypeMap.get(entry.expenseType || "") || entry.expenseType || "其他支出"}
                                         </span>
-                                        <span className="font-bold text-primary whitespace-nowrap">
+                                        <span className="font-bold text-primary whitespace-nowrap flex-shrink-0">
                                             {formatPrice(entry.totalPrice)}
                                         </span>
                                     </div>
