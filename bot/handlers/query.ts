@@ -173,6 +173,14 @@ export function detectVendorMonthQuery(text: string): { vendorName: string; mont
     if (/^\d/.test(vendorStr)) return null;                    // starts with digit → nonsense
     if (/攤位|店面|攤販/.test(vendorStr)) return null;          // contains location keyword → probably a revenue entry
     if (/\d+\s*$/.test(vendorStr)) return null;                // ends with digits → probably an amount
+    // 包含類型詞 → 是「整月查詢」不是 vendor query（會由 detectMonthYearQuery 接手）
+    if (/支出|費用|營收|營業額|收入|採購|總計|彙整|統計|匯總|淨利|毛利/.test(vendorStr)) return null;
+    // 備註查詢 → 由 detectNoteQuery 接手
+    if (/備註/.test(vendorStr)) return null;
+    // 排行詞 → 由 detectRankingQuery 接手
+    if (/TOP|top|排行|最大|最熱|熱賣|榜/.test(vendorStr)) return null;
+    // 比較詞 → 由 detectComparisonQuery 接手
+    if (/比|對比|環比|同比/.test(vendorStr)) return null;
 
     const month = parseInt(monthStr);
     if (month < 1 || month > 12) return null;
@@ -454,5 +462,674 @@ export async function queryRecent(session: SessionData, ctx: DbContext): Promise
     });
 
     lines.push(`---\n總計：$${grandTotal.toLocaleString()}`);
+    return lines.join('\n');
+}
+
+// ============================================================
+// 新增查詢功能（2026-04-11）
+// ============================================================
+
+// ── helper: 解析「本月/上月/N月/今年/去年/N年」轉換成日期區間 ─────────
+function resolvePeriod(text: string): { from: Date; to: Date; label: string } | null {
+    const t = normalizeChineseDate(text.trim());
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = now.getMonth();
+
+    // 月份範圍：「4月到5月」「3月～5月」「2月-4月」（不含具體日期）
+    // 必須先檢查，避免被 single-month pattern 攔截
+    const rangeMatch = t.match(/(\d{1,2})月(?![\d/日號]).*?(?:到|至|~|－|-).*?(\d{1,2})月/);
+    if (rangeMatch) {
+        const m1 = parseInt(rangeMatch[1]);
+        const m2 = parseInt(rangeMatch[2]);
+        if (m1 >= 1 && m1 <= 12 && m2 >= 1 && m2 <= 12) {
+            const cur = m + 1;
+            // y1: 用單月邏輯（未來月份回推到去年）
+            const y1 = m1 > cur ? y - 1 : y;
+            // y2: 預設等於 y1（同年範圍），若 m2 < m1 才視為跨年（y1+1）
+            const y2 = m2 < m1 ? y1 + 1 : y1;
+            return {
+                from: new Date(y1, m1 - 1, 1),
+                to: new Date(y2, m2, 1),  // exclusive end → 下個月1號
+                label: y1 === y2 ? `${y1}年${m1}-${m2}月` : `${y1}/${m1}-${y2}/${m2}`,
+            };
+        }
+    }
+
+    // 「本月」
+    if (/本月|當月|這個月/.test(t)) {
+        const from = new Date(y, m, 1);
+        const to = new Date(y, m + 1, 1);
+        return { from, to, label: `${y}年${m + 1}月` };
+    }
+    // 「上月」
+    if (/上月|上個月|前一個月/.test(t)) {
+        const from = new Date(y, m - 1, 1);
+        const to = new Date(y, m, 1);
+        return { from, to, label: `${y}年${m}月` };
+    }
+    // 「今年」
+    if (/今年|本年/.test(t)) {
+        const from = new Date(y, 0, 1);
+        const to = new Date(y + 1, 0, 1);
+        return { from, to, label: `${y}年` };
+    }
+    // 「去年」
+    if (/去年|前年|上年/.test(t)) {
+        const from = new Date(y - 1, 0, 1);
+        const to = new Date(y, 0, 1);
+        return { from, to, label: `${y - 1}年` };
+    }
+    // 「N年」（純年度）
+    const yearMatch = t.match(/^(\d{4})年/);
+    if (yearMatch) {
+        const yr = parseInt(yearMatch[1]);
+        return {
+            from: new Date(yr, 0, 1),
+            to: new Date(yr + 1, 0, 1),
+            label: `${yr}年`,
+        };
+    }
+    // 「N月」（純月份，假設今年；若 N > 當前月則去年）
+    const monthMatch = t.match(/^(\d{1,2})月(?![\d/])/);
+    if (monthMatch) {
+        let mn = parseInt(monthMatch[1]);
+        if (mn < 1 || mn > 12) return null;
+        let year = y;
+        if (mn > m + 1) year = y - 1;
+        return {
+            from: new Date(year, mn - 1, 1),
+            to: new Date(year, mn, 1),
+            label: `${year}年${mn}月`,
+        };
+    }
+    return null;
+}
+
+// ── 2-1: 整月/年度查詢（不指定廠商或品項）─────────────────────────
+// Pattern: 「3月總營收」「本月進貨」「上月支出」「3月記了什麼」「2026年總收入」
+export function detectMonthYearQuery(text: string):
+    { period: { from: Date; to: Date; label: string }; type?: string } | null {
+    const t = normalizeChineseDate(text.trim());
+    // 必須有 period 詞 + (查詢動詞 或 類型詞)
+    const period = resolvePeriod(t);
+    if (!period) return null;
+
+    let type: string | undefined;
+    if (/營收|營業額|收入/.test(t)) type = 'revenue';
+    else if (/進貨|採購/.test(t)) type = 'purchase';
+    else if (/支出|費用/.test(t)) type = 'expense';
+
+    // 必須有查詢意圖（避免吃掉其他輸入）
+    const hasIntent = type !== undefined ||
+        /記|記錄|紀錄|查|什麼|多少|總計|彙整|統計|匯總/.test(t);
+    if (!hasIntent) return null;
+
+    return { period, type };
+}
+
+export async function queryByMonthYear(
+    period: { from: Date; to: Date; label: string },
+    type: string | undefined,
+    session: SessionData,
+    _ctx: DbContext,
+): Promise<string> {
+    const lines: string[] = [`📊 ${period.label} 統計`];
+    let grandRev = 0, grandPur = 0, grandExp = 0;
+
+    if (!type || type === 'revenue') {
+        const revs = await prisma.revenue.findMany({
+            where: { tenantId: session.tenantId, date: { gte: period.from, lt: period.to } },
+            include: { location: true },
+        });
+        if (revs.length) {
+            const byLoc = new Map<string, number>();
+            for (const r of revs) {
+                const n = r.location?.name ?? '?';
+                byLoc.set(n, (byLoc.get(n) || 0) + r.amount);
+                grandRev += r.amount;
+            }
+            lines.push(`💰 營業額（${revs.length} 筆）：`);
+            for (const [n, a] of byLoc) lines.push(`  • ${n}：$${a.toLocaleString()}`);
+            lines.push(`  📍 小計：$${grandRev.toLocaleString()}`);
+        } else if (type === 'revenue') {
+            lines.push('💰 此期間無營業額記錄');
+        }
+    }
+
+    if (!type || type === 'purchase') {
+        const ents = await prisma.entry.findMany({
+            where: { tenantId: session.tenantId, type: 'PURCHASE', date: { gte: period.from, lt: period.to } },
+            include: { vendor: true },
+        });
+        if (ents.length) {
+            const byVendor = new Map<string, number>();
+            for (const e of ents) {
+                const n = e.vendor?.name ?? '?';
+                byVendor.set(n, (byVendor.get(n) || 0) + e.totalPrice);
+                grandPur += e.totalPrice;
+            }
+            lines.push(`📦 進貨（${ents.length} 筆）：`);
+            for (const [n, a] of byVendor) lines.push(`  • ${n}：$${a.toLocaleString()}`);
+            lines.push(`  📍 小計：$${grandPur.toLocaleString()}`);
+        } else if (type === 'purchase') {
+            lines.push('📦 此期間無進貨記錄');
+        }
+    }
+
+    if (!type || type === 'expense') {
+        const exps = await prisma.entry.findMany({
+            where: { tenantId: session.tenantId, type: 'EXPENSE', date: { gte: period.from, lt: period.to } },
+        });
+        if (exps.length) {
+            const byType = new Map<string, number>();
+            for (const e of exps) {
+                const t2 = e.expenseType ?? '其他';
+                byType.set(t2, (byType.get(t2) || 0) + e.totalPrice);
+                grandExp += e.totalPrice;
+            }
+            lines.push(`💸 支出（${exps.length} 筆）：`);
+            for (const [t2, a] of byType) lines.push(`  • ${t2}：$${a.toLocaleString()}`);
+            lines.push(`  📍 小計：$${grandExp.toLocaleString()}`);
+        } else if (type === 'expense') {
+            lines.push('💸 此期間無支出記錄');
+        }
+    }
+
+    if (!type) {
+        const profit = grandRev - grandPur - grandExp;
+        lines.push('---');
+        lines.push(`📈 毛收入：$${grandRev.toLocaleString()}`);
+        lines.push(`📉 總成本：$${(grandPur + grandExp).toLocaleString()}`);
+        lines.push(`💵 ${profit >= 0 ? '淨利' : '虧損'}：$${profit.toLocaleString()}`);
+    }
+
+    return lines.join('\n');
+}
+
+// ── 2-2: 品項月份查詢 ───────────────────────────────────────────
+// Pattern: 「3月豬肉進了多少」「豬肉 3月」「查 豬肉 4月」
+// 必須在 ctx.items 找到該品項才算 valid（避免和廠商月份查詢衝突）
+export function detectItemMonthQuery(
+    text: string,
+    items: { id: string; name: string }[],
+): { itemName: string; itemId: string; period: { from: Date; to: Date; label: string } } | null {
+    const t = normalizeChineseDate(text.trim());
+
+    // 先找一個 period
+    const period = resolvePeriod(t);
+    if (!period) return null;
+
+    // 從 t 中移除月份/年度詞，看剩餘是否包含某個 item name
+    const remaining = t
+        .replace(/^\d{4}年/, '')
+        .replace(/^\d{1,2}月/, '')
+        .replace(/(本月|當月|這個月|上月|上個月|今年|去年)/g, '')
+        .replace(/(總?營收|總?營業額|總?收入|總?進貨|採購|總?支出|費用|記|記錄|紀錄|查|什麼|多少|彙整|統計|匯總|進了)/g, '')
+        .trim();
+
+    if (!remaining) return null;
+
+    // 找最長 match 的品項
+    let best: { id: string; name: string } | null = null;
+    for (const it of items) {
+        if (remaining.includes(it.name) || it.name.includes(remaining)) {
+            if (!best || it.name.length > best.name.length) best = it;
+        }
+    }
+    if (!best) return null;
+
+    return { itemName: best.name, itemId: best.id, period };
+}
+
+export async function queryByItemMonth(
+    itemId: string,
+    itemName: string,
+    period: { from: Date; to: Date; label: string },
+    session: SessionData,
+    ctx: DbContext,
+): Promise<string> {
+    const ents = await prisma.entry.findMany({
+        where: {
+            tenantId: session.tenantId,
+            type: 'PURCHASE',
+            itemId,
+            date: { gte: period.from, lt: period.to },
+        },
+        include: { vendor: true },
+        orderBy: { date: 'asc' },
+    });
+
+    if (ents.length === 0) {
+        return `📋 ${period.label} ${itemName}：無進貨記錄`;
+    }
+
+    const KG_PER_TAIJIN = 0.6;
+    const lines: string[] = [`📋 ${period.label} — ${itemName}（${ents.length} 筆）\n`];
+
+    // 按廠商分組
+    type V = { count: number; amount: number; totalKg: number; entries: { qty: number; unit: string }[] };
+    const byVendor = new Map<string, V>();
+    let total = 0, totalKg = 0;
+    for (const e of ents) {
+        const v = e.vendor?.name ?? '?';
+        const cur = byVendor.get(v) || { count: 0, amount: 0, totalKg: 0, entries: [] };
+        cur.count += 1;
+        cur.amount += e.totalPrice;
+        cur.totalKg += e.standardWeight ?? 0;
+        if (e.inputQuantity != null) cur.entries.push({ qty: e.inputQuantity, unit: e.inputUnit ?? '' });
+        byVendor.set(v, cur);
+        total += e.totalPrice;
+        totalKg += e.standardWeight ?? 0;
+    }
+
+    for (const [v, d] of byVendor) {
+        // 數量顯示
+        let qtyStr = '';
+        if (d.entries.length > 0) {
+            const unitCode = d.entries[0].unit;
+            if (unitCode === 'jl') {
+                let tj = 0, tl = 0;
+                for (const e of d.entries) { tj += Math.floor(e.qty / 100); tl += Math.round(e.qty % 100); }
+                tj += Math.floor(tl / 16); tl = tl % 16;
+                qtyStr = ` ${tj}斤${tl > 0 ? tl + '兩' : ''}`;
+            } else {
+                const totalQty = d.entries.reduce((s, e) => s + e.qty, 0);
+                const unitName = ctx.units.find(u => u.code === unitCode)?.name ?? unitCode;
+                qtyStr = ` ${totalQty}${unitName}`;
+            }
+        }
+        const kgStr = d.totalKg > 0 ? `（${d.totalKg.toFixed(2)}kg）` : '';
+        lines.push(`  • ${v}${qtyStr}${kgStr} — $${d.amount.toLocaleString()}（${d.count}筆）`);
+    }
+
+    lines.push('---');
+    if (totalKg > 0) {
+        const ppk = total / totalKg;
+        const ppt = ppk * KG_PER_TAIJIN;
+        lines.push(`📦 總量：${totalKg.toFixed(2)}kg`);
+        lines.push(`💰 總額：$${total.toLocaleString()}`);
+        lines.push(`💲 平均單價：$${Math.round(ppt)}/台斤 ｜ $${Math.round(ppk)}/公斤`);
+    } else {
+        lines.push(`💰 總額：$${total.toLocaleString()}`);
+    }
+
+    return lines.join('\n');
+}
+
+// ── 2-3: 排行查詢 TOP N ─────────────────────────────────────────
+// Pattern: 「本月TOP5廠商」「3月最大廠商」「本月熱賣品項」「3月排行」
+export function detectRankingQuery(text: string):
+    { period: { from: Date; to: Date; label: string }; target: 'vendor' | 'item' | 'location'; topN: number; metric: 'amount' | 'count' } | null {
+    const t = normalizeChineseDate(text.trim());
+
+    // 必須含 「TOP/排行/最大/最熱/熱賣/最常」
+    if (!/TOP|top|排行|最大|最熱|熱賣|最常|榜/.test(t)) return null;
+
+    const period = resolvePeriod(t) ?? (() => {
+        // fallback 本月
+        const now = new Date();
+        return {
+            from: new Date(now.getFullYear(), now.getMonth(), 1),
+            to: new Date(now.getFullYear(), now.getMonth() + 1, 1),
+            label: `${now.getFullYear()}年${now.getMonth() + 1}月`,
+        };
+    })();
+
+    let target: 'vendor' | 'item' | 'location' = 'vendor';
+    if (/品項|商品|貨品|物品|熱賣|肉|菜/.test(t)) target = 'item';
+    else if (/地點|攤位|門市|店面/.test(t)) target = 'location';
+
+    const topMatch = t.match(/TOP\s*(\d+)|top\s*(\d+)|前(\d+)/i);
+    const topN = topMatch ? parseInt(topMatch[1] || topMatch[2] || topMatch[3]) : 5;
+
+    return { period, target, topN, metric: 'amount' };
+}
+
+export async function queryRanking(
+    period: { from: Date; to: Date; label: string },
+    target: 'vendor' | 'item' | 'location',
+    topN: number,
+    session: SessionData,
+    _ctx: DbContext,
+): Promise<string> {
+    const lines: string[] = [`🏆 ${period.label} ${target === 'vendor' ? '廠商' : target === 'item' ? '品項' : '地點'} TOP ${topN}\n`];
+
+    if (target === 'location') {
+        const revs = await prisma.revenue.findMany({
+            where: { tenantId: session.tenantId, date: { gte: period.from, lt: period.to } },
+            include: { location: true },
+        });
+        const byLoc = new Map<string, { amount: number; count: number }>();
+        for (const r of revs) {
+            const n = r.location?.name ?? '?';
+            const cur = byLoc.get(n) || { amount: 0, count: 0 };
+            cur.amount += r.amount; cur.count += 1;
+            byLoc.set(n, cur);
+        }
+        const sorted = Array.from(byLoc.entries()).sort((a, b) => b[1].amount - a[1].amount).slice(0, topN);
+        if (sorted.length === 0) return `🏆 ${period.label} 無營業額記錄`;
+        sorted.forEach(([n, d], i) => {
+            lines.push(`  ${i + 1}. ${n} — $${d.amount.toLocaleString()}（${d.count} 筆）`);
+        });
+    } else if (target === 'vendor') {
+        const ents = await prisma.entry.findMany({
+            where: { tenantId: session.tenantId, type: 'PURCHASE', date: { gte: period.from, lt: period.to } },
+            include: { vendor: true },
+        });
+        const byVendor = new Map<string, { amount: number; count: number }>();
+        for (const e of ents) {
+            const n = e.vendor?.name ?? '?';
+            const cur = byVendor.get(n) || { amount: 0, count: 0 };
+            cur.amount += e.totalPrice; cur.count += 1;
+            byVendor.set(n, cur);
+        }
+        const sorted = Array.from(byVendor.entries()).sort((a, b) => b[1].amount - a[1].amount).slice(0, topN);
+        if (sorted.length === 0) return `🏆 ${period.label} 無進貨記錄`;
+        sorted.forEach(([n, d], i) => {
+            lines.push(`  ${i + 1}. ${n} — $${d.amount.toLocaleString()}（${d.count} 筆）`);
+        });
+    } else {
+        // item
+        const ents = await prisma.entry.findMany({
+            where: { tenantId: session.tenantId, type: 'PURCHASE', date: { gte: period.from, lt: period.to } },
+            include: { item: true },
+        });
+        const byItem = new Map<string, { amount: number; count: number; kg: number }>();
+        for (const e of ents) {
+            const n = e.item?.name ?? '?';
+            const cur = byItem.get(n) || { amount: 0, count: 0, kg: 0 };
+            cur.amount += e.totalPrice; cur.count += 1; cur.kg += e.standardWeight ?? 0;
+            byItem.set(n, cur);
+        }
+        const sorted = Array.from(byItem.entries()).sort((a, b) => b[1].amount - a[1].amount).slice(0, topN);
+        if (sorted.length === 0) return `🏆 ${period.label} 無進貨記錄`;
+        sorted.forEach(([n, d], i) => {
+            const kgStr = d.kg > 0 ? `，${d.kg.toFixed(1)}kg` : '';
+            lines.push(`  ${i + 1}. ${n} — $${d.amount.toLocaleString()}（${d.count} 筆${kgStr}）`);
+        });
+    }
+
+    return lines.join('\n');
+}
+
+// ── 2-3b: 支出類型 + 月份查詢 ───────────────────────────────────
+// Pattern: 「3月薪資支出」「本月租金」「上月瓦斯費」「3月份薪資支出了多少」
+// 必須在 ctx.expenseTypes 找到 label 才算 valid
+export function detectExpenseTypeMonthQuery(
+    text: string,
+    expenseTypes: { id: string; value: string; label: string }[],
+): { expenseTypeValue: string; expenseTypeLabel: string; period: { from: Date; to: Date; label: string } } | null {
+    const t = normalizeChineseDate(text.trim());
+
+    // 必須有時間 period
+    const period = resolvePeriod(t);
+    if (!period) return null;
+
+    // 必須有「支出/費用」類型詞 或 包含某個 expense type label
+    const hasExpenseHint = /支出|費用/.test(t);
+    const remaining = t
+        .replace(/^\d{4}年/, '')
+        .replace(/^\d{1,2}月份?/, '')
+        .replace(/(本月|當月|這個月|上月|上個月|今年|去年)/g, '')
+        .trim();
+
+    // remaining 也要清掉月份範圍 pattern
+    const cleanedRemaining = remaining
+        .replace(/\d{1,2}月(?:到|至|~|－|-)\d{1,2}月份?/g, '')
+        .replace(/份/g, '')
+        .trim();
+
+    // 從剩餘文字中找 expense type label
+    let best: { id: string; value: string; label: string } | null = null;
+    const candidate = cleanedRemaining || remaining;
+    for (const et of expenseTypes) {
+        if (!et.label) continue;
+        if (candidate.includes(et.label) || et.label.includes(candidate.replace(/支出|費用|了多少|多少|查|記|什麼/g, '').trim())) {
+            if (!best || et.label.length > best.label.length) best = et;
+        }
+    }
+
+    if (!best) return null;
+    if (!hasExpenseHint && best.label.length < 2) return null; // 防止單字 false positive
+
+    return {
+        expenseTypeValue: best.value,
+        expenseTypeLabel: best.label,
+        period,
+    };
+}
+
+export async function queryByExpenseTypeMonth(
+    expenseTypeValue: string,
+    expenseTypeLabel: string,
+    period: { from: Date; to: Date; label: string },
+    session: SessionData,
+    _ctx: DbContext,
+): Promise<string> {
+    const ents = await prisma.entry.findMany({
+        where: {
+            tenantId: session.tenantId,
+            type: 'EXPENSE',
+            expenseType: expenseTypeValue,
+            date: { gte: period.from, lt: period.to },
+        },
+        orderBy: { date: 'asc' },
+    });
+
+    if (ents.length === 0) {
+        return `💸 ${period.label} ${expenseTypeLabel}：無支出記錄`;
+    }
+
+    const lines: string[] = [`💸 ${period.label} — ${expenseTypeLabel}（${ents.length} 筆）\n`];
+    let total = 0;
+    for (const e of ents) {
+        const d = e.date;
+        const dateStr = `${d.getMonth() + 1}/${d.getDate()}`;
+        const note = e.note ? ` 備註：${e.note}` : '';
+        lines.push(`  • ${dateStr} $${e.totalPrice.toLocaleString()}${note}`);
+        total += e.totalPrice;
+    }
+    lines.push('---');
+    lines.push(`📍 總計：$${total.toLocaleString()}`);
+    return lines.join('\n');
+}
+
+// ── 2-3c: 支出類型 + 備註關鍵字查詢 ─────────────────────────────
+// Pattern: 「3月份薪資備註小惠累積總共多少」「本月租金備註潮州」
+export function detectNoteQuery(
+    text: string,
+    expenseTypes: { id: string; value: string; label: string }[],
+): { expenseTypeValue: string; expenseTypeLabel: string; notePattern: string; period: { from: Date; to: Date; label: string } } | null {
+    const t = normalizeChineseDate(text.trim());
+
+    if (!/備註/.test(t)) return null;
+
+    const period = resolvePeriod(t);
+    if (!period) return null;
+
+    const cleaned = t
+        .replace(/^\d{4}年/, '')
+        .replace(/^\d{1,2}月份?/, '')
+        .replace(/(本月|當月|這個月|上月|上個月|今年|去年)/g, '')
+        .replace(/\d{1,2}月(?:到|至|~|－|-)\d{1,2}月份?/g, '')
+        .replace(/份/g, '')
+        .trim();
+
+    let best: { id: string; value: string; label: string } | null = null;
+    for (const et of expenseTypes) {
+        if (!et.label) continue;
+        if (cleaned.includes(et.label)) {
+            if (!best || et.label.length > best.label.length) best = et;
+        }
+    }
+
+    if (!best) return null;
+
+    const noteMatch = cleaned.match(/備註[：:]?\s*(.+)/);
+    if (!noteMatch) return null;
+    const notePattern = noteMatch[1]
+        .replace(/累積|總共|了?多少|共多少|\?|？|的?支出|的?記錄|查/g, '')
+        .trim();
+    if (!notePattern) return null;
+
+    return {
+        expenseTypeValue: best.value,
+        expenseTypeLabel: best.label,
+        notePattern,
+        period,
+    };
+}
+
+export async function queryByNote(
+    expenseTypeValue: string,
+    expenseTypeLabel: string,
+    notePattern: string,
+    period: { from: Date; to: Date; label: string },
+    session: SessionData,
+    _ctx: DbContext,
+): Promise<string> {
+    const ents = await prisma.entry.findMany({
+        where: {
+            tenantId: session.tenantId,
+            type: 'EXPENSE',
+            expenseType: expenseTypeValue,
+            date: { gte: period.from, lt: period.to },
+        },
+        orderBy: { date: 'asc' },
+    });
+
+    const filtered = ents.filter(e =>
+        e.note && e.note.toLowerCase().includes(notePattern.toLowerCase())
+    );
+
+    if (filtered.length === 0) {
+        return `💸 ${period.label} ${expenseTypeLabel} 備註含「${notePattern}」：無記錄`;
+    }
+
+    const lines: string[] = [`💸 ${period.label} — ${expenseTypeLabel}（備註：${notePattern}）（${filtered.length} 筆）\n`];
+    let total = 0;
+    for (const e of filtered) {
+        const d = e.date;
+        const dateStr = `${d.getMonth() + 1}/${d.getDate()}`;
+        lines.push(`  • ${dateStr} $${e.totalPrice.toLocaleString()} — 備註：${e.note}`);
+        total += e.totalPrice;
+    }
+    lines.push('---');
+    lines.push(`📍 總計：$${total.toLocaleString()}`);
+    return lines.join('\n');
+}
+
+// ── 2-4: 同比/環比查詢 ──────────────────────────────────────────
+// Pattern: 「本月跟上月比」「3月跟2月比」「對比上月」「環比」
+export function detectComparisonQuery(text: string):
+    { p1: { from: Date; to: Date; label: string }; p2: { from: Date; to: Date; label: string } } | null {
+    const t = normalizeChineseDate(text.trim());
+
+    // 必須有比較詞
+    if (!/比|對比|環比|同比/.test(t)) return null;
+
+    // Pattern 1: 「本月跟上月比」「這個月對比上個月」
+    if (/(本月|這個月|當月).*?(上月|上個月|前一個月)/.test(t) ||
+        /(上月|上個月).*?(本月|這個月|當月)/.test(t) ||
+        /環比/.test(t)) {
+        const now = new Date();
+        const y = now.getFullYear();
+        const m = now.getMonth();
+        return {
+            p1: { from: new Date(y, m, 1), to: new Date(y, m + 1, 1), label: `${y}年${m + 1}月` },
+            p2: { from: new Date(y, m - 1, 1), to: new Date(y, m, 1), label: `${y}年${m}月` },
+        };
+    }
+
+    // Pattern 2: 「N月跟M月比」「N月對比M月」
+    const dual = t.match(/(\d{1,2})月.*?(?:比|對比).*?(\d{1,2})月|(\d{1,2})月.*?(\d{1,2})月.*?比/);
+    if (dual) {
+        const m1 = parseInt(dual[1] || dual[3]);
+        const m2 = parseInt(dual[2] || dual[4]);
+        if (m1 < 1 || m1 > 12 || m2 < 1 || m2 > 12) return null;
+        const now = new Date();
+        const y = now.getFullYear();
+        const cur = now.getMonth() + 1;
+        const y1 = m1 > cur ? y - 1 : y;
+        const y2 = m2 > cur ? y - 1 : y;
+        return {
+            p1: { from: new Date(y1, m1 - 1, 1), to: new Date(y1, m1, 1), label: `${y1}年${m1}月` },
+            p2: { from: new Date(y2, m2 - 1, 1), to: new Date(y2, m2, 1), label: `${y2}年${m2}月` },
+        };
+    }
+
+    // Pattern 3: 「同比去年」「同比」
+    if (/同比/.test(t)) {
+        const now = new Date();
+        const y = now.getFullYear();
+        const m = now.getMonth();
+        return {
+            p1: { from: new Date(y, m, 1), to: new Date(y, m + 1, 1), label: `${y}年${m + 1}月` },
+            p2: { from: new Date(y - 1, m, 1), to: new Date(y - 1, m + 1, 1), label: `${y - 1}年${m + 1}月` },
+        };
+    }
+
+    return null;
+}
+
+async function _periodTotals(period: { from: Date; to: Date }, session: SessionData) {
+    const [revs, purs, exps] = await Promise.all([
+        prisma.revenue.findMany({
+            where: { tenantId: session.tenantId, date: { gte: period.from, lt: period.to } },
+        }),
+        prisma.entry.findMany({
+            where: { tenantId: session.tenantId, type: 'PURCHASE', date: { gte: period.from, lt: period.to } },
+        }),
+        prisma.entry.findMany({
+            where: { tenantId: session.tenantId, type: 'EXPENSE', date: { gte: period.from, lt: period.to } },
+        }),
+    ]);
+    const rev = revs.reduce((s, r) => s + r.amount, 0);
+    const pur = purs.reduce((s, e) => s + e.totalPrice, 0);
+    const exp = exps.reduce((s, e) => s + e.totalPrice, 0);
+    return { rev, pur, exp, profit: rev - pur - exp };
+}
+
+export async function queryComparison(
+    p1: { from: Date; to: Date; label: string },
+    p2: { from: Date; to: Date; label: string },
+    session: SessionData,
+    _ctx: DbContext,
+): Promise<string> {
+    const [t1, t2] = await Promise.all([
+        _periodTotals(p1, session),
+        _periodTotals(p2, session),
+    ]);
+
+    const fmt = (cur: number, prev: number) => {
+        if (prev === 0) return cur === 0 ? '—' : `(新增)`;
+        const diff = cur - prev;
+        const pct = (diff / prev) * 100;
+        const arrow = diff > 0 ? '📈' : diff < 0 ? '📉' : '➡️';
+        return `${arrow} ${diff >= 0 ? '+' : ''}$${diff.toLocaleString()}（${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%）`;
+    };
+
+    const lines: string[] = [`🔄 ${p1.label} vs ${p2.label}\n`];
+    lines.push(`💰 營業額`);
+    lines.push(`  ${p1.label}：$${t1.rev.toLocaleString()}`);
+    lines.push(`  ${p2.label}：$${t2.rev.toLocaleString()}`);
+    lines.push(`  ${fmt(t1.rev, t2.rev)}`);
+    lines.push('');
+    lines.push(`📦 進貨`);
+    lines.push(`  ${p1.label}：$${t1.pur.toLocaleString()}`);
+    lines.push(`  ${p2.label}：$${t2.pur.toLocaleString()}`);
+    lines.push(`  ${fmt(t1.pur, t2.pur)}`);
+    lines.push('');
+    lines.push(`💸 支出`);
+    lines.push(`  ${p1.label}：$${t1.exp.toLocaleString()}`);
+    lines.push(`  ${p2.label}：$${t2.exp.toLocaleString()}`);
+    lines.push(`  ${fmt(t1.exp, t2.exp)}`);
+    lines.push('');
+    lines.push(`💵 淨利`);
+    lines.push(`  ${p1.label}：$${t1.profit.toLocaleString()}`);
+    lines.push(`  ${p2.label}：$${t2.profit.toLocaleString()}`);
+    lines.push(`  ${fmt(t1.profit, t2.profit)}`);
+
     return lines.join('\n');
 }

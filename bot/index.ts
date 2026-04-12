@@ -22,6 +22,12 @@ import {
     detectQueryDate, isQueryIntent, queryByDate, queryRecent,
     detectVendorMonthQuery, queryByVendorMonth,
     detectDateRangeQuery, queryByDateRange,
+    detectMonthYearQuery, queryByMonthYear,
+    detectItemMonthQuery, queryByItemMonth,
+    detectExpenseTypeMonthQuery, queryByExpenseTypeMonth,
+    detectNoteQuery, queryByNote,
+    detectRankingQuery, queryRanking,
+    detectComparisonQuery, queryComparison,
 } from './handlers/query';
 import { saveAlias } from './aliases';
 import type { SessionData, DbContext, ParsedEntry } from './types';
@@ -66,13 +72,47 @@ const HELP_TEXT = `📖 *使用說明*
 • \`屏東2萬 潮州1.5萬\`
 
 *📊 查詢*：
-• \`今天記了什麼\`  /  \`今日\`
-• \`昨天的記錄\`  /  \`3/3 記錄\`
-• \`最近記錄\`
-• \`4月 阿明\` — 查某月份某廠商進貨
-• \`查阿明4月叫了什麼\`
+
+_📅 指定日期 / 最近_：
+• \`今天\`  \`昨天\`  \`最近\`
+• \`今天記了什麼\`  \`3/3 記錄\`
+
+_🏪 廠商月份_：
+• \`4月 阿明\`  \`查阿明4月\`
+• \`阿明 4月叫了什麼\`
+
+_📅➡️📅 範圍 + 地點_：
 • \`3月1號到3月31號屏東的總營收\`
-• \`4月1號到4月8號總營收\`
+• \`4/1到4/8 萬丹進貨\`
+
+_📊 整月 / 年度（新）_：
+• \`本月\`  \`上月\`  \`今年\`  \`去年\`
+• \`本月總營收\`  \`3月進貨\`
+• \`2026年總收入\`  \`上月支出\`
+
+_🍖 品項月份（新）_：
+• \`本月豬肉\`  \`3月豬腳肉\`
+• \`查 雞蛋 4月\`
+
+_💸 支出類型月份（新）_：
+• \`3月薪資\`  \`本月租金\`
+• \`3月份薪資支出了多少\`
+• \`上月瓦斯費用\`
+
+_📝 備註查詢（新）_：
+• \`3月份薪資備註小惠多少\`
+• \`本月租金備註潮州\`
+• \`上月薪資備註阿秀累積總共多少\`
+
+_🏆 排行 TOP（新）_：
+• \`本月TOP5廠商\`  \`本月最大廠商\`
+• \`本月熱賣品項\`  \`3月攤位排行\`
+• \`4月最熱賣商品TOP3\`
+
+_🔄 同比 / 環比（新）_：
+• \`本月跟上月比\`  \`環比\`
+• \`3月對比2月\`  \`4月跟3月比\`
+• \`同比\` — 本月 vs 去年同月
 
 *🔧 指令*：
 • /today — 今天記錄
@@ -616,6 +656,68 @@ bot.on('message', async (msg) => {
         logLine('QUERY', chatId, `vendor=${vendorMonth.vendorName} month=${vendorMonth.month}`);
         const ctx = await loadDbContext(session.tenantId);
         const result = await queryByVendorMonth(vendorMonth.vendorName, vendorMonth.month, vendorMonth.year, session, ctx);
+        await bot.sendMessage(chatId, result);
+        return;
+    }
+
+    // ── 同比/環比查詢（例如「本月跟上月比」「3月對比2月」）──
+    const comparison = detectComparisonQuery(text);
+    if (comparison) {
+        logLine('QUERY', chatId, `compare ${comparison.p1.label} vs ${comparison.p2.label}`);
+        const ctx = await loadDbContext(session.tenantId);
+        const result = await queryComparison(comparison.p1, comparison.p2, session, ctx);
+        await bot.sendMessage(chatId, result);
+        return;
+    }
+
+    // ── 排行查詢 TOP N（例如「本月TOP5廠商」「3月最熱賣品項」）──
+    const ranking = detectRankingQuery(text);
+    if (ranking) {
+        logLine('QUERY', chatId, `ranking ${ranking.target} top${ranking.topN} ${ranking.period.label}`);
+        const ctx = await loadDbContext(session.tenantId);
+        const result = await queryRanking(ranking.period, ranking.target, ranking.topN, session, ctx);
+        await bot.sendMessage(chatId, result);
+        return;
+    }
+
+    // ── 品項月份 / 支出類型月份查詢 ──
+    {
+        const ctxForLookup = await loadDbContext(session.tenantId);
+
+        // 先試備註查詢（備註關鍵字優先，避免被普通支出類型攔截）
+        const noteQ = detectNoteQuery(text, ctxForLookup.expenseTypes);
+        if (noteQ) {
+            logLine('QUERY', chatId, `expenseType=${noteQ.expenseTypeLabel} note=${noteQ.notePattern} period=${noteQ.period.label}`);
+            const result = await queryByNote(noteQ.expenseTypeValue, noteQ.expenseTypeLabel, noteQ.notePattern, noteQ.period, session, ctxForLookup);
+            await bot.sendMessage(chatId, result);
+            return;
+        }
+
+        // 再試支出類型（薪資/租金/瓦斯/...）
+        const expType = detectExpenseTypeMonthQuery(text, ctxForLookup.expenseTypes);
+        if (expType) {
+            logLine('QUERY', chatId, `expenseType=${expType.expenseTypeLabel} period=${expType.period.label}`);
+            const result = await queryByExpenseTypeMonth(expType.expenseTypeValue, expType.expenseTypeLabel, expType.period, session, ctxForLookup);
+            await bot.sendMessage(chatId, result);
+            return;
+        }
+
+        // 再試品項
+        const itemMonth = detectItemMonthQuery(text, ctxForLookup.items);
+        if (itemMonth) {
+            logLine('QUERY', chatId, `item=${itemMonth.itemName} period=${itemMonth.period.label}`);
+            const result = await queryByItemMonth(itemMonth.itemId, itemMonth.itemName, itemMonth.period, session, ctxForLookup);
+            await bot.sendMessage(chatId, result);
+            return;
+        }
+    }
+
+    // ── 整月/年度查詢（例如「3月總營收」「本月進貨」「2026年總收入」）──
+    const monthYear = detectMonthYearQuery(text);
+    if (monthYear) {
+        logLine('QUERY', chatId, `monthYear ${monthYear.period.label} type=${monthYear.type || 'all'}`);
+        const ctx = await loadDbContext(session.tenantId);
+        const result = await queryByMonthYear(monthYear.period, monthYear.type, session, ctx);
         await bot.sendMessage(chatId, result);
         return;
     }
