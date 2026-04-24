@@ -70,7 +70,7 @@ export async function login(formData: FormData) {
     const cookieStore = await cookies();
     cookieStore.set("session", token, {
         httpOnly: true,
-        sameSite: "lax",
+        sameSite: "strict",
         secure: process.env.NODE_ENV === "production",
         path: "/",
     });
@@ -118,7 +118,7 @@ export async function switchToTenant(tenantId: string) {
     const cookieStore = await cookies();
     cookieStore.set("session", token, {
         httpOnly: true,
-        sameSite: "lax",
+        sameSite: "strict",
         secure: process.env.NODE_ENV === "production",
         path: "/",
     });
@@ -144,7 +144,7 @@ export async function switchBackToSuperAdmin() {
     const cookieStore = await cookies();
     cookieStore.set("session", token, {
         httpOnly: true,
-        sameSite: "lax",
+        sameSite: "strict",
         secure: process.env.NODE_ENV === "production",
         path: "/",
     });
@@ -156,10 +156,9 @@ export async function logout() {
     const cookieStore = await cookies();
     cookieStore.set("session", "", {
         httpOnly: true,
-        sameSite: "lax",
+        sameSite: "strict",
         secure: process.env.NODE_ENV === "production",
         path: "/",
         maxAge: 0,
     });
-    return { success: true };
 }

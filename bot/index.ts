@@ -47,7 +47,13 @@ if (!TOKEN) {
     process.exit(1);
 }
 
-const bot = new TelegramBot(TOKEN, { polling: true });
+const bot = new TelegramBot(TOKEN, {
+    polling: {
+        interval: 2000,
+        autoStart: true,
+        params: { timeout: 30 },
+    },
+});
 
 console.log('🤖 Bot 啟動中...');
 

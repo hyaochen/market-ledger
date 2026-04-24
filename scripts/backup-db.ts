@@ -161,4 +161,14 @@ function main() {
     }
 }
 
-main();
+// 包住 main()：備份失敗不可阻擋 server 啟動（exit 0 even on error）
+try {
+    main();
+} catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    try {
+        appendLog(`[${new Date().toISOString()}] Backup failed (non-fatal): ${msg}`);
+    } catch { /* ignore */ }
+    console.error('[backup-db] non-fatal error:', msg);
+    process.exit(0);
+}

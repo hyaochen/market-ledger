@@ -556,9 +556,14 @@ export default function ReportsClient({
                             <ResponsiveContainer width="100%" height="100%">
                                 <LineChart data={dailyStats} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
                                     <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
-                                    <XAxis dataKey="date" tick={{ fontSize: 11 }} interval="preserveStartEnd" />
-                                    <YAxis tick={{ fontSize: 11 }} width={60} />
-                                    <Tooltip formatter={(value: number) => formatPrice(value)} />
+                                    <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#94a3b8' }} interval="preserveStartEnd" />
+                                    <YAxis tick={{ fontSize: 11, fill: '#94a3b8' }} width={60} />
+                                    <Tooltip
+                                        formatter={(value) => formatPrice(Number(value ?? 0))}
+                                        contentStyle={{ backgroundColor: '#1e1e2e', border: '1px solid #333', borderRadius: '8px' }}
+                                        labelStyle={{ color: '#e2e8f0', fontWeight: 600, marginBottom: '4px' }}
+                                        itemStyle={{ color: '#cbd5e1' }}
+                                    />
                                     <Line type="monotone" dataKey="revenue" name="營收" stroke="#0EA5E9" strokeWidth={2} dot={false} />
                                     <Line type="monotone" dataKey="cost" name="成本" stroke="#F97316" strokeWidth={2} dot={false} />
                                 </LineChart>
@@ -580,7 +585,12 @@ export default function ReportsClient({
                                             <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
                                             <XAxis dataKey="name" tick={{ fontSize: 11 }} />
                                             <YAxis tick={{ fontSize: 11 }} width={60} />
-                                            <Tooltip formatter={(value: number) => formatPrice(value)} />
+                                            <Tooltip
+                                                formatter={(value) => formatPrice(Number(value ?? 0))}
+                                                contentStyle={{ backgroundColor: '#1e1e2e', border: '1px solid #333', borderRadius: '8px' }}
+                                                labelStyle={{ color: '#e2e8f0', fontWeight: 600, marginBottom: '4px' }}
+                                                itemStyle={{ color: '#cbd5e1' }}
+                                            />
                                             <Bar dataKey="totalCost" name="成本" fill="#6366F1" radius={[6, 6, 0, 0]} />
                                         </BarChart>
                                     </ResponsiveContainer>
@@ -627,7 +637,12 @@ export default function ReportsClient({
                                                     <Cell key={index} fill={PIE_COLORS[index % PIE_COLORS.length]} />
                                                 ))}
                                             </Pie>
-                                            <Tooltip formatter={(value: number) => formatPrice(value)} />
+                                            <Tooltip
+                                                formatter={(value) => formatPrice(Number(value ?? 0))}
+                                                contentStyle={{ backgroundColor: '#1e1e2e', border: '1px solid #333', borderRadius: '8px' }}
+                                                labelStyle={{ color: '#e2e8f0', fontWeight: 600, marginBottom: '4px' }}
+                                                itemStyle={{ color: '#cbd5e1' }}
+                                            />
                                         </PieChart>
                                     </ResponsiveContainer>
                                 )}
@@ -699,66 +714,66 @@ export default function ReportsClient({
                         ) : (
                             filteredEntries.map((entry) => (
                                 <Card key={entry.id} className="hover:shadow-sm transition-shadow">
-                                    <CardContent className="flex items-center gap-3 p-3 sm:p-4">
-                                        {/* Type Badge */}
-                                        <div className={[
-                                            "flex-shrink-0 w-10 h-10 rounded-lg flex items-center justify-center text-xs font-bold",
-                                            entry.type === "PURCHASE"
-                                                ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
-                                                : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
-                                        ].join(" ")}>
-                                            {entry.type === "PURCHASE" ? "進" : "支"}
-                                        </div>
-
-                                        {/* Content */}
-                                        <div className="flex-1 min-w-0">
-                                            <div className="flex items-baseline justify-between gap-2">
-                                                <span className="font-semibold truncate">
+                                    <CardContent className="p-3 sm:p-4 space-y-2.5">
+                                        {/* Row 1: Badge + Title + Price */}
+                                        <div className="flex items-start gap-3">
+                                            <div className={[
+                                                "flex-shrink-0 w-10 h-10 rounded-lg flex items-center justify-center text-xs font-bold",
+                                                entry.type === "PURCHASE"
+                                                    ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                                                    : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                                            ].join(" ")}>
+                                                {entry.type === "PURCHASE" ? "進" : "支"}
+                                            </div>
+                                            <div className="flex-1 min-w-0 flex items-baseline justify-between gap-x-3 gap-y-1 flex-wrap">
+                                                <span className="font-semibold break-words">
                                                     {entry.type === "PURCHASE"
                                                         ? entry.itemName || "未命名品項"
                                                         : expenseTypeMap.get(entry.expenseType) || entry.expenseType}
                                                 </span>
-                                                <span className="font-bold text-primary whitespace-nowrap">
+                                                <span className="font-bold text-primary text-lg whitespace-nowrap">
                                                     {formatPrice(entry.totalPrice)}
                                                 </span>
                                             </div>
-                                            <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5">
-                                                <span>{entry.date}</span>
-                                                {entry.type === "PURCHASE" && (
-                                                    <>
-                                                        <span>·</span>
-                                                        <span>{formatQuantityDisplay(entry.inputQuantity, entry.inputUnit)}</span>
-                                                        {entry.vendorName && (
-                                                            <>
-                                                                <span>·</span>
-                                                                <span>{entry.vendorName}</span>
-                                                            </>
-                                                        )}
-                                                    </>
-                                                )}
-                                                {entry.note && (
-                                                    <>
-                                                        <span>·</span>
-                                                        <span className="truncate">{entry.note}</span>
-                                                    </>
-                                                )}
-                                            </div>
                                         </div>
 
-                                        {/* Actions */}
+                                        {/* Row 2: Metadata (wraps) */}
+                                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground pl-[52px]">
+                                            <span>{entry.date}</span>
+                                            {entry.type === "PURCHASE" && (
+                                                <>
+                                                    <span>·</span>
+                                                    <span>{formatQuantityDisplay(entry.inputQuantity, entry.inputUnit)}</span>
+                                                    {entry.vendorName && (
+                                                        <>
+                                                            <span>·</span>
+                                                            <span>{entry.vendorName}</span>
+                                                        </>
+                                                    )}
+                                                </>
+                                            )}
+                                            {entry.note && (
+                                                <>
+                                                    <span>·</span>
+                                                    <span className="break-words">{entry.note}</span>
+                                                </>
+                                            )}
+                                        </div>
+
+                                        {/* Row 3: Actions */}
                                         {canEdit && (
-                                            <div className="flex flex-col gap-1 flex-shrink-0">
-                                                <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => openEntryEditor(entry)}>
+                                            <div className="flex justify-end gap-2 pt-2 border-t border-border/40">
+                                                <Button variant="outline" size="sm" onClick={() => openEntryEditor(entry)}>
                                                     編輯
                                                 </Button>
                                                 <Button
                                                     variant="ghost"
                                                     size="sm"
-                                                    className="h-7 px-2 text-xs text-destructive"
+                                                    className="text-destructive"
                                                     disabled={entryDeleting === entry.id}
                                                     onClick={() => handleEntryDelete(entry.id)}
                                                 >
-                                                    {entryDeleting === entry.id ? "..." : "刪除"}
+                                                    {entryDeleting === entry.id ? "處理中..." : "刪除"}
                                                 </Button>
                                             </div>
                                         )}
@@ -779,32 +794,37 @@ export default function ReportsClient({
                     ) : (
                         revenues.map((record) => (
                             <Card key={record.id} className="hover:shadow-sm transition-shadow">
-                                <CardContent className="flex items-center gap-3 p-3 sm:p-4">
-                                    <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center text-xs font-bold text-emerald-700 dark:text-emerald-400">
-                                        營
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                        <div className="flex items-baseline justify-between gap-2">
-                                            <span className="font-semibold">{record.locationName}</span>
-                                            <span className="font-bold text-primary whitespace-nowrap">
+                                <CardContent className="p-3 sm:p-4 space-y-2.5">
+                                    {/* Row 1: Badge + Location + Amount */}
+                                    <div className="flex items-start gap-3">
+                                        <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center text-xs font-bold text-emerald-700 dark:text-emerald-400">
+                                            營
+                                        </div>
+                                        <div className="flex-1 min-w-0 flex items-baseline justify-between gap-x-3 gap-y-1 flex-wrap">
+                                            <span className="font-semibold break-words">{record.locationName}</span>
+                                            <span className="font-bold text-primary text-lg whitespace-nowrap">
                                                 {record.isDayOff ? "休假" : formatPrice(record.amount)}
                                             </span>
                                         </div>
-                                        <div className="text-xs text-muted-foreground mt-0.5">{record.date}</div>
                                     </div>
+
+                                    {/* Row 2: Date */}
+                                    <div className="text-xs text-muted-foreground pl-[52px]">{record.date}</div>
+
+                                    {/* Row 3: Actions */}
                                     {canEdit && (
-                                        <div className="flex flex-col gap-1 flex-shrink-0">
-                                            <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => openRevenueEditor(record)}>
+                                        <div className="flex justify-end gap-2 pt-2 border-t border-border/40">
+                                            <Button variant="outline" size="sm" onClick={() => openRevenueEditor(record)}>
                                                 編輯
                                             </Button>
                                             <Button
                                                 variant="ghost"
                                                 size="sm"
-                                                className="h-7 px-2 text-xs text-destructive"
+                                                className="text-destructive"
                                                 disabled={revenueDeleting === record.id}
                                                 onClick={() => handleRevenueDelete(record.id)}
                                             >
-                                                {revenueDeleting === record.id ? "..." : "刪除"}
+                                                {revenueDeleting === record.id ? "處理中..." : "刪除"}
                                             </Button>
                                         </div>
                                     )}

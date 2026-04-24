@@ -125,63 +125,63 @@ export default async function InventoryPage({
                 ) : (
                     entries.map((entry) => (
                         <Card key={entry.id} className="hover:shadow-sm transition-shadow">
-                            <CardContent className="flex items-center gap-3 p-3 sm:p-4">
-                                {/* Type Badge */}
-                                <div className={[
-                                    "flex-shrink-0 w-10 h-10 rounded-lg flex items-center justify-center text-xs font-bold",
-                                    entry.type === "PURCHASE"
-                                        ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
-                                        : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
-                                ].join(" ")}>
-                                    {entry.type === "PURCHASE" ? "進" : "支"}
-                                </div>
-
-                                {/* Content */}
-                                <div className="flex-1 min-w-0 overflow-hidden">
-                                    <div className="flex items-baseline justify-between gap-2">
-                                        <span className="font-semibold truncate block max-w-[60%]">
+                            <CardContent className="p-3 sm:p-4 space-y-2.5">
+                                {/* Row 1: Badge + Title + Price (wraps on large fonts) */}
+                                <div className="flex items-start gap-3">
+                                    <div className={[
+                                        "flex-shrink-0 w-10 h-10 rounded-lg flex items-center justify-center text-xs font-bold",
+                                        entry.type === "PURCHASE"
+                                            ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                                            : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                                    ].join(" ")}>
+                                        {entry.type === "PURCHASE" ? "進" : "支"}
+                                    </div>
+                                    <div className="flex-1 min-w-0 flex items-baseline justify-between gap-x-3 gap-y-1 flex-wrap">
+                                        <span className="font-semibold break-words">
                                             {entry.type === "PURCHASE"
                                                 ? entry.item?.name || '未知品項'
                                                 : expenseTypeMap.get(entry.expenseType || "") || entry.expenseType || "其他支出"}
                                         </span>
-                                        <span className="font-bold text-primary whitespace-nowrap flex-shrink-0">
+                                        <span className="font-bold text-primary text-lg whitespace-nowrap">
                                             {formatPrice(entry.totalPrice)}
                                         </span>
                                     </div>
-                                    <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5 flex-wrap">
-                                        <span>{new Date(entry.date).toLocaleDateString('zh-TW')}</span>
-                                        {entry.type === "PURCHASE" && (
-                                            <>
-                                                <span>·</span>
-                                                <span>{formatQuantityDisplay(entry.inputQuantity, entry.inputUnit)}</span>
-                                                {entry.item?.category?.name && (
-                                                    <>
-                                                        <span>·</span>
-                                                        <span>{entry.item.category.name}</span>
-                                                    </>
-                                                )}
-                                                {entry.vendor && (
-                                                    <>
-                                                        <span>·</span>
-                                                        <span>{entry.vendor.name}</span>
-                                                    </>
-                                                )}
-                                            </>
-                                        )}
-                                        {entry.note && (
-                                            <>
-                                                <span>·</span>
-                                                <span className="truncate">{entry.note}</span>
-                                            </>
-                                        )}
-                                        <span>·</span>
-                                        <span>{entry.user?.realName || entry.user?.username || "未知"}</span>
-                                    </div>
                                 </div>
 
-                                {/* Actions */}
+                                {/* Row 2: Metadata (flex-wrap so big fonts never get cut) */}
+                                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground pl-[52px]">
+                                    <span>{new Date(entry.date).toLocaleDateString('zh-TW')}</span>
+                                    {entry.type === "PURCHASE" && (
+                                        <>
+                                            <span>·</span>
+                                            <span>{formatQuantityDisplay(entry.inputQuantity, entry.inputUnit)}</span>
+                                            {entry.item?.category?.name && (
+                                                <>
+                                                    <span>·</span>
+                                                    <span>{entry.item.category.name}</span>
+                                                </>
+                                            )}
+                                            {entry.vendor && (
+                                                <>
+                                                    <span>·</span>
+                                                    <span>{entry.vendor.name}</span>
+                                                </>
+                                            )}
+                                        </>
+                                    )}
+                                    {entry.note && (
+                                        <>
+                                            <span>·</span>
+                                            <span className="break-words">{entry.note}</span>
+                                        </>
+                                    )}
+                                    <span>·</span>
+                                    <span>{entry.user?.realName || entry.user?.username || "未知"}</span>
+                                </div>
+
+                                {/* Row 3: Actions (full-width bottom row, right-aligned) */}
                                 {canEdit && (
-                                    <div className="flex-shrink-0">
+                                    <div className="flex justify-end pt-2 border-t border-border/40">
                                         <InventoryEntryActions
                                             entry={{
                                                 id: entry.id,
