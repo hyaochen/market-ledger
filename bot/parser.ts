@@ -172,7 +172,7 @@ const CN_QTY_UNIT_RE = new RegExp(`([一兩二三四五六七八九十])\\s*(${Q
 const JIN_LIANG_RE = /(\d+)斤(\d+)兩/;
 
 /** 若 rawInput 含「X斤Y兩」格式，將 entry 的 quantity/unit 換成 jl 編碼（覆蓋 LLM 結果） */
-function fixJinLiangFromRaw(entry: RawExtracted): RawExtracted {
+export function fixJinLiangFromRaw(entry: RawExtracted): RawExtracted {
     const raw = normalizeNumbers(entry.rawInput ?? '');
     const m = raw.match(JIN_LIANG_RE);
     if (!m) return entry;
@@ -229,7 +229,7 @@ function normalizeUnit(entry: RawExtracted): RawExtracted {
 }
 
 // 正規化非標準數字格式（1ˋ500 → 1500, 1,500 → 1500）
-function normalizeNumbers(text: string): string {
+export function normalizeNumbers(text: string): string {
     return text.replace(/(\d+)[\u02CB,ˋ](\d{3})/g, '$1$2');
 }
 
@@ -240,7 +240,7 @@ const CN_DIGIT: Record<string, number> = {
 };
 
 // 解析中文數字字串為阿拉伯數字（支援 個位/十位）
-function parseCnNumber(s: string): number | null {
+export function parseCnNumber(s: string): number | null {
     if (s.length === 1) {
         if (s === '十') return 10;
         return CN_DIGIT[s] ?? null;
@@ -267,7 +267,7 @@ function parseCnNumber(s: string): number | null {
 
 // 將輸入中的中文數量詞轉為阿拉伯數字（「兩斤」→「2斤」、「十二個」→「12個」）
 // 只轉換「中文數字+單位」模式，避免誤改品名中的中文字
-function convertChineseNumbers(text: string): string {
+export function convertChineseNumbers(text: string): string {
     const CN_CHARS = '零一二兩三四五六七八九十';
     const UNIT_CHARS = '斤兩公臺台克個包箱條份罐瓶桶組片顆袋只';
     return text.replace(
@@ -281,7 +281,7 @@ function convertChineseNumbers(text: string): string {
 
 // 後處理：用正則從 rawInput 修正 LLM 可能算錯的 quantity/price
 // 策略：找出有單位的數字（→ quantity）和無單位的獨立數字（→ price）
-function fixNumbersFromRaw(entry: RawExtracted): RawExtracted {
+export function fixNumbersFromRaw(entry: RawExtracted): RawExtracted {
     // jl 已由 fixJinLiangFromRaw 處理完畢，跳過此步驟
     if (entry.unit === 'jl') return entry;
 
