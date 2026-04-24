@@ -11,6 +11,7 @@
     "tunnel:setup": "powershell -ExecutionPolicy Bypass -File ./setup-tunnel.ps1",
     "tunnel": "start-tunnel.bat",
     "backup:db": "tsx scripts/backup-db.ts",
+    "prune:logs": "tsx scripts/prune-logs.ts",
     "lint": "next lint",
     "bot": "tsx bot/index.ts",
     "bot:test": "tsx bot/test-runner.ts"

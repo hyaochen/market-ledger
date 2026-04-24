@@ -272,6 +272,10 @@ model Location {
   @@index([tenantId])
 }
 
+// TODO: 所有 Float 金額欄位（totalPrice / unitPrice / amount / inputQuantity / standardWeight）
+// 理論上應使用 Decimal 或 INTEGER cents 以避免浮點誤差。此 workload（攤商 NT$ 整數為主）
+// 實務誤差 < 0.001，暫留 Float。若日後跨幣別或出現累積誤差再全專案轉換。
+
 // 進貨/支出記錄模型 (整合了工作流狀態)
 model Entry {
   id     String   @id @default(cuid())
