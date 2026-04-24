@@ -2,6 +2,7 @@
 
 import prisma from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
+import type { Prisma } from '@prisma/client';
 import { ensureRole, getTenantId } from '@/lib/auth';
 
 export async function createTemplate(formData: FormData) {
@@ -18,7 +19,7 @@ export async function createTemplate(formData: FormData) {
             return { success: false, message: '請提供模板名稱和類型' };
         }
 
-        const data: any = {
+        const data: Prisma.EntryTemplateUncheckedCreateInput = {
             name,
             type,
             userId: user.id,

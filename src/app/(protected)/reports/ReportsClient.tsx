@@ -241,9 +241,9 @@ type ReportsClientProps = {
         amount: number;
         isDayOff: boolean;
     }[];
-    items: any[];
-    vendors: any[];
-    expenseTypes: any[];
+    items: { id: string; name: string; categoryId: string; defaultUnit: string; isActive: boolean }[];
+    vendors: { id: string; name: string; isActive: boolean }[];
+    expenseTypes: { value: string; label: string }[];
     units: UnitDef[];
 };
 
@@ -280,7 +280,7 @@ export default function ReportsClient({
     const [chartTab, setChartTab] = useState<"line" | "bar" | "pie">("line");
 
     const expenseTypeMap = useMemo(
-        () => new Map(expenseTypes.map((item: any) => [item.value, item.label])),
+        () => new Map(expenseTypes.map((item) => [item.value, item.label] as const)),
         [expenseTypes]
     );
 
@@ -855,7 +855,7 @@ export default function ReportsClient({
                                         <Select value={entryForm.itemId} onValueChange={(value) => setEntryForm({ ...entryForm, itemId: value })}>
                                             <SelectTrigger><SelectValue placeholder="選擇品項" /></SelectTrigger>
                                             <SelectContent>
-                                                {items.map((item: any) => (
+                                                {items.map((item) => (
                                                     <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>
                                                 ))}
                                             </SelectContent>
@@ -870,7 +870,7 @@ export default function ReportsClient({
                                             <SelectTrigger><SelectValue placeholder="選擇廠商" /></SelectTrigger>
                                             <SelectContent>
                                                 <SelectItem value="none">未指定</SelectItem>
-                                                {vendors.map((vendor: any) => (
+                                                {vendors.map((vendor) => (
                                                     <SelectItem key={vendor.id} value={vendor.id}>{vendor.name}</SelectItem>
                                                 ))}
                                             </SelectContent>
@@ -919,7 +919,7 @@ export default function ReportsClient({
                                         <Select value={entryForm.expenseType} onValueChange={(value) => setEntryForm({ ...entryForm, expenseType: value })}>
                                             <SelectTrigger><SelectValue placeholder="選擇支出" /></SelectTrigger>
                                             <SelectContent>
-                                                {expenseTypes.map((item: any) => (
+                                                {expenseTypes.map((item) => (
                                                     <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
                                                 ))}
                                             </SelectContent>

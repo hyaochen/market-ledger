@@ -25,13 +25,31 @@ import { createTemplate, deleteTemplate } from "@/app/actions/template";
 import { useToast } from "@/components/ui/use-toast";
 import { Badge } from "@/components/ui/badge";
 
+type CategoryOpt = { id: string; name: string };
+type ItemOpt = { id: string; name: string; categoryId: string; defaultUnit: string; isActive?: boolean };
+type VendorOpt = { id: string; name: string; isActive?: boolean };
+type ExpenseTypeOpt = { value: string; label: string };
+type TemplateOpt = {
+    id: string;
+    name: string;
+    type: string; // 'PURCHASE' | 'EXPENSE'，Prisma 欄位為 string
+    itemId: string | null;
+    vendorId: string | null;
+    inputQuantity: number | null;
+    inputUnit: string | null;
+    expenseType: string | null;
+    unitPrice: number | null;
+    totalPrice: number | null;
+    note: string | null;
+};
+
 type Props = {
-    categories: any[];
-    items: any[];
-    vendors: any[];
-    expenseTypes: any[];
+    categories: CategoryOpt[];
+    items: ItemOpt[];
+    vendors: VendorOpt[];
+    expenseTypes: ExpenseTypeOpt[];
     units: UnitDef[];
-    templates: any[];
+    templates: TemplateOpt[];
 };
 
 export default function EntryForm({ categories, items, vendors, expenseTypes, units, templates: initialTemplates }: Props) {
@@ -232,7 +250,7 @@ export default function EntryForm({ categories, items, vendors, expenseTypes, un
         setLoading(false);
     };
 
-    const handleLoadTemplate = (template: any) => {
+    const handleLoadTemplate = (template: TemplateOpt) => {
         setType(template.type as 'PURCHASE' | 'EXPENSE');
         if (template.type === 'PURCHASE') {
             if (template.itemId) {
@@ -337,7 +355,7 @@ export default function EntryForm({ categories, items, vendors, expenseTypes, un
         }
     };
 
-    const currentTemplates = templates.filter((t: any) => t.type === type);
+    const currentTemplates = templates.filter((t) => t.type === type);
 
     return (
         <div className="space-y-6 pb-20 animate-in slide-in-from-bottom-5 duration-500">
@@ -372,7 +390,7 @@ export default function EntryForm({ categories, items, vendors, expenseTypes, un
                                     尚無常用記錄，請先在表單中點擊「存為常用」。
                                 </div>
                             ) : (
-                                currentTemplates.map((t: any) => (
+                                currentTemplates.map((t) => (
                                     <div
                                         key={t.id}
                                         className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-accent/50 cursor-pointer transition-colors"

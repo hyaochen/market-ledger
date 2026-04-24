@@ -2,6 +2,7 @@
 
 import prisma from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
+import type { Prisma } from '@prisma/client';
 import { convertToKg, parseUnitMeta, type UnitDef, UNITS } from '@/lib/units';
 import { parseLocalDate } from '@/lib/date';
 import { ensureRole, getTenantId } from '@/lib/auth';
@@ -12,7 +13,7 @@ export interface CreateEntryState {
     errors?: Record<string, string[]>;
 }
 
-export async function createEntry(prevState: any, formData: FormData): Promise<CreateEntryState> {
+export async function createEntry(_prevState: CreateEntryState | null, formData: FormData): Promise<CreateEntryState> {
     try {
         const auth = await ensureRole('write');
         if (!auth.ok) return { success: false, message: auth.error };
@@ -28,15 +29,14 @@ export async function createEntry(prevState: any, formData: FormData): Promise<C
             return { success: false, message: '缺少類型資料' };
         }
 
-        // 準備資料物件
-        const data: any = {
+        // 準備資料物件（PURCHASE / EXPENSE 分支填入 type-specific 欄位）
+        const data: Prisma.EntryUncheckedCreateInput = {
             type,
             date,
-            status: 'APPROVED', // 預設直接核准，未來可改為 DRAFT
-            createdAt: new Date(),
-            updatedAt: new Date(),
+            status: 'APPROVED',
             userId: user.id,
             tenantId,
+            totalPrice: 0, // 下方分支會覆寫
         };
 
         if (type === 'PURCHASE') {

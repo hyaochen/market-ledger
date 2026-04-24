@@ -11,9 +11,11 @@ import { recordRevenue } from "@/app/actions/revenue";
 import { formatDateInput } from "@/lib/date";
 import { useToast } from "@/components/ui/use-toast";
 
+type LocationOpt = { id: string; name: string };
+type RevenueFormState = { amount: string; isDayOff: boolean };
+
 type Props = {
-    locations: any[];
-    initialData?: any[];
+    locations: LocationOpt[];
 };
 
 export default function RevenueForm({ locations }: Props) {
@@ -22,8 +24,8 @@ export default function RevenueForm({ locations }: Props) {
     const [loading, setLoading] = useState(false);
 
     // 每個地點的狀態
-    const [forms, setForms] = useState<Record<string, { amount: string, isDayOff: boolean }>>(() => {
-        const initial: any = {};
+    const [forms, setForms] = useState<Record<string, RevenueFormState>>(() => {
+        const initial: Record<string, RevenueFormState> = {};
         if (locations) {
             locations.forEach(loc => {
                 initial[loc.id] = { amount: "", isDayOff: false };
@@ -32,7 +34,7 @@ export default function RevenueForm({ locations }: Props) {
         return initial;
     });
 
-    const handleInputChange = (locId: string, field: string, value: any) => {
+    const handleInputChange = (locId: string, field: keyof RevenueFormState, value: string | boolean) => {
         setForms(prev => ({
             ...prev,
             [locId]: {

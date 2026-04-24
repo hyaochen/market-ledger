@@ -123,7 +123,9 @@ export async function saveEntry(entry: ParsedEntry, session: SessionData): Promi
                                 data.standardWeight = entry.quantity * meta.toKg;
                                 data.unitPrice = entry.price / (entry.quantity * meta.toKg);
                             }
-                        } catch { /* ignore */ }
+                        } catch (err) {
+                            console.warn('[bot/entry] malformed unit.meta for', entry.unit, '-', (err as Error)?.message ?? err);
+                        }
                     }
                     if (!data.unitPrice && entry.quantity > 0) {
                         data.unitPrice = entry.price / entry.quantity;

@@ -42,9 +42,9 @@ export default function InventoryEntryActions({
     units,
 }: {
     entry: EntryRecord;
-    items: any[];
-    vendors: any[];
-    expenseTypes: any[];
+    items: { id: string; name: string }[];
+    vendors: { id: string; name: string }[];
+    expenseTypes: { value: string; label: string }[];
     units: UnitDef[];
 }) {
     const router = useRouter();

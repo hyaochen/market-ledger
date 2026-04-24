@@ -43,7 +43,9 @@ export async function loadDbContext(tenantId: string): Promise<DbContext> {
             const meta = u.meta ? JSON.parse(u.meta) : {};
             toKg = meta.toKg;
             isWeight = meta.isWeight ?? typeof meta.toKg === 'number';
-        } catch { /* ignore */ }
+        } catch (err) {
+            console.warn('[matcher] malformed unit.meta for', u.value, '-', (err as Error)?.message ?? err);
+        }
         return { code: u.value, name: u.label, toKg, isWeight };
     });
 
@@ -468,6 +470,8 @@ export async function checkDuplicate(entry: ParsedEntry, ctx: DbContext): Promis
             });
             if (existing) return { isDuplicate: true, existing };
         }
-    } catch { /* ignore */ }
+    } catch (err) {
+        console.warn('[matcher] duplicate check failed (non-fatal):', (err as Error)?.message ?? err);
+    }
     return { isDuplicate: false };
 }
