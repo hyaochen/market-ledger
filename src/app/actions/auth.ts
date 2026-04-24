@@ -2,16 +2,33 @@
 
 import { cookies } from "next/headers";
 import prisma from "@/lib/prisma";
-import { createHash } from "crypto";
 import { signSession } from "@/lib/session";
 import { resolveRoleCode } from "@/lib/auth";
+import { hashPassword, verifyPassword } from "@/lib/password";
 
 // Rate limiting
 const loginAttempts = new Map<string, { count: number; lastAttempt: number }>();
 const MAX_ATTEMPTS = 5;
 const LOCKOUT_MS = 15 * 60 * 1000;
+// 統一最小回應時間，降低「帳號是否存在」的 timing leak
+const MIN_RESPONSE_MS = 300;
+
+function recordFailure(username: string) {
+    const r = loginAttempts.get(username) ?? { count: 0, lastAttempt: 0 };
+    r.count++;
+    r.lastAttempt = Date.now();
+    loginAttempts.set(username, r);
+}
+
+async function delayUntil(startedAt: number, minMs: number) {
+    const elapsed = Date.now() - startedAt;
+    if (elapsed < minMs) {
+        await new Promise((r) => setTimeout(r, minMs - elapsed));
+    }
+}
 
 export async function login(formData: FormData) {
+    const t0 = Date.now();
     const username = (formData.get("username") as string | null)?.trim();
     const password = formData.get("password") as string | null;
 
@@ -19,10 +36,11 @@ export async function login(formData: FormData) {
         return { success: false, message: "請輸入帳號與密碼" };
     }
 
-    // Rate limit check
+    // Rate limit check（用 username 當 key；帳號不存在也算，防列舉）
     const record = loginAttempts.get(username);
     if (record && record.count >= MAX_ATTEMPTS && Date.now() - record.lastAttempt < LOCKOUT_MS) {
         const remaining = Math.ceil((LOCKOUT_MS - (Date.now() - record.lastAttempt)) / 60000);
+        await delayUntil(t0, MIN_RESPONSE_MS);
         return { success: false, message: `登入嘗試過多，請 ${remaining} 分鐘後再試` };
     }
 
@@ -40,18 +58,28 @@ export async function login(formData: FormData) {
     });
 
     if (!user) {
-        const r = loginAttempts.get(username) || { count: 0, lastAttempt: 0 };
-        r.count++; r.lastAttempt = Date.now();
-        loginAttempts.set(username, r);
+        recordFailure(username);
+        await delayUntil(t0, MIN_RESPONSE_MS);
         return { success: false, message: "帳號或密碼錯誤" };
     }
 
-    const hashedPassword = createHash("sha256").update(password).digest("hex");
-    if (user.password !== hashedPassword) {
-        const r = loginAttempts.get(username) || { count: 0, lastAttempt: 0 };
-        r.count++; r.lastAttempt = Date.now();
-        loginAttempts.set(username, r);
+    const check = verifyPassword(password, user.password);
+    if (!check.ok) {
+        recordFailure(username);
+        await delayUntil(t0, MIN_RESPONSE_MS);
         return { success: false, message: "帳號或密碼錯誤" };
+    }
+
+    // Lazy rehash：舊 SHA-256 驗證通過 → 升級為 bcrypt 存回
+    if (check.needsRehash) {
+        try {
+            await prisma.user.update({
+                where: { id: user.id },
+                data: { password: hashPassword(password) },
+            });
+        } catch (err) {
+            console.error('[auth] lazy rehash failed:', err);
+        }
     }
 
     // Clear rate limit on success

@@ -2,7 +2,7 @@
 
 import prisma from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
-import { createHash } from 'crypto'; // 簡單雜湊用，生產環境建議用 bcrypt
+import { hashPassword } from '@/lib/password';
 import { ensureRole, getTenantId } from '@/lib/auth';
 
 // --- Department Actions ---
@@ -100,8 +100,7 @@ export async function createUser(formData: FormData) {
             return { success: false, error: '請選擇角色' };
         }
 
-        // 簡單加密 (實際專案請用 bcrypt)
-        const hashedPassword = createHash('sha256').update(password).digest('hex');
+        const hashedPassword = hashPassword(password);
 
         await prisma.user.create({
             data: {

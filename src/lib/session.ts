@@ -8,9 +8,17 @@ export type SessionPayload = {
 };
 
 const SECRET = process.env.SESSION_SECRET || "dev-secret-should-be-changed";
+const MIN_SECRET_LEN = 32;
 
-if (process.env.NODE_ENV === "production" && !process.env.SESSION_SECRET) {
-    console.warn("WARNING: SESSION_SECRET is not set in production environment!");
+if (process.env.NODE_ENV === "production") {
+    if (!process.env.SESSION_SECRET) {
+        throw new Error("SESSION_SECRET must be set in production (min 32 chars).");
+    }
+    if (process.env.SESSION_SECRET.length < MIN_SECRET_LEN) {
+        throw new Error(`SESSION_SECRET too short (got ${process.env.SESSION_SECRET.length}, need ${MIN_SECRET_LEN}+).`);
+    }
+} else if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET === "dev-secret-should-be-changed") {
+    console.warn("[session] Using insecure fallback SESSION_SECRET. Set SESSION_SECRET in .env for real security.");
 }
 
 function encodeBase64Url(input: string | Buffer) {

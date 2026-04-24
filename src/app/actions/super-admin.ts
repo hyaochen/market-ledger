@@ -2,7 +2,7 @@
 
 import prisma from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
-import { createHash } from 'crypto';
+import { hashPassword } from '@/lib/password';
 import { getCurrentUser } from '@/lib/auth';
 
 async function requireSuperAdmin() {
@@ -70,7 +70,7 @@ export async function createTenant(formData: FormData) {
             return { success: false, error: '企業代碼已存在' };
         }
 
-        const hashedPassword = createHash('sha256').update(adminPassword).digest('hex');
+        const hashedPassword = hashPassword(adminPassword);
 
         // Find the admin role
         const adminRole = await prisma.role.findFirst({ where: { code: 'admin' } });
@@ -163,7 +163,7 @@ export async function resetUserPassword(userId: string, newPassword: string) {
             return { success: false, error: '密碼至少需要 4 個字元' };
         }
 
-        const hashedPassword = createHash('sha256').update(newPassword).digest('hex');
+        const hashedPassword = hashPassword(newPassword);
 
         await prisma.user.update({
             where: { id: userId },

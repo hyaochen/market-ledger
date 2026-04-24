@@ -1,7 +1,7 @@
 // 會話管理 + 登入驗證
 
-import crypto from 'crypto';
 import prisma from '../src/lib/prisma';
+import { hashPassword, verifyPassword } from '../src/lib/password';
 import type { SessionData } from './types';
 
 const SESSION_KEY_PREFIX = 'tg_session_';
@@ -68,17 +68,11 @@ export function parseLoginInput(text: string): { username: string; password: str
     return null;
 }
 
-// SHA-256 密碼雜湊（與 Web 端一致）
-function hashPassword(password: string): string {
-    return crypto.createHash('sha256').update(password).digest('hex');
-}
-
 // 登入驗證，成功回傳 SessionData，失敗回傳 null
 export async function verifyLogin(username: string, password: string): Promise<SessionData | null> {
-    const hashed = hashPassword(password);
-
+    // 以 username 查（不再用 password 當 WHERE 條件，改由 verifyPassword 比對）
     const user = await prisma.user.findFirst({
-        where: { username, password: hashed, status: true },
+        where: { username, status: true },
         include: {
             roles: { include: { role: true } },
             tenant: true,
@@ -87,6 +81,21 @@ export async function verifyLogin(username: string, password: string): Promise<S
 
     if (!user || !user.tenantId) return null;
     if (user.tenant && !user.tenant.status) return null;
+
+    const check = verifyPassword(password, user.password);
+    if (!check.ok) return null;
+
+    // Lazy rehash：舊 SHA-256 通過 → 升級為 bcrypt
+    if (check.needsRehash) {
+        try {
+            await prisma.user.update({
+                where: { id: user.id },
+                data: { password: hashPassword(password) },
+            });
+        } catch (err) {
+            console.error('[bot/auth] lazy rehash failed:', err);
+        }
+    }
 
     // 取最高角色
     const roleCodes = user.roles.map(r => r.role.code);

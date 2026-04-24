@@ -1,5 +1,9 @@
 import { PrismaClient } from '@prisma/client'
-import { createHash } from 'crypto'
+import bcrypt from 'bcryptjs'
+
+function hashPassword(plain: string): string {
+    return bcrypt.hashSync(plain, 12)
+}
 
 const prisma = new PrismaClient()
 
@@ -230,7 +234,7 @@ async function main() {
         if (!process.env.SUPER_ADMIN_PASSWORD) {
             console.warn('⚠️  WARNING: SUPER_ADMIN_PASSWORD not set in .env, using default "superadmin123".')
         }
-        const hashedSuperPassword = createHash('sha256').update(superAdminPassword).digest('hex')
+        const hashedSuperPassword = hashPassword(superAdminPassword)
 
         // 使用 findFirst + create/update (因為 nullable tenantId 在 composite unique 中的 SQLite 限制)
         let superAdmin = await prisma.user.findFirst({
@@ -266,7 +270,7 @@ async function main() {
         if (!process.env.ADMIN_PASSWORD) {
             console.warn('⚠️  WARNING: ADMIN_PASSWORD not set in .env, using default "admin123".')
         }
-        const adminPassword = createHash('sha256').update(rawPassword).digest('hex')
+        const adminPassword = hashPassword(rawPassword)
 
         let tenantAdmin = await prisma.user.findFirst({
             where: { username: 'admin', tenantId },
