@@ -11,6 +11,7 @@ import {
 import { parseEntries } from './parser';
 import { loadDbContext, enrichEntry } from './matcher';
 import {
+    preloadStates,
     getState, setState, setSession, resetToIdle,
     startConfirmation, acceptCurrent, rejectCurrent, getAllConfirmed,
     removeLastConfirmed, addToConfirmed, enterNewItemFlow, exitNewItemFlow,
@@ -47,15 +48,26 @@ if (!TOKEN) {
     process.exit(1);
 }
 
+// 啟動前先從 DB 拉回所有對話狀態（撐過 bot 重啟不丟進度）
+// autoStart:false 讓我們先載入完狀態再開 polling
 const bot = new TelegramBot(TOKEN, {
     polling: {
         interval: 2000,
-        autoStart: true,
+        autoStart: false,
         params: { timeout: 30 },
     },
 });
 
 console.log('🤖 Bot 啟動中...');
+
+(async () => {
+    await preloadStates();
+    await bot.startPolling();
+    console.log('🤖 Bot polling started');
+})().catch((err) => {
+    console.error('[bot] startup failed:', err);
+    process.exit(1);
+});
 
 // ── 幫助文字 ────────────────────────────────────────────────────
 const HELP_TEXT = `📖 *使用說明*

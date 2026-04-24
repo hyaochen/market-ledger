@@ -1,7 +1,21 @@
 // Ollama NLP 解析模組
 // 策略：LLM 只負責「文字提取」（品項名、數量、金額），DB 比對由 matcher.ts 負責
 
+import { z } from 'zod';
 import type { ParsedEntry, DbContext } from './types';
+
+// LLM 輸出的單筆結構 — 所有欄位都可選，實務上 LLM 會漏填不常見欄位
+const RawExtractedSchema = z.object({
+    type: z.string().optional(),
+    date: z.string().optional(),
+    itemName: z.string().nullable().optional(),
+    quantity: z.number().nullable().optional(),
+    unit: z.string().nullable().optional(),
+    price: z.number().optional(),
+    vendorName: z.string().nullable().optional(),
+    note: z.string().nullable().optional(),
+    rawInput: z.string().optional(),
+}).catchall(z.unknown()); // 容忍多餘欄位
 
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
 const OLLAMA_MODEL_FAST = process.env.OLLAMA_MODEL ?? 'qwen2.5:7b';
@@ -99,46 +113,54 @@ async function callOllama(systemPrompt: string, userText: string, model: string)
 
         console.log(`[Parser] Raw response: ${content.slice(0, 400)}`);
 
-        const parsed = JSON.parse(content);
-        let arr: unknown[] | null = null;
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(content);
+        } catch (err) {
+            console.error('[Parser] JSON.parse failed:', err);
+            return null;
+        }
+
+        let rawArr: unknown[] | null = null;
         if (Array.isArray(parsed)) {
-            arr = parsed;
+            rawArr = parsed;
         } else if (typeof parsed === 'object' && parsed !== null) {
             for (const val of Object.values(parsed)) {
-                if (Array.isArray(val)) { arr = val; break; }
+                if (Array.isArray(val)) { rawArr = val; break; }
             }
         }
-        if (!arr) {
-            // LLM 有時回傳單一物件而非陣列，嘗試包裝
+        if (!rawArr) {
             if (typeof parsed === 'object' && parsed !== null && 'type' in parsed) {
-                arr = [parsed];
+                rawArr = [parsed];
                 console.log('[Parser] Wrapped single entry object in array');
             } else {
-                console.error('[Parser] No array found. Keys:', Object.keys(parsed).join(', '));
+                const keys = parsed && typeof parsed === 'object' ? Object.keys(parsed).join(', ') : typeof parsed;
+                console.error('[Parser] No array found. Got:', keys);
                 return null;
             }
         }
 
-        console.log(`[Parser] Extracted ${arr.length} entries`);
-        return arr as RawExtracted[];
+        // Zod 驗證：過濾掉明顯壞掉的 entry（保留能驗過的）
+        const validated: RawExtracted[] = [];
+        for (const raw of rawArr) {
+            const result = RawExtractedSchema.safeParse(raw);
+            if (result.success) {
+                validated.push(result.data as RawExtracted);
+            } else {
+                console.warn('[Parser] Zod rejected entry:', result.error.issues.slice(0, 3));
+            }
+        }
+
+        console.log(`[Parser] Extracted ${rawArr.length}, validated ${validated.length}`);
+        return validated;
     } catch (e) {
         console.error(`[Parser] Failed (${model}) after ${Date.now() - t0}ms:`, e);
         return null;
     }
 }
 
-// LLM 輸出的原始結構（不含 DB ID）
-interface RawExtracted {
-    type?: string;
-    date?: string;
-    itemName?: string | null;
-    quantity?: number | null;
-    unit?: string | null;
-    price?: number;
-    vendorName?: string | null;
-    note?: string | null;
-    rawInput?: string;
-}
+// LLM 輸出的原始結構（不含 DB ID）— schema 定義在檔案頂部
+type RawExtracted = z.infer<typeof RawExtractedSchema>;
 
 // 量詞單位（重量/數量）— 不含貨幣詞
 const QTY_UNITS = ['臺斤', '台斤', '公斤', '斤', 'kg', 'KG', 'g', 'G', '個', '包', '條', '份', '箱', '罐', '瓶', '桶', '組', '片', '顆', '克', '袋'];
