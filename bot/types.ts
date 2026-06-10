@@ -20,6 +20,9 @@ export type ParsedEntry = {
     locationId: string | null;
     locationName: string | null;
 
+    // 休假日（type=REVENUE 才可能為 true；勾起時金額固定 0）
+    isDayOff?: boolean;
+
     // 通用
     price: number;
     note: string | null;

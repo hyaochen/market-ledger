@@ -9,6 +9,7 @@ import {
     parseCnNumber,
     fixJinLiangFromRaw,
     fixNumbersFromRaw,
+    detectDayOffEntries,
 } from "./parser";
 
 test("normalizeNumbers: comma-separated thousands", () => {
@@ -139,4 +140,54 @@ test("fixNumbersFromRaw: skip jl-encoded entries", () => {
     const result = fixNumbersFromRaw(entry);
     assert.equal(result.quantity, 210);
     assert.equal(result.unit, "jl");
+});
+
+// ── detectDayOffEntries（T-ML-001 休假意圖預判）─────────────────────
+const LOC_NAMES = ["屏東", "潮州"];
+const TODAY = "2026-06-10";
+
+test("detectDayOffEntries: 屏東今天休假 → REVENUE + isDayOff", () => {
+    const result = detectDayOffEntries("屏東今天休假", TODAY, LOC_NAMES);
+    assert.ok(result, "should match");
+    assert.equal(result!.length, 1);
+    const e = result![0];
+    assert.equal(e.type, "REVENUE");
+    assert.equal(e.isDayOff, true);
+    assert.equal(e.price, 0);
+    assert.equal(e.locationName, "屏東");
+    assert.equal(e.date, TODAY);
+});
+
+test("detectDayOffEntries: 潮州 5/23 休假 → date overridden", () => {
+    const result = detectDayOffEntries("潮州 5/23 休假", TODAY, LOC_NAMES);
+    assert.ok(result);
+    assert.equal(result!.length, 1);
+    assert.equal(result![0].locationName, "潮州");
+    assert.equal(result![0].date, "2026-05-23");
+    assert.equal(result![0].isDayOff, true);
+});
+
+test("detectDayOffEntries: 公休 同義字也認", () => {
+    const result = detectDayOffEntries("屏東 3月17日 公休", TODAY, LOC_NAMES);
+    assert.ok(result);
+    assert.equal(result![0].isDayOff, true);
+    assert.equal(result![0].date, "2026-03-17");
+});
+
+test("detectDayOffEntries: 無休假字眼 → null", () => {
+    assert.equal(detectDayOffEntries("潮州5000", TODAY, LOC_NAMES), null);
+    assert.equal(detectDayOffEntries("肝連2.6台斤218", TODAY, LOC_NAMES), null);
+});
+
+test("detectDayOffEntries: 含金額混雜 → null（讓 LLM 處理）", () => {
+    assert.equal(detectDayOffEntries("潮州5000\n屏東休假", TODAY, LOC_NAMES), null);
+    assert.equal(detectDayOffEntries("潮州5000休假", TODAY, LOC_NAMES), null);
+});
+
+test("detectDayOffEntries: 無 location 提示 → 仍盡力抽取", () => {
+    // 沒有 exact match 已知 location → 抽休假關鍵字前後的文字
+    const result = detectDayOffEntries("測試攤位 今天休假", TODAY, LOC_NAMES);
+    assert.ok(result);
+    assert.equal(result![0].locationName, "測試攤位");
+    assert.equal(result![0].isDayOff, true);
 });

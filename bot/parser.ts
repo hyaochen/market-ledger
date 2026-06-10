@@ -171,6 +171,75 @@ const CN_QTY_UNIT_RE = new RegExp(`([一兩二三四五六七八九十])\\s*(${Q
 // 斤兩格式：「2斤10兩」→ quantity=210, unit='jl'（1斤=16兩，16進位）
 const JIN_LIANG_RE = /(\d+)斤(\d+)兩/;
 
+// ── 休假意圖 pre-LLM 偵測 ────────────────────────────────────────────────
+// 員工常會把「潮州 5/23 休假」「屏東今天休假」直接打給 bot，這類輸入
+// 用 LLM 反而容易誤判成 EXPENSE（休假費）；regex 預判穩定且不耗 token。
+// 任一行不符合休假模式則回 null，讓整批走原本 LLM 流程。
+export function detectDayOffEntries(input: string, today: string, locationNames: string[]): ParsedEntry[] | null {
+    const text = normalizeNumbers(input);
+    if (!/休假|公休/.test(text)) return null;
+
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    if (lines.length === 0) return null;
+
+    const result: ParsedEntry[] = [];
+    for (const line of lines) {
+        if (!/休假|公休/.test(line)) return null; // 混雜非休假行 → 走 LLM
+        // 不接受同行含金額（避免「潮州5000休假」這種模糊輸入直接認定）
+        const hasPrice = /\d{3,}/.test(line.replace(/\d+[月\/]\d+[日號]?/g, ''));
+        if (hasPrice) return null;
+
+        // 抓日期（支援 M/D、M月D日/號；找不到 → 今日）
+        let date = today;
+        const dateMatch = line.match(/(\d{1,2})[月\/](\d{1,2})[日號]?/);
+        if (dateMatch) {
+            const month = parseInt(dateMatch[1], 10);
+            const day = parseInt(dateMatch[2], 10);
+            if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+                const [y] = today.split('-');
+                date = `${y}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+            }
+        }
+
+        // 抓 location：先 exact match 已知地點，再 fallback 抽休假關鍵字前的中文段
+        let locationName: string | null = null;
+        for (const name of locationNames) {
+            if (line.includes(name)) { locationName = name; break; }
+        }
+        if (!locationName) {
+            const cleaned = line
+                .replace(/\d+[月\/]\d+[日號]?/g, '')
+                .replace(/今天|今日|本日/g, '')
+                .replace(/休假|公休/g, '')
+                .trim();
+            if (cleaned) locationName = cleaned;
+        }
+        if (!locationName) return null;
+
+        result.push({
+            type: 'REVENUE',
+            date,
+            itemId: null,
+            itemName: null,
+            expenseType: null,
+            locationId: null,
+            locationName,
+            isDayOff: true,
+            quantity: null,
+            unit: null,
+            price: 0,
+            vendorId: null,
+            vendorName: null,
+            note: null,
+            confident: true,
+            uncertainReason: null,
+            rawInput: line,
+        });
+    }
+
+    return result.length > 0 ? result : null;
+}
+
 /** 若 rawInput 含「X斤Y兩」格式，將 entry 的 quantity/unit 換成 jl 編碼（覆蓋 LLM 結果） */
 export function fixJinLiangFromRaw(entry: RawExtracted): RawExtracted {
     const raw = normalizeNumbers(entry.rawInput ?? '');
@@ -408,6 +477,13 @@ export async function parseEntries(userText: string, ctx: DbContext): Promise<Pa
 
     const locationNames = ctx.locations.map(l => l.name);
     const systemPrompt = buildSystemPrompt(today, locationNames);
+
+    // 休假意圖優先攔截（pre-LLM）— 命中即整批回，不走 Ollama
+    const dayOffEntries = detectDayOffEntries(userText, today, locationNames);
+    if (dayOffEntries && dayOffEntries.length > 0) {
+        console.log(`[Parser] DAY_OFF pattern matched: ${dayOffEntries.length} entry`);
+        return dayOffEntries;
+    }
 
     // 中文數字前處理：「兩斤」→「2斤」，再交給 LLM（rawInput 保留原始值）
     const normalizedText = convertChineseNumbers(normalizeNumbers(userText));

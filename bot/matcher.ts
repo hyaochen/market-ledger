@@ -155,9 +155,11 @@ export async function enrichEntry(entry: ParsedEntry, ctx: DbContext): Promise<P
                 enriched.locationName = bestLoc.name;
                 if (bestScore < 0.9) {
                     enriched.confident = false;
-                    enriched.uncertainReason = `「${queryName}」→「${bestLoc.name}」$${entry.price}，請確認`;
+                    enriched.uncertainReason = entry.isDayOff
+                        ? `「${queryName}」→「${bestLoc.name}」休假日，請確認`
+                        : `「${queryName}」→「${bestLoc.name}」$${entry.price}，請確認`;
                 }
-                console.log(`[Matcher] location "${queryName}" → "${bestLoc.name}" (score=${bestScore.toFixed(2)})`);
+                console.log(`[Matcher] location "${queryName}" → "${bestLoc.name}" (score=${bestScore.toFixed(2)})${entry.isDayOff ? ' [DAY_OFF]' : ''}`);
             } else {
                 enriched.confident = false;
                 enriched.uncertainReason = `找不到地點「${queryName}」，可用地點：${ctx.locations.map(l => l.name).join('、')}`;

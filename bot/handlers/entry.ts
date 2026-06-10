@@ -25,9 +25,10 @@ export function formatEntry(e: ParsedEntry, ctx: DbContext): string {
     const datePrefix = e.date && !isToday(e.date) ? `📅${shortDate(e.date)} ` : '';
     if (e.type === 'REVENUE') {
         const loc = e.locationId ? ctx.locations.find(l => l.id === e.locationId) : null;
+        const amountDisplay = e.isDayOff ? '💤 休假' : `$${e.price.toLocaleString()}`;
         const parts = [
             `💰 ${loc?.name ?? e.locationName ?? '未知地點'}`,
-            `$${e.price.toLocaleString()}`,
+            amountDisplay,
             e.note ? `備註：${e.note}` : '',
         ].filter(Boolean);
         return datePrefix + parts.join(' ');
@@ -66,6 +67,31 @@ export async function saveEntry(entry: ParsedEntry, session: SessionData): Promi
         // 營業額走獨立的 Revenue 表
         if (entry.type === 'REVENUE') {
             if (!entry.locationId) return { success: false, error: '缺少地點 ID' };
+
+            // 休假日：同日同 location 已有紀錄不覆寫，避免誤把營業日改成休假
+            if (entry.isDayOff) {
+                const dup = await prisma.revenue.findFirst({
+                    where: { date, locationId: entry.locationId, tenantId: session.tenantId },
+                    include: { location: true },
+                });
+                if (dup) {
+                    const locName = dup.location?.name ?? '';
+                    const existingDesc = dup.isDayOff ? '休假' : `$${dup.amount}`;
+                    return { success: false, error: `${locName} 該日已有紀錄（${existingDesc}），請先刪除或修改後再記休假` };
+                }
+                await prisma.revenue.create({
+                    data: {
+                        date,
+                        locationId: entry.locationId,
+                        amount: 0,
+                        isDayOff: true,
+                        note: entry.note ?? null,
+                        tenantId: session.tenantId,
+                    },
+                });
+                return { success: true };
+            }
+
             await prisma.revenue.upsert({
                 where: {
                     date_locationId_tenantId: {
@@ -74,11 +100,12 @@ export async function saveEntry(entry: ParsedEntry, session: SessionData): Promi
                         tenantId: session.tenantId,
                     },
                 },
-                update: { amount: entry.price, note: entry.note ?? null, updatedAt: new Date() },
+                update: { amount: entry.price, isDayOff: false, note: entry.note ?? null, updatedAt: new Date() },
                 create: {
                     date,
                     locationId: entry.locationId,
                     amount: entry.price,
+                    isDayOff: false,
                     note: entry.note ?? null,
                     tenantId: session.tenantId,
                 },
