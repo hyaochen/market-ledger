@@ -11,6 +11,11 @@ export async function recordRevenue(date: string, locationId: string, amount: nu
         if (!auth.ok) return { success: false, error: auth.error };
         const tenantId = await getTenantId();
 
+        // Server-side 雙保險：沒勾休假但金額 <= 0 → 擋下，避免「漏記休假」變成髒資料
+        if (!isDayOff && (!Number.isFinite(amount) || amount <= 0)) {
+            return { success: false, error: '若是休假請勾選「今日休假」；若有營業請填正確金額。' };
+        }
+
         const targetDate = parseLocalDate(date) ?? new Date();
 
         // 使用 upsert: 如果存在則更新，不存在則新增

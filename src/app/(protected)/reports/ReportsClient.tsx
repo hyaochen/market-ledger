@@ -215,7 +215,7 @@ type ReportsClientProps = {
     roleCode: "read" | "write" | "admin";
     earliestDate?: string | null;
     range: { from: string; to: string };
-    totals: { revenue: number; cost: number; profit: number };
+    totals: { revenue: number; cost: number; profit: number; avgDailyRevenue: number; businessDayCount: number };
     dailyStats: { date: string; revenue: number; cost: number }[];
     topItems: { name: string; totalCost: number; totalWeightKg: number; totalQuantity: number; unit: string }[];
     expenseBreakdown: { type: string; label: string; total: number }[];
@@ -496,7 +496,7 @@ export default function ReportsClient({
             </Card>
 
             {/* ─── Summary Cards ─── */}
-            <div className="grid gap-3 grid-cols-3">
+            <div className="grid gap-3 grid-cols-2 sm:grid-cols-4">
                 <Card className="relative overflow-hidden">
                     <div className="absolute inset-0 bg-gradient-to-br from-sky-500/10 to-transparent" />
                     <CardContent className="p-4 relative">
@@ -518,6 +518,16 @@ export default function ReportsClient({
                         <p className={`text-lg sm:text-2xl font-bold ${totals.profit >= 0 ? "text-emerald-600" : "text-red-500"}`}>
                             {formatPrice(totals.profit)}
                         </p>
+                    </CardContent>
+                </Card>
+                <Card className="relative overflow-hidden">
+                    <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/10 to-transparent" />
+                    <CardContent className="p-4 relative">
+                        <p className="text-xs text-muted-foreground mb-1">
+                            日均營業額 <span className="opacity-70">(不含休假)</span>
+                        </p>
+                        <p className="text-lg sm:text-2xl font-bold text-indigo-600">{formatPrice(totals.avgDailyRevenue)}</p>
+                        <p className="text-[10px] text-muted-foreground mt-0.5">分母 {totals.businessDayCount} 個營業日</p>
                     </CardContent>
                 </Card>
             </div>
@@ -793,16 +803,32 @@ export default function ReportsClient({
                         </Card>
                     ) : (
                         revenues.map((record) => (
-                            <Card key={record.id} className="hover:shadow-sm transition-shadow">
+                            <Card
+                                key={record.id}
+                                className={`hover:shadow-sm transition-shadow ${record.isDayOff ? "bg-muted/40 border-dashed" : ""}`}
+                            >
                                 <CardContent className="p-3 sm:p-4 space-y-2.5">
                                     {/* Row 1: Badge + Location + Amount */}
                                     <div className="flex items-start gap-3">
-                                        <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center text-xs font-bold text-emerald-700 dark:text-emerald-400">
-                                            營
+                                        <div
+                                            className={`flex-shrink-0 w-10 h-10 rounded-lg flex items-center justify-center text-xs font-bold ${
+                                                record.isDayOff
+                                                    ? "bg-muted text-muted-foreground"
+                                                    : "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400"
+                                            }`}
+                                            title={record.isDayOff ? "休假日（不列入日均）" : "營業日"}
+                                        >
+                                            {record.isDayOff ? "休" : "營"}
                                         </div>
                                         <div className="flex-1 min-w-0 flex items-baseline justify-between gap-x-3 gap-y-1 flex-wrap">
-                                            <span className="font-semibold break-words">{record.locationName}</span>
-                                            <span className="font-bold text-primary text-lg whitespace-nowrap">
+                                            <span className={`font-semibold break-words ${record.isDayOff ? "text-muted-foreground" : ""}`}>
+                                                {record.locationName}
+                                            </span>
+                                            <span
+                                                className={`font-bold text-lg whitespace-nowrap ${
+                                                    record.isDayOff ? "text-muted-foreground italic" : "text-primary"
+                                                }`}
+                                            >
                                                 {record.isDayOff ? "休假" : formatPrice(record.amount)}
                                             </span>
                                         </div>

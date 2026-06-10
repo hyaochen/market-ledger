@@ -21,9 +21,8 @@ type Props = {
 export default function RevenueForm({ locations }: Props) {
     const { toast } = useToast();
     const [date, setDate] = useState(formatDateInput(new Date()));
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState<string | null>(null);
 
-    // 每個地點的狀態
     const [forms, setForms] = useState<Record<string, RevenueFormState>>(() => {
         const initial: Record<string, RevenueFormState> = {};
         if (locations) {
@@ -34,29 +33,50 @@ export default function RevenueForm({ locations }: Props) {
         return initial;
     });
 
-    const handleInputChange = (locId: string, field: keyof RevenueFormState, value: string | boolean) => {
+    const handleAmountChange = (locId: string, value: string) => {
+        setForms(prev => ({
+            ...prev,
+            [locId]: { ...prev[locId], amount: value }
+        }));
+    };
+
+    const handleDayOffToggle = (locId: string, checked: boolean) => {
         setForms(prev => ({
             ...prev,
             [locId]: {
-                ...prev[locId],
-                [field]: value
+                amount: checked ? "0" : "",
+                isDayOff: checked,
             }
         }));
     };
 
     const handleSubmit = async (locId: string) => {
         const data = forms[locId];
-        const amount = data.amount ? parseFloat(data.amount) : 0;
-        const isDayOff = data.isDayOff || !data.amount;
+        const trimmed = data.amount.trim();
+        const amount = trimmed === "" ? NaN : parseFloat(trimmed);
 
-        setLoading(true);
-        const result = await recordRevenue(date, locId, amount, isDayOff);
-        setLoading(false);
+        // 沒勾休假但金額空或 0 → 擋下（防止髒資料：員工以為休假就直接送 0）
+        if (!data.isDayOff) {
+            if (!Number.isFinite(amount) || amount <= 0) {
+                toast({
+                    title: "請填寫正確金額",
+                    description: "若是休假請勾選「今日休假」；若有營業請填正確金額。",
+                    variant: "destructive",
+                });
+                return;
+            }
+        }
+
+        const finalAmount = data.isDayOff ? 0 : amount;
+
+        setLoading(locId);
+        const result = await recordRevenue(date, locId, finalAmount, data.isDayOff);
+        setLoading(null);
 
         if (result.success) {
-            toast({ title: "成功", description: isDayOff ? "已記錄休假" : "營收已記錄" });
+            toast({ title: "成功", description: data.isDayOff ? "已記錄為休假日" : "營收已記錄" });
         } else {
-            toast({ title: "失敗", description: "儲存失敗", variant: "destructive" });
+            toast({ title: "失敗", description: result.error ?? "儲存失敗", variant: "destructive" });
         }
     };
 
@@ -79,42 +99,53 @@ export default function RevenueForm({ locations }: Props) {
                     ))}
                 </TabsList>
 
-                {locations.map(loc => (
-                    <TabsContent key={loc.id} value={loc.id} className="space-y-4">
-                        <Card className="border-primary/20">
-                            <CardHeader>
-                                <CardTitle>{loc.name} - 營業額</CardTitle>
-                            </CardHeader>
-                            <CardContent className="space-y-4">
-                                <div className="space-y-2">
-                                    <Label>今日收入 (TWD)</Label>
-                                    <Input
-                                        type="number"
-                                        placeholder="0"
-                                        className="text-lg font-bold"
-                                        value={forms[loc.id]?.amount || ''}
-                                        disabled={forms[loc.id]?.isDayOff}
-                                        onChange={(e) => handleInputChange(loc.id, 'amount', e.target.value)}
-                                    />
-                                    <p className="text-xs text-muted-foreground">未填金額會視為休假。</p>
-                                </div>
-                                <div className="flex items-center space-x-2">
-                                    <input
-                                        type="checkbox"
-                                        id={`dayoff-${loc.id}`}
-                                        className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
-                                        checked={forms[loc.id]?.isDayOff || false}
-                                        onChange={(e) => handleInputChange(loc.id, 'isDayOff', e.target.checked)}
-                                    />
-                                    <Label htmlFor={`dayoff-${loc.id}`}>今日公休</Label>
-                                </div>
-                                <Button className="w-full" disabled={loading} onClick={() => handleSubmit(loc.id)}>
-                                    {loading ? "儲存中..." : "儲存記錄"}
-                                </Button>
-                            </CardContent>
-                        </Card>
-                    </TabsContent>
-                ))}
+                {locations.map(loc => {
+                    const form = forms[loc.id] ?? { amount: "", isDayOff: false };
+                    return (
+                        <TabsContent key={loc.id} value={loc.id} className="space-y-4">
+                            <Card className="border-primary/20">
+                                <CardHeader>
+                                    <CardTitle>{loc.name} - 營業額</CardTitle>
+                                </CardHeader>
+                                <CardContent className="space-y-4">
+                                    <div className="space-y-2">
+                                        <Label>今日收入 (TWD)</Label>
+                                        <Input
+                                            type="number"
+                                            placeholder={form.isDayOff ? "休假" : "請填金額"}
+                                            className="text-lg font-bold"
+                                            value={form.amount}
+                                            disabled={form.isDayOff}
+                                            onChange={(e) => handleAmountChange(loc.id, e.target.value)}
+                                        />
+                                        {!form.isDayOff && (
+                                            <p className="text-xs text-muted-foreground">
+                                                若今日休假請勾選下方「今日休假」；金額不能為 0。
+                                            </p>
+                                        )}
+                                    </div>
+                                    <div className="flex items-center space-x-2">
+                                        <input
+                                            type="checkbox"
+                                            id={`dayoff-${loc.id}`}
+                                            className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                                            checked={form.isDayOff}
+                                            onChange={(e) => handleDayOffToggle(loc.id, e.target.checked)}
+                                        />
+                                        <Label htmlFor={`dayoff-${loc.id}`}>☑ 今日休假（金額將記為 0、不列入平均日營業額）</Label>
+                                    </div>
+                                    <Button
+                                        className="w-full"
+                                        disabled={loading === loc.id}
+                                        onClick={() => handleSubmit(loc.id)}
+                                    >
+                                        {loading === loc.id ? "儲存中..." : form.isDayOff ? "儲存休假紀錄" : "儲存記錄"}
+                                    </Button>
+                                </CardContent>
+                            </Card>
+                        </TabsContent>
+                    );
+                })}
             </Tabs>
         </div>
     );

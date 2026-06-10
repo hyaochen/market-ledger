@@ -104,6 +104,10 @@ export default async function ReportsPage({
     const totalRevenue = revenues.reduce((sum, record) => sum + record.amount, 0);
     const totalCost = entries.reduce((sum, record) => sum + record.totalPrice, 0);
 
+    // 平均日營業額：分母不含休假日，避免「休假 0 元」拉低平均
+    const businessDayCount = revenues.filter((r) => !r.isDayOff).length;
+    const avgDailyRevenue = businessDayCount > 0 ? totalRevenue / businessDayCount : 0;
+
     const topItemMap = new Map<
         string,
         { name: string; totalCost: number; totalWeightKg: number; totalQuantity: number; unit: string }
@@ -175,7 +179,13 @@ export default async function ReportsPage({
             roleCode={currentUser?.roleCode ?? "read"}
             earliestDate={earliestDate}
             range={{ from: formatDateInput(fromStart), to: formatDateInput(toEnd) }}
-            totals={{ revenue: totalRevenue, cost: totalCost, profit: totalRevenue - totalCost }}
+            totals={{
+                revenue: totalRevenue,
+                cost: totalCost,
+                profit: totalRevenue - totalCost,
+                avgDailyRevenue,
+                businessDayCount,
+            }}
             dailyStats={dailyStats}
             topItems={topItems}
             expenseBreakdown={expenseBreakdown}
