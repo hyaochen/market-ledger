@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState } from "react";
+import SignaturePadLib from "signature_pad";
 
 type Props = {
     label: string;
@@ -72,197 +73,93 @@ function SignatureModal({
     onDone: (dataUrl: string) => void;
 }) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
-    const drawingRef = useRef(false);
-    const lastPointRef = useRef<{ x: number; y: number } | null>(null);
-    const hasDrawnRef = useRef(false);
-    const lastSizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
+    const padRef = useRef<SignaturePadLib | null>(null);
 
-    const sizeCanvas = useCallback(() => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const rect = canvas.getBoundingClientRect();
-        if (rect.width === 0 || rect.height === 0) return;
-        const dpr = window.devicePixelRatio || 1;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-
-        const prevW = lastSizeRef.current.w;
-        const prevH = lastSizeRef.current.h;
-        const isResize = prevW !== 0 && (prevW !== rect.width || prevH !== rect.height);
-
-        let snapshot: string | null = null;
-        if (isResize && hasDrawnRef.current) {
-            try {
-                snapshot = canvas.toDataURL("image/png");
-            } catch {
-                snapshot = null;
-            }
-        }
-
-        canvas.width = Math.round(rect.width * dpr);
-        canvas.height = Math.round(rect.height * dpr);
-
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        ctx.lineWidth = 2.5;
-        ctx.lineCap = "round";
-        ctx.lineJoin = "round";
-        ctx.strokeStyle = "#1f2937";
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(0, 0, rect.width, rect.height);
-
-        if (snapshot) {
-            const img = new Image();
-            img.onload = () => {
-                ctx.drawImage(img, 0, 0, rect.width, rect.height);
-            };
-            img.src = snapshot;
-        } else if (!hasDrawnRef.current && initialValue) {
-            const img = new Image();
-            img.onload = () => {
-                ctx.drawImage(img, 0, 0, rect.width, rect.height);
-            };
-            img.src = initialValue;
-        }
-
-        lastSizeRef.current = { w: rect.width, h: rect.height };
-    }, [initialValue]);
-
+    // body scroll lock + overscroll guard
     useEffect(() => {
-        let rafId: number | null = null;
-        const schedule = () => {
-            if (rafId !== null) return;
-            rafId = window.requestAnimationFrame(() => {
-                rafId = null;
-                sizeCanvas();
-            });
-        };
-
-        // 初始 mount 後等 layout 穩定再 init
-        schedule();
-
-        const canvas = canvasRef.current;
-        let ro: ResizeObserver | null = null;
-        if (canvas && typeof ResizeObserver !== "undefined") {
-            ro = new ResizeObserver(schedule);
-            ro.observe(canvas);
-        }
-        window.addEventListener("resize", schedule);
-        window.addEventListener("orientationchange", schedule);
-        const vv = (typeof window !== "undefined" && window.visualViewport) || null;
-        vv?.addEventListener("resize", schedule);
-        vv?.addEventListener("scroll", schedule);
-
-        // body scroll lock + overscroll
         const prevOverflow = document.body.style.overflow;
         const prevOverscroll = document.body.style.overscrollBehavior;
         const prevTouchAction = document.body.style.touchAction;
         document.body.style.overflow = "hidden";
         document.body.style.overscrollBehavior = "contain";
         document.body.style.touchAction = "none";
-
         return () => {
-            if (rafId !== null) window.cancelAnimationFrame(rafId);
-            ro?.disconnect();
-            window.removeEventListener("resize", schedule);
-            window.removeEventListener("orientationchange", schedule);
-            vv?.removeEventListener("resize", schedule);
-            vv?.removeEventListener("scroll", schedule);
             document.body.style.overflow = prevOverflow;
             document.body.style.overscrollBehavior = prevOverscroll;
             document.body.style.touchAction = prevTouchAction;
         };
-    }, [sizeCanvas]);
+    }, []);
 
-    // T-ML-004: native addEventListener + passive:false
-    // React synthetic pointer events 預設註冊 passive listener，preventDefault 被 iOS Safari / Chrome 忽略 →
-    // 觸控時 browser 先吃 touch (scroll/zoom)，handler 不會跑 → 觸控簽名失效。
-    // 用 useEffect + native addEventListener({ passive: false }) 才能讓 preventDefault 生效。
+    // T-ML-005: 改用 signature_pad library
+    // T-ML-002/003/004 自寫 canvas + React/native pointer events 三輪改不掉 iOS Safari PWA 觸控失效；
+    // signature_pad（npm 週下載 1M+）已處理所有 cross-platform quirks。
     useEffect(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
 
-        const getPos = (e: PointerEvent) => {
+        const pad = new SignaturePadLib(canvas, {
+            backgroundColor: "rgb(255, 255, 255)",
+            penColor: "rgb(31, 41, 55)", // zinc-800
+            minWidth: 1,
+            maxWidth: 3,
+        });
+        padRef.current = pad;
+
+        const resizeCanvas = () => {
             const rect = canvas.getBoundingClientRect();
-            return { x: e.clientX - rect.left, y: e.clientY - rect.top };
-        };
-
-        const handleDown = (e: PointerEvent) => {
-            e.preventDefault();
-            try {
-                canvas.setPointerCapture(e.pointerId);
-            } catch {
-                // pointer may not be captureable on every browser
-            }
-            drawingRef.current = true;
-            hasDrawnRef.current = true;
-            const p = getPos(e);
-            lastPointRef.current = p;
+            if (rect.width === 0 || rect.height === 0) return;
+            const ratio = Math.max(window.devicePixelRatio || 1, 1);
+            // toData / fromData 保留筆觸，避免 resize 抹掉 user input
+            const data = pad.toData();
+            canvas.width = rect.width * ratio;
+            canvas.height = rect.height * ratio;
+            // 設 canvas.width 會 reset 2D transform，scale 是 fresh state 不會累積（T-ML-003 已驗）
             const ctx = canvas.getContext("2d");
-            if (ctx) {
-                ctx.beginPath();
-                ctx.arc(p.x, p.y, 1.25, 0, Math.PI * 2);
-                ctx.fillStyle = "#1f2937";
-                ctx.fill();
-                ctx.fillStyle = "#ffffff";
+            ctx?.scale(ratio, ratio);
+            if (data && data.length > 0) {
+                pad.fromData(data);
+            } else {
+                pad.clear();
             }
         };
 
-        const handleMove = (e: PointerEvent) => {
-            if (!drawingRef.current) return;
-            e.preventDefault();
-            const ctx = canvas.getContext("2d");
-            if (!ctx) return;
-            const p = getPos(e);
-            const last = lastPointRef.current;
-            if (last) {
-                ctx.beginPath();
-                ctx.moveTo(last.x, last.y);
-                ctx.lineTo(p.x, p.y);
-                ctx.stroke();
+        // 等 layout 穩定再 init — iOS Safari modal mount 後 viewport 偶爾未 ready 就量到 0×0
+        const rafId = window.requestAnimationFrame(() => {
+            resizeCanvas();
+            if (initialValue) {
+                pad.fromDataURL(initialValue).catch(() => {
+                    // 損壞的 dataUrl 不阻塞，留白讓 user 重簽
+                });
             }
-            lastPointRef.current = p;
-        };
+        });
 
-        const handleUp = (e: PointerEvent) => {
-            drawingRef.current = false;
-            lastPointRef.current = null;
-            try {
-                canvas.releasePointerCapture(e.pointerId);
-            } catch {
-                // pointer may already be released
-            }
-        };
-
-        canvas.addEventListener("pointerdown", handleDown, { passive: false });
-        canvas.addEventListener("pointermove", handleMove, { passive: false });
-        canvas.addEventListener("pointerup", handleUp);
-        canvas.addEventListener("pointercancel", handleUp);
-        canvas.addEventListener("pointerleave", handleUp);
+        const ro = new ResizeObserver(resizeCanvas);
+        ro.observe(canvas);
+        const vv = window.visualViewport;
+        vv?.addEventListener("resize", resizeCanvas);
+        vv?.addEventListener("scroll", resizeCanvas);
+        window.addEventListener("orientationchange", resizeCanvas);
 
         return () => {
-            canvas.removeEventListener("pointerdown", handleDown);
-            canvas.removeEventListener("pointermove", handleMove);
-            canvas.removeEventListener("pointerup", handleUp);
-            canvas.removeEventListener("pointercancel", handleUp);
-            canvas.removeEventListener("pointerleave", handleUp);
+            window.cancelAnimationFrame(rafId);
+            ro.disconnect();
+            vv?.removeEventListener("resize", resizeCanvas);
+            vv?.removeEventListener("scroll", resizeCanvas);
+            window.removeEventListener("orientationchange", resizeCanvas);
+            pad.off();
+            padRef.current = null;
         };
-    }, []);
+    }, [initialValue]);
 
     function handleClear() {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-        const rect = canvas.getBoundingClientRect();
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(0, 0, rect.width, rect.height);
-        hasDrawnRef.current = false;
+        padRef.current?.clear();
     }
 
     function handleDone() {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const dataUrl = canvas.toDataURL("image/png");
+        const pad = padRef.current;
+        if (!pad) return;
+        // 即便空白也回傳 dataUrl，保持與 T-ML-003/004 相同對外行為
+        const dataUrl = pad.toDataURL("image/png");
         onDone(dataUrl);
     }
 
@@ -294,7 +191,7 @@ function SignatureModal({
                 <canvas
                     ref={canvasRef}
                     className="flex-1 bg-white rounded-md touch-none"
-                    style={{ touchAction: "none" }}
+                    style={{ touchAction: "none", display: "block" }}
                 />
             </div>
 
