@@ -173,55 +173,80 @@ function SignatureModal({
         };
     }, [sizeCanvas]);
 
-    function getPos(e: React.PointerEvent<HTMLCanvasElement>) {
-        const canvas = canvasRef.current!;
-        const rect = canvas.getBoundingClientRect();
-        return { x: e.clientX - rect.left, y: e.clientY - rect.top };
-    }
+    // T-ML-004: native addEventListener + passive:false
+    // React synthetic pointer events 預設註冊 passive listener，preventDefault 被 iOS Safari / Chrome 忽略 →
+    // 觸控時 browser 先吃 touch (scroll/zoom)，handler 不會跑 → 觸控簽名失效。
+    // 用 useEffect + native addEventListener({ passive: false }) 才能讓 preventDefault 生效。
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
 
-    function handlePointerDown(e: React.PointerEvent<HTMLCanvasElement>) {
-        e.preventDefault();
-        canvasRef.current?.setPointerCapture(e.pointerId);
-        drawingRef.current = true;
-        hasDrawnRef.current = true;
-        const p = getPos(e);
-        lastPointRef.current = p;
-        // 點下去先畫一個圓點，避免單擊不留痕
-        const ctx = canvasRef.current?.getContext("2d");
-        if (ctx) {
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, 1.25, 0, Math.PI * 2);
-            ctx.fillStyle = "#1f2937";
-            ctx.fill();
-            ctx.fillStyle = "#ffffff";
-        }
-    }
+        const getPos = (e: PointerEvent) => {
+            const rect = canvas.getBoundingClientRect();
+            return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        };
 
-    function handlePointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
-        if (!drawingRef.current) return;
-        e.preventDefault();
-        const ctx = canvasRef.current?.getContext("2d");
-        if (!ctx) return;
-        const p = getPos(e);
-        const last = lastPointRef.current;
-        if (last) {
-            ctx.beginPath();
-            ctx.moveTo(last.x, last.y);
-            ctx.lineTo(p.x, p.y);
-            ctx.stroke();
-        }
-        lastPointRef.current = p;
-    }
+        const handleDown = (e: PointerEvent) => {
+            e.preventDefault();
+            try {
+                canvas.setPointerCapture(e.pointerId);
+            } catch {
+                // pointer may not be captureable on every browser
+            }
+            drawingRef.current = true;
+            hasDrawnRef.current = true;
+            const p = getPos(e);
+            lastPointRef.current = p;
+            const ctx = canvas.getContext("2d");
+            if (ctx) {
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 1.25, 0, Math.PI * 2);
+                ctx.fillStyle = "#1f2937";
+                ctx.fill();
+                ctx.fillStyle = "#ffffff";
+            }
+        };
 
-    function handlePointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
-        drawingRef.current = false;
-        lastPointRef.current = null;
-        try {
-            canvasRef.current?.releasePointerCapture(e.pointerId);
-        } catch {
-            // pointer may already be released
-        }
-    }
+        const handleMove = (e: PointerEvent) => {
+            if (!drawingRef.current) return;
+            e.preventDefault();
+            const ctx = canvas.getContext("2d");
+            if (!ctx) return;
+            const p = getPos(e);
+            const last = lastPointRef.current;
+            if (last) {
+                ctx.beginPath();
+                ctx.moveTo(last.x, last.y);
+                ctx.lineTo(p.x, p.y);
+                ctx.stroke();
+            }
+            lastPointRef.current = p;
+        };
+
+        const handleUp = (e: PointerEvent) => {
+            drawingRef.current = false;
+            lastPointRef.current = null;
+            try {
+                canvas.releasePointerCapture(e.pointerId);
+            } catch {
+                // pointer may already be released
+            }
+        };
+
+        canvas.addEventListener("pointerdown", handleDown, { passive: false });
+        canvas.addEventListener("pointermove", handleMove, { passive: false });
+        canvas.addEventListener("pointerup", handleUp);
+        canvas.addEventListener("pointercancel", handleUp);
+        canvas.addEventListener("pointerleave", handleUp);
+
+        return () => {
+            canvas.removeEventListener("pointerdown", handleDown);
+            canvas.removeEventListener("pointermove", handleMove);
+            canvas.removeEventListener("pointerup", handleUp);
+            canvas.removeEventListener("pointercancel", handleUp);
+            canvas.removeEventListener("pointerleave", handleUp);
+        };
+    }, []);
 
     function handleClear() {
         const canvas = canvasRef.current;
@@ -270,11 +295,6 @@ function SignatureModal({
                     ref={canvasRef}
                     className="flex-1 bg-white rounded-md touch-none"
                     style={{ touchAction: "none" }}
-                    onPointerDown={handlePointerDown}
-                    onPointerMove={handlePointerMove}
-                    onPointerUp={handlePointerUp}
-                    onPointerCancel={handlePointerUp}
-                    onPointerLeave={handlePointerUp}
                 />
             </div>
 
