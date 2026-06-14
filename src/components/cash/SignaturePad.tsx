@@ -104,26 +104,13 @@ function SignatureModal({
         const canvas = canvasRef.current;
         if (!canvas) return;
 
-        // T-ML-010: iOS Safari + PWA standalone 下 PointerEvent.clientX/Y 以 layout viewport
-        // 為基準（含 status bar），但 canvas.getBoundingClientRect() 以 visualViewport 為基準
-        // （不含 status bar）→ signature_pad 內部 `client - rect.top` 永遠偏掉 status bar 高度
-        // （iPhone notch 約 50-60px），造成「下筆位置固定 offset」。
-        // 直接 patch canvas.getBoundingClientRect 把 visualViewport.offsetTop/Left 加回去，
-        // 兩者基準對齊。桌面 vv.offsetTop/Left === 0 走 short-circuit 不影響原行為。
-        const origGetRect = canvas.getBoundingClientRect.bind(canvas);
-        canvas.getBoundingClientRect = (() => {
-            const vv = window.visualViewport;
-            if (!vv || (vv.offsetTop === 0 && vv.offsetLeft === 0)) {
-                return origGetRect();
-            }
-            const r = origGetRect();
-            return new DOMRect(
-                r.x + vv.offsetLeft,
-                r.y + vv.offsetTop,
-                r.width,
-                r.height,
-            );
-        }) as typeof canvas.getBoundingClientRect;
+        // T-ML-011: revert T-ML-010 的 canvas.getBoundingClientRect monkey-patch。
+        // owner 6/15 觀察「螢幕畫滿只佔簽名格一半」+「中心落差最大」鎖死 root cause =
+        // manifest "orientation": "portrait-primary" 把 PWA 鎖在 portrait，user 橫握手機時
+        // PWA 仍 portrait viewport（窄高）→ canvas CSS coords 跟 user 視覺橫向螢幕不一致 →
+        // touch 中心對 portrait viewport 不是 canvas 中心 → 線性 scale mismatch 越中心落差越大。
+        // vv offset patch 不是 root cause（只解 status bar offset、不解 scale mismatch）。
+        // 解法在 cash-manifest.json 改 "any" 讓 PWA 跟著手機方向旋轉。
 
         const pad = new SignaturePadLib(canvas, {
             backgroundColor: "rgb(255, 255, 255)",
