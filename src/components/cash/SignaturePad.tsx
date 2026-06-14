@@ -75,6 +75,13 @@ function SignatureModal({
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const padRef = useRef<SignaturePadLib | null>(null);
 
+    // T-ML-010: URL ?debug=1 觸發 debug overlay，顯示 touch / rect / vv.offset / dpr
+    // 給未來簽名座標問題用（不影響 production 體驗）
+    const debug =
+        typeof window !== "undefined" &&
+        window.location.search.includes("debug=1");
+    const [dbg, setDbg] = useState<string>("");
+
     // body scroll lock + overscroll guard
     // T-ML-006: 不要在 body 設 touchAction:'none' — iOS Safari PWA 會把 fixed-position modal 內
     // 的 touch 視為 page-level prevented，導致 canvas 收不到 touch event。只用 overflow:hidden +
@@ -96,6 +103,27 @@ function SignatureModal({
     useEffect(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
+
+        // T-ML-010: iOS Safari + PWA standalone 下 PointerEvent.clientX/Y 以 layout viewport
+        // 為基準（含 status bar），但 canvas.getBoundingClientRect() 以 visualViewport 為基準
+        // （不含 status bar）→ signature_pad 內部 `client - rect.top` 永遠偏掉 status bar 高度
+        // （iPhone notch 約 50-60px），造成「下筆位置固定 offset」。
+        // 直接 patch canvas.getBoundingClientRect 把 visualViewport.offsetTop/Left 加回去，
+        // 兩者基準對齊。桌面 vv.offsetTop/Left === 0 走 short-circuit 不影響原行為。
+        const origGetRect = canvas.getBoundingClientRect.bind(canvas);
+        canvas.getBoundingClientRect = (() => {
+            const vv = window.visualViewport;
+            if (!vv || (vv.offsetTop === 0 && vv.offsetLeft === 0)) {
+                return origGetRect();
+            }
+            const r = origGetRect();
+            return new DOMRect(
+                r.x + vv.offsetLeft,
+                r.y + vv.offsetTop,
+                r.width,
+                r.height,
+            );
+        }) as typeof canvas.getBoundingClientRect;
 
         const pad = new SignaturePadLib(canvas, {
             backgroundColor: "rgb(255, 255, 255)",
@@ -153,15 +181,31 @@ function SignatureModal({
         vv?.addEventListener("scroll", resizeCanvas);
         window.addEventListener("orientationchange", resizeCanvas);
 
+        // T-ML-010: debug overlay listener — URL ?debug=1 才 attach
+        let debugPointerHandler: ((e: PointerEvent) => void) | null = null;
+        if (debug) {
+            debugPointerHandler = (e: PointerEvent) => {
+                const r = canvas.getBoundingClientRect();
+                const vv2 = window.visualViewport;
+                setDbg(
+                    `touch=(${e.clientX.toFixed(0)},${e.clientY.toFixed(0)}) rect=(${r.left.toFixed(0)},${r.top.toFixed(0)},${r.width.toFixed(0)}x${r.height.toFixed(0)}) vv.offset=(${vv2?.offsetLeft || 0},${vv2?.offsetTop || 0}) dpr=${window.devicePixelRatio}`,
+                );
+            };
+            canvas.addEventListener("pointerdown", debugPointerHandler);
+        }
+
         return () => {
             window.cancelAnimationFrame(rafId);
             vv?.removeEventListener("resize", resizeCanvas);
             vv?.removeEventListener("scroll", resizeCanvas);
             window.removeEventListener("orientationchange", resizeCanvas);
+            if (debugPointerHandler) {
+                canvas.removeEventListener("pointerdown", debugPointerHandler);
+            }
             pad.off();
             padRef.current = null;
         };
-    }, [initialValue]);
+    }, [initialValue, debug]);
 
     function handleClear() {
         padRef.current?.clear();
@@ -196,6 +240,13 @@ function SignatureModal({
                     ✕
                 </button>
             </div>
+
+            {/* T-ML-010: debug overlay — URL ?debug=1 觸發，顯示 touch / rect / vv.offset / dpr */}
+            {debug && dbg && (
+                <div className="fixed top-16 left-2 right-2 z-[60] bg-fuchsia-600 text-white text-[10px] px-2 py-1 rounded font-mono break-all">
+                    {dbg}
+                </div>
+            )}
 
             {/* T-ML-009: 直握手機 UX 提示 — T-ML-008 CSS rotate 走不通改純 prompt
                 只 portrait + 手機尺寸顯示，landscape 跟桌面/iPad 自動隱藏 */}
