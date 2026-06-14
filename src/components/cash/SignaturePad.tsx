@@ -200,10 +200,79 @@ function SignatureModal({
 
     function handleDone() {
         const pad = padRef.current;
-        if (!pad) return;
-        // 即便空白也回傳 dataUrl，保持與 T-ML-003/004 相同對外行為
-        const dataUrl = pad.toDataURL("image/png");
-        onDone(dataUrl);
+        const canvas = canvasRef.current;
+        if (!pad || !canvas) return;
+
+        // T-ML-012: 空白簽名 → 回傳 "" 不存爛 dataURL
+        // owner 6/15 觀察：之前空白也回 toDataURL 會塞一張白 PNG，
+        // CashCountForm 用 `!signature` 判斷，"" 跟 null 都 falsy → 行為一致
+        if (pad.isEmpty()) {
+            onDone("");
+            return;
+        }
+
+        // T-ML-012: 偵測筆跡 bbox + crop 空白
+        // owner 6/15 Discord「簽完的東西變得超級小」+ 截圖。Root cause =
+        // pad.toDataURL 拿整個 canvas（橫向 modal 寬 1000-1200px、筆跡只佔中間 50px）
+        // → 大量空白 → 縮到 thumbnail h-24 後筆跡只剩 2-3px。
+        // 解法 = pixel scan 找非白邊界 → 重畫到新 canvas + padding → output。
+        const ctx = canvas.getContext("2d");
+        if (!ctx) {
+            onDone(pad.toDataURL("image/png"));
+            return;
+        }
+
+        const W = canvas.width;
+        const H = canvas.height;
+        const imageData = ctx.getImageData(0, 0, W, H);
+        const data = imageData.data;
+
+        let minX = W;
+        let minY = H;
+        let maxX = -1;
+        let maxY = -1;
+        // 步進 2 加速：簽名筆跡寬度 1-3px、步進 2 仍可命中
+        for (let y = 0; y < H; y += 2) {
+            for (let x = 0; x < W; x += 2) {
+                const i = (y * W + x) * 4;
+                if (data[i] < 250 || data[i + 1] < 250 || data[i + 2] < 250) {
+                    if (x < minX) minX = x;
+                    if (y < minY) minY = y;
+                    if (x > maxX) maxX = x;
+                    if (y > maxY) maxY = y;
+                }
+            }
+        }
+
+        // 找不到非白 pixel → 不裁切（保險，理論上 isEmpty=false 不會走到這）
+        if (maxX < 0 || maxY < 0) {
+            onDone(pad.toDataURL("image/png"));
+            return;
+        }
+
+        // 補 padding：max(20, 短邊 3%)，避免 thumbnail 緊貼邊框難看
+        const padding = Math.max(20, Math.round(Math.min(W, H) * 0.03));
+        minX = Math.max(0, minX - padding);
+        minY = Math.max(0, minY - padding);
+        maxX = Math.min(W - 1, maxX + padding);
+        maxY = Math.min(H - 1, maxY + padding);
+        const cw = maxX - minX + 1;
+        const ch = maxY - minY + 1;
+
+        // 重畫到新 canvas（白底）
+        const tmp = document.createElement("canvas");
+        tmp.width = cw;
+        tmp.height = ch;
+        const tmpCtx = tmp.getContext("2d");
+        if (!tmpCtx) {
+            onDone(pad.toDataURL("image/png"));
+            return;
+        }
+        tmpCtx.fillStyle = "#ffffff";
+        tmpCtx.fillRect(0, 0, cw, ch);
+        tmpCtx.drawImage(canvas, minX, minY, cw, ch, 0, 0, cw, ch);
+
+        onDone(tmp.toDataURL("image/png"));
     }
 
     return (
