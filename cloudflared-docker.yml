@@ -2,6 +2,9 @@ tunnel: 81173a65-2be8-4c15-bc91-50ac0fcb8653
 credentials-file: /etc/cloudflared/81173a65-2be8-4c15-bc91-50ac0fcb8653.json
 
 ingress:
+  # T-ML-002 員工現金清點 PWA — 子網域同個 Next.js（middleware Host 路由）
+  - hostname: cash.hongjixuan-market-ledger.com
+    service: http://market-ledger:3000
   - hostname: hongjixuan-market-ledger.com
     service: http://market-ledger:3000
   - service: http_status:404

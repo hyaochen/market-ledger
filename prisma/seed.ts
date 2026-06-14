@@ -298,12 +298,113 @@ async function main() {
             update: {},
             create: { userId: tenantAdmin.id, roleId: adminRole.id },
         })
+
+        // ─── 10. CashCount 模組 seed（T-ML-002）──────────────────────
+        // 帳號可用 .env 覆蓋；預設為老闆要求的 mom / 1
+        const writeRole = await prisma.role.findUnique({ where: { code: 'write' } })
+        const pingtungLocation = await prisma.location.findFirst({
+            where: { name: '屏東攤位', tenantId },
+        })
+
+        if (writeRole && pingtungLocation) {
+            const momUsername = process.env.CASH_ADMIN_USERNAME || 'mom'
+            const momPassword = process.env.CASH_ADMIN_PASSWORD || 'mom123'
+            const employeeUsername = process.env.CASH_EMPLOYEE_USERNAME || '1'
+            const employeePassword = process.env.CASH_EMPLOYEE_PASSWORD || '1'
+
+            if (!process.env.CASH_ADMIN_PASSWORD) {
+                console.warn('⚠️  WARNING: CASH_ADMIN_PASSWORD not set, using default "mom123".')
+            }
+            if (!process.env.CASH_EMPLOYEE_PASSWORD) {
+                console.warn('⚠️  WARNING: CASH_EMPLOYEE_PASSWORD not set, using default "1".')
+            }
+
+            // admin: mom
+            let momUser = await prisma.user.findFirst({
+                where: { username: momUsername, tenantId },
+            })
+            const momHashed = hashPassword(momPassword)
+            if (momUser) {
+                await prisma.user.update({
+                    where: { id: momUser.id },
+                    data: { password: momHashed, status: true, locationId: pingtungLocation.id },
+                })
+            } else {
+                momUser = await prisma.user.create({
+                    data: {
+                        username: momUsername,
+                        password: momHashed,
+                        realName: '洪怜俼',
+                        tenantId,
+                        locationId: pingtungLocation.id,
+                        status: true,
+                    },
+                })
+            }
+            await prisma.userRole.upsert({
+                where: { userId_roleId: { userId: momUser.id, roleId: adminRole.id } },
+                update: {},
+                create: { userId: momUser.id, roleId: adminRole.id },
+            })
+
+            // 員工: 1
+            let employeeUser = await prisma.user.findFirst({
+                where: { username: employeeUsername, tenantId },
+            })
+            const empHashed = hashPassword(employeePassword)
+            if (employeeUser) {
+                await prisma.user.update({
+                    where: { id: employeeUser.id },
+                    data: { password: empHashed, status: true, locationId: pingtungLocation.id },
+                })
+            } else {
+                employeeUser = await prisma.user.create({
+                    data: {
+                        username: employeeUsername,
+                        password: empHashed,
+                        realName: '清點員',
+                        tenantId,
+                        locationId: pingtungLocation.id,
+                        status: true,
+                    },
+                })
+            }
+            await prisma.userRole.upsert({
+                where: { userId_roleId: { userId: employeeUser.id, roleId: writeRole.id } },
+                update: {},
+                create: { userId: employeeUser.id, roleId: writeRole.id },
+            })
+
+            // 預設 checklist items
+            const defaultChecklist = [
+                { name: '瓦斯兩桶', sortOrder: 1 },
+                { name: '錢盒櫃要上鎖', sortOrder: 2 },
+            ]
+            for (const item of defaultChecklist) {
+                const existing = await prisma.checklistItem.findFirst({
+                    where: { tenantId, name: item.name },
+                })
+                if (existing) {
+                    await prisma.checklistItem.update({
+                        where: { id: existing.id },
+                        data: { sortOrder: item.sortOrder, isActive: true },
+                    })
+                } else {
+                    await prisma.checklistItem.create({
+                        data: { ...item, tenantId, isActive: true },
+                    })
+                }
+            }
+        } else {
+            console.warn('⚠️  CashCount seed skipped: missing write role or 屏東攤位 location.')
+        }
     }
 
     console.log('✅ Seed data initialized (multi-tenant)')
     console.log(`   Tenant: ${defaultTenant.name} (${defaultTenant.code})`)
     console.log(`   Super Admin: superadmin`)
     console.log(`   Tenant Admin: admin`)
+    console.log(`   Cash admin: mom / Cash employee: 1`)
 }
 
 main()

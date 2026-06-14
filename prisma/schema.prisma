@@ -33,6 +33,8 @@ model Tenant {
   entryTemplates EntryTemplate[]
   operationLogs  OperationLog[]
   systemConfigs  SystemConfig[]
+  cashCounts     CashCount[]
+  checklistItems ChecklistItem[]
 }
 
 // 使用者模型 - 用於身份驗證和權限管理
@@ -67,6 +69,7 @@ model User {
   entries   Entry[]
   logs      OperationLog[]
   templates EntryTemplate[]
+  cashCounts CashCount[]
 
   @@unique([username, tenantId])
   @@index([tenantId])
@@ -267,6 +270,7 @@ model Location {
 
   revenues Revenue[]
   users    User[] // 在此場所工作的員工
+  cashCounts CashCount[]
 
   @@unique([name, tenantId])
   @@index([tenantId])
@@ -332,12 +336,85 @@ model Revenue {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  location Location @relation(fields: [locationId], references: [id])
+  location   Location    @relation(fields: [locationId], references: [id])
+  cashCounts CashCount[]
 
   @@unique([date, locationId, tenantId])
   @@index([date])
   @@index([tenantId])
   @@index([tenantId, date])
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// CashCount 模組（T-ML-002）— 員工每日現金清點 PWA + 動作 checklist
+// ──────────────────────────────────────────────────────────────────────────
+
+// 每日清點主表：錢盒 / 備用金 / 營業現金 / 支出 + 簽名 + 自動同步 Revenue
+model CashCount {
+  id                    String   @id @default(cuid())
+  date                  DateTime // 該天日期（純日期、不含時分）
+  tenantId              String
+  locationId            String   // 預設屏東攤位
+  attendantId           String   // 清點人 user.id
+  supervisorName        String   @default("洪怜俼")
+  cashBoxJson           String   // JSON: {"500":n,"100":n,"50":n,"10":n,"5":n}
+  cashBoxTotal          Float
+  reserveJson           String   // JSON: 同上
+  reserveTotal          Float
+  salesJson             String   // JSON: {"1000":n,"500":n,"100":n,"50":n,"10":n,"5":n}
+  salesTotal            Float
+  expensesJson          String   // JSON array: [{"item","note","amount"}]
+  expensesTotal         Float
+  totalSales            Float    // 今日營業額 = salesTotal + expensesTotal
+  signatureDataUrl      String   // base64 data URL（清點人簽名）
+  supervisorSignDataUrl String?  // 覆核人簽名（同 signatureDataUrl）
+  handoverTime          DateTime // 簽名完成時自動戳
+  revenueId             String?  // 自動寫進 Revenue 表後的 Revenue.id
+  note                  String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  tenant     Tenant   @relation(fields: [tenantId], references: [id])
+  location   Location @relation(fields: [locationId], references: [id])
+  attendant  User     @relation(fields: [attendantId], references: [id])
+  revenue    Revenue? @relation(fields: [revenueId], references: [id])
+  checklistDones CashCountChecklistDone[]
+
+  @@unique([date, locationId, tenantId])
+  @@index([date])
+  @@index([attendantId])
+  @@index([tenantId])
+  @@index([tenantId, date])
+}
+
+// 動作清單（admin 可 CRUD）— 例：「瓦斯兩桶」「錢盒櫃要上鎖」
+model ChecklistItem {
+  id        String   @id @default(cuid())
+  tenantId  String
+  name      String
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+  dones  CashCountChecklistDone[]
+
+  @@index([tenantId])
+}
+
+// 清點 ↔ 動作勾選紀錄
+model CashCountChecklistDone {
+  id              String  @id @default(cuid())
+  cashCountId     String
+  checklistItemId String
+  done            Boolean @default(false)
+
+  cashCount CashCount     @relation(fields: [cashCountId], references: [id], onDelete: Cascade)
+  item      ChecklistItem @relation(fields: [checklistItemId], references: [id])
+
+  @@unique([cashCountId, checklistItemId])
+  @@index([checklistItemId])
 }
 
 // 操作日誌模型
