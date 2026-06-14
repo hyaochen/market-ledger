@@ -76,17 +76,17 @@ function SignatureModal({
     const padRef = useRef<SignaturePadLib | null>(null);
 
     // body scroll lock + overscroll guard
+    // T-ML-006: 不要在 body 設 touchAction:'none' — iOS Safari PWA 會把 fixed-position modal 內
+    // 的 touch 視為 page-level prevented，導致 canvas 收不到 touch event。只用 overflow:hidden +
+    // overscrollBehavior:contain 鎖滾動；touchAction:'none' 由 canvas 自己負責。
     useEffect(() => {
         const prevOverflow = document.body.style.overflow;
         const prevOverscroll = document.body.style.overscrollBehavior;
-        const prevTouchAction = document.body.style.touchAction;
         document.body.style.overflow = "hidden";
         document.body.style.overscrollBehavior = "contain";
-        document.body.style.touchAction = "none";
         return () => {
             document.body.style.overflow = prevOverflow;
             document.body.style.overscrollBehavior = prevOverscroll;
-            document.body.style.touchAction = prevTouchAction;
         };
     }, []);
 
@@ -168,7 +168,6 @@ function SignatureModal({
             className="fixed inset-0 z-50 bg-black/95 flex flex-col"
             role="dialog"
             aria-modal
-            style={{ touchAction: "none" }}
         >
             {/* 標題列：右上角浮動關閉按鈕（醒目） */}
             <div className="flex items-center justify-between px-4 py-3 text-white">
