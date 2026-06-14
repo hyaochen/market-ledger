@@ -105,7 +105,20 @@ function SignatureModal({
         });
         padRef.current = pad;
 
+        // T-ML-007: 拖曳期間禁止 resize，避免 canvas.width 改變抹掉正在繪製的 stroke。
+        // owner 6/14 22:47 desktop 症狀「點第一下有點 拖曳沒線」root cause 即此 —
+        // ResizeObserver 在拖曳中被觸發 → toData snapshot（不含進行中的 stroke）→ canvas.width=
+        // 清空繪圖 → fromData restore → 新 stroke state 也被 reset。
+        let isDrawing = false;
+        pad.addEventListener("beginStroke", () => {
+            isDrawing = true;
+        });
+        pad.addEventListener("endStroke", () => {
+            isDrawing = false;
+        });
+
         const resizeCanvas = () => {
+            if (isDrawing) return; // 拖曳中不 resize，避免抹掉 stroke
             const rect = canvas.getBoundingClientRect();
             if (rect.width === 0 || rect.height === 0) return;
             const ratio = Math.max(window.devicePixelRatio || 1, 1);
@@ -133,8 +146,9 @@ function SignatureModal({
             }
         });
 
-        const ro = new ResizeObserver(resizeCanvas);
-        ro.observe(canvas);
+        // T-ML-007: 拿掉 ResizeObserver — modal 是 fixed inset-0，CSS rect 不會隨內容變動，
+        // ResizeObserver 多此一舉而且**會在拖曳期間誤觸發**。改靠 visualViewport.resize +
+        // orientationchange 應付 iOS Safari address bar 動態高度 + 螢幕旋轉就夠。
         const vv = window.visualViewport;
         vv?.addEventListener("resize", resizeCanvas);
         vv?.addEventListener("scroll", resizeCanvas);
@@ -142,7 +156,6 @@ function SignatureModal({
 
         return () => {
             window.cancelAnimationFrame(rafId);
-            ro.disconnect();
             vv?.removeEventListener("resize", resizeCanvas);
             vv?.removeEventListener("scroll", resizeCanvas);
             window.removeEventListener("orientationchange", resizeCanvas);
