@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import SignaturePad from "./SignaturePad";
 import { submitCashCount } from "@/app/actions/cash";
@@ -12,6 +12,7 @@ type ChecklistItemDef = {
 
 type Props = {
     today: string; // YYYY-MM-DD
+    attendantId: string;
     attendantName: string;
     locationName: string;
     checklistItems: ChecklistItemDef[];
@@ -29,10 +30,28 @@ const SALES_DENOMS = [1000, 500, 100, 50, 10, 5] as const;
 
 const INITIAL_EXPENSE_ROWS = 6;
 
+const DRAFT_SCHEMA_VERSION = 1;
+
 type ExpenseRow = { item: string; note: string; amount: string };
+
+type DraftPayload = {
+    v: number;
+    cashBox: Record<string, string>;
+    reserve: Record<string, string>;
+    sales: Record<string, string>;
+    expenses: ExpenseRow[];
+    checkedIds: string[];
+    signature: string | null;
+    note: string;
+    savedAt: number;
+};
 
 function emptyDenomState(denoms: readonly number[]): Record<string, string> {
     return Object.fromEntries(denoms.map((d) => [String(d), ""])) as Record<string, string>;
+}
+
+function emptyExpenses(): ExpenseRow[] {
+    return Array.from({ length: INITIAL_EXPENSE_ROWS }, () => ({ item: "", note: "", amount: "" }));
 }
 
 function toNumberMap(map: Record<string, string>): Record<string, number> {
@@ -48,21 +67,138 @@ function ntFormat(n: number): string {
     return "NT$ " + n.toLocaleString("zh-Hant-TW");
 }
 
-export default function CashCountForm({ today, attendantName, locationName, checklistItems }: Props) {
+function draftKey(attendantId: string, date: string) {
+    return `cashcount-draft:${attendantId}:${date}`;
+}
+
+function readDraft(key: string): DraftPayload | null {
+    if (typeof window === "undefined") return null;
+    try {
+        const raw = window.sessionStorage.getItem(key);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw) as DraftPayload;
+        if (!parsed || parsed.v !== DRAFT_SCHEMA_VERSION) return null;
+        return parsed;
+    } catch {
+        return null;
+    }
+}
+
+function writeDraft(key: string, payload: DraftPayload) {
+    if (typeof window === "undefined") return;
+    try {
+        window.sessionStorage.setItem(key, JSON.stringify(payload));
+    } catch {
+        // quota / private mode — silently skip
+    }
+}
+
+function clearDraft(key: string) {
+    if (typeof window === "undefined") return;
+    try {
+        window.sessionStorage.removeItem(key);
+    } catch {
+        // ignore
+    }
+}
+
+function draftHasContent(p: DraftPayload): boolean {
+    if (p.signature) return true;
+    if (p.note.trim().length > 0) return true;
+    if (p.checkedIds.length > 0) return true;
+    if (Object.values(p.cashBox).some((v) => v && Number(v) > 0)) return true;
+    if (Object.values(p.reserve).some((v) => v && Number(v) > 0)) return true;
+    if (Object.values(p.sales).some((v) => v && Number(v) > 0)) return true;
+    if (p.expenses.some((r) => r.item.trim() || r.note.trim() || (Number(r.amount) || 0) > 0)) return true;
+    return false;
+}
+
+export default function CashCountForm({ today, attendantId, attendantName, locationName, checklistItems }: Props) {
     const router = useRouter();
     const [activeTab, setActiveTab] = useState<"cash" | "checklist">("cash");
     const [cashBox, setCashBox] = useState<Record<string, string>>(emptyDenomState(CASH_BOX_DENOMS));
     const [reserve, setReserve] = useState<Record<string, string>>(emptyDenomState(RESERVE_DENOMS));
     const [sales, setSales] = useState<Record<string, string>>(emptyDenomState(SALES_DENOMS));
-    const [expenses, setExpenses] = useState<ExpenseRow[]>(
-        Array.from({ length: INITIAL_EXPENSE_ROWS }, () => ({ item: "", note: "", amount: "" })),
-    );
+    const [expenses, setExpenses] = useState<ExpenseRow[]>(emptyExpenses);
     const [checkedIds, setCheckedIds] = useState<Set<string>>(new Set());
     const [signature, setSignature] = useState<string | null>(null);
     const [note, setNote] = useState("");
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState<string | null>(null);
+    const [restoredAt, setRestoredAt] = useState<number | null>(null);
     const [isPending, startTransition] = useTransition();
+
+    const key = useMemo(() => draftKey(attendantId, today), [attendantId, today]);
+    const hasHydratedRef = useRef(false);
+    const submittedRef = useRef(false);
+
+    // 1. Mount 後從 sessionStorage 還原
+    useEffect(() => {
+        const draft = readDraft(key);
+        if (draft && draftHasContent(draft)) {
+            setCashBox({ ...emptyDenomState(CASH_BOX_DENOMS), ...draft.cashBox });
+            setReserve({ ...emptyDenomState(RESERVE_DENOMS), ...draft.reserve });
+            setSales({ ...emptyDenomState(SALES_DENOMS), ...draft.sales });
+            if (Array.isArray(draft.expenses) && draft.expenses.length > 0) {
+                setExpenses(draft.expenses);
+            }
+            setCheckedIds(new Set(draft.checkedIds));
+            setSignature(draft.signature);
+            setNote(draft.note);
+            setRestoredAt(draft.savedAt);
+        }
+        hasHydratedRef.current = true;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [key]);
+
+    // 2. 任何欄位變動 → debounced 寫入 sessionStorage
+    useEffect(() => {
+        if (!hasHydratedRef.current) return;
+        if (submittedRef.current) return;
+        const payload: DraftPayload = {
+            v: DRAFT_SCHEMA_VERSION,
+            cashBox,
+            reserve,
+            sales,
+            expenses,
+            checkedIds: Array.from(checkedIds),
+            signature,
+            note,
+            savedAt: Date.now(),
+        };
+        const isEmpty = !draftHasContent(payload);
+        const t = window.setTimeout(() => {
+            if (isEmpty) {
+                clearDraft(key);
+            } else {
+                writeDraft(key, payload);
+            }
+        }, 300);
+        return () => window.clearTimeout(t);
+    }, [key, cashBox, reserve, sales, expenses, checkedIds, signature, note]);
+
+    // 3. beforeunload guard
+    const hasDirty = useMemo(() => {
+        return (
+            !!signature ||
+            note.trim().length > 0 ||
+            checkedIds.size > 0 ||
+            Object.values(cashBox).some((v) => v && Number(v) > 0) ||
+            Object.values(reserve).some((v) => v && Number(v) > 0) ||
+            Object.values(sales).some((v) => v && Number(v) > 0) ||
+            expenses.some((r) => r.item.trim() || r.note.trim() || (Number(r.amount) || 0) > 0)
+        );
+    }, [signature, note, checkedIds, cashBox, reserve, sales, expenses]);
+
+    useEffect(() => {
+        function handler(e: BeforeUnloadEvent) {
+            if (!hasDirty || submittedRef.current) return;
+            e.preventDefault();
+            e.returnValue = "";
+        }
+        window.addEventListener("beforeunload", handler);
+        return () => window.removeEventListener("beforeunload", handler);
+    }, [hasDirty]);
 
     const cashBoxTotal = useMemo(() => sumDenoms(cashBox), [cashBox]);
     const reserveTotal = useMemo(() => sumDenoms(reserve), [reserve]);
@@ -76,8 +212,8 @@ export default function CashCountForm({ today, attendantName, locationName, chec
     const cashBoxDiff = cashBoxTotal === 0 ? null : cashBoxTotal - CASH_BOX_TARGET_TOTAL;
     const reserveDiff = reserveTotal === 0 ? null : reserveTotal - RESERVE_TARGET_TOTAL;
 
-    function updateExpense(i: number, key: keyof ExpenseRow, v: string) {
-        setExpenses((prev) => prev.map((r, idx) => (idx === i ? { ...r, [key]: v } : r)));
+    function updateExpense(i: number, k: keyof ExpenseRow, v: string) {
+        setExpenses((prev) => prev.map((r, idx) => (idx === i ? { ...r, [k]: v } : r)));
     }
 
     function addExpenseRow() {
@@ -91,6 +227,19 @@ export default function CashCountForm({ today, attendantName, locationName, chec
             else next.add(id);
             return next;
         });
+    }
+
+    function handleDiscardDraft() {
+        if (!window.confirm("確定要丟棄已自動還原的草稿？本表單會清空。")) return;
+        setCashBox(emptyDenomState(CASH_BOX_DENOMS));
+        setReserve(emptyDenomState(RESERVE_DENOMS));
+        setSales(emptyDenomState(SALES_DENOMS));
+        setExpenses(emptyExpenses());
+        setCheckedIds(new Set());
+        setSignature(null);
+        setNote("");
+        clearDraft(key);
+        setRestoredAt(null);
     }
 
     function handleSubmit() {
@@ -126,6 +275,8 @@ export default function CashCountForm({ today, attendantName, locationName, chec
                 setError(res.error || "儲存失敗");
                 return;
             }
+            submittedRef.current = true;
+            clearDraft(key);
             setSuccess(`✅ 已儲存（今日營業額 NT$ ${totalSales.toLocaleString()}），同步寫入 Revenue。`);
             router.refresh();
             setTimeout(() => router.push("/cash/history"), 1200);
@@ -134,6 +285,25 @@ export default function CashCountForm({ today, attendantName, locationName, chec
 
     return (
         <div className="p-4 space-y-4">
+            {/* 草稿還原 toast */}
+            {restoredAt !== null && (
+                <div className="bg-sky-50 border border-sky-300 text-sky-900 rounded-md p-3 text-sm flex items-start justify-between gap-3">
+                    <div className="flex-1">
+                        <div className="font-semibold">📋 找到上次未完成的清點，已自動還原</div>
+                        <div className="text-xs text-sky-700 mt-0.5">
+                            儲存時間：{new Date(restoredAt).toLocaleString("zh-Hant-TW")}
+                        </div>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={handleDiscardDraft}
+                        className="px-3 py-1.5 bg-white border border-sky-400 text-sky-700 rounded-md text-xs font-semibold whitespace-nowrap"
+                    >
+                        丟棄草稿
+                    </button>
+                </div>
+            )}
+
             {/* 表頭 */}
             <div className="bg-amber-100 border border-amber-300 rounded-md p-3 text-sm">
                 <div className="grid grid-cols-3 gap-2">
@@ -165,7 +335,6 @@ export default function CashCountForm({ today, attendantName, locationName, chec
 
             {activeTab === "cash" && (
                 <div className="space-y-4">
-                    {/* 錢盒 */}
                     <DenomTable
                         title="① 錢盒清點"
                         subtitle={`目標 NT$ 6,580（面額張數固定）`}
@@ -177,7 +346,6 @@ export default function CashCountForm({ today, attendantName, locationName, chec
                         diff={cashBoxDiff}
                     />
 
-                    {/* 備用金 */}
                     <DenomTable
                         title="② 備用金清點"
                         subtitle={`目標 NT$ 7,600（總額固定）`}
@@ -189,7 +357,6 @@ export default function CashCountForm({ today, attendantName, locationName, chec
                         diff={reserveDiff}
                     />
 
-                    {/* 營業現金 */}
                     <DenomTable
                         title="③ 當日營業現金"
                         subtitle="扣回錢盒 6,580 / 備用金 7,600 後剩下的現金"
@@ -201,7 +368,6 @@ export default function CashCountForm({ today, attendantName, locationName, chec
                         diff={null}
                     />
 
-                    {/* 支出 */}
                     <section className="border-2 border-zinc-300 rounded-md overflow-hidden">
                         <header className="bg-amber-100 px-3 py-2 border-b-2 border-zinc-300 flex items-center justify-between">
                             <h3 className="font-bold text-sm">④ 當天現金支出明細</h3>
@@ -251,7 +417,6 @@ export default function CashCountForm({ today, attendantName, locationName, chec
                         </div>
                     </section>
 
-                    {/* 今日營業額 */}
                     <div className="border-4 border-double border-zinc-800 bg-yellow-50 px-5 py-4 rounded-md flex items-center justify-between">
                         <div>
                             <div className="text-base font-bold">今日營業額</div>
@@ -291,7 +456,6 @@ export default function CashCountForm({ today, attendantName, locationName, chec
                 </div>
             )}
 
-            {/* 簽名 + 備註 + 送出（無論 tab 都顯示） */}
             <section className="space-y-3 border-t-2 border-zinc-200 pt-4">
                 <div className="grid grid-cols-2 gap-3">
                     <SignaturePad label="清點人簽名" value={signature} onChange={setSignature} />

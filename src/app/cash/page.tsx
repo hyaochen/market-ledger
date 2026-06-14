@@ -26,6 +26,7 @@ export default async function CashEntryPage() {
     return (
         <CashCountForm
             today={today}
+            attendantId={user.id}
             attendantName={user.displayName}
             locationName={locationName}
             checklistItems={checklistItems.map((c) => ({ id: c.id, name: c.name }))}

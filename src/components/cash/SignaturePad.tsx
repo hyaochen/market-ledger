@@ -8,15 +8,6 @@ type Props = {
     onChange: (dataUrl: string | null) => void;
 };
 
-/**
- * Signature pad with dblclick-to-fullscreen-landscape modal.
- *
- * 操作流程：
- * 1. 預設顯示 placeholder（「✍ 點兩下開始簽名」）或已存的簽名縮圖
- * 2. 雙擊 → 全螢幕 modal（CSS rotate 90deg 模擬橫向）
- * 3. canvas pointer events 觸控繪圖
- * 4. 「完成」→ toDataURL → onChange dataURL + 關閉 modal
- */
 export default function SignaturePad({ label, value, onChange }: Props) {
     const [open, setOpen] = useState(false);
 
@@ -30,8 +21,6 @@ export default function SignaturePad({ label, value, onChange }: Props) {
                 className="h-24 sm:h-28 border-2 border-dashed border-zinc-400 rounded-md bg-white/70 flex items-center justify-center cursor-pointer select-none"
                 onDoubleClick={() => setOpen(true)}
                 onClick={() => {
-                    // Touch 裝置雙擊有時收不到 dblclick — 單擊也讓使用者進
-                    // 但只在沒簽過時自動開（避免誤觸清掉）
                     if (!value) setOpen(true);
                 }}
                 role="button"
@@ -85,43 +74,102 @@ function SignatureModal({
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const drawingRef = useRef(false);
     const lastPointRef = useRef<{ x: number; y: number } | null>(null);
+    const hasDrawnRef = useRef(false);
+    const lastSizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
 
     const sizeCanvas = useCallback(() => {
         const canvas = canvasRef.current;
         if (!canvas) return;
         const rect = canvas.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return;
         const dpr = window.devicePixelRatio || 1;
-        canvas.width = rect.width * dpr;
-        canvas.height = rect.height * dpr;
         const ctx = canvas.getContext("2d");
-        if (ctx) {
-            ctx.scale(dpr, dpr);
-            ctx.lineWidth = 2.5;
-            ctx.lineCap = "round";
-            ctx.lineJoin = "round";
-            ctx.strokeStyle = "#1f2937";
-            ctx.fillStyle = "#ffffff";
-            ctx.fillRect(0, 0, rect.width, rect.height);
+        if (!ctx) return;
 
-            // 還原既有簽名
-            if (initialValue) {
-                const img = new Image();
-                img.onload = () => {
-                    ctx.drawImage(img, 0, 0, rect.width, rect.height);
-                };
-                img.src = initialValue;
+        const prevW = lastSizeRef.current.w;
+        const prevH = lastSizeRef.current.h;
+        const isResize = prevW !== 0 && (prevW !== rect.width || prevH !== rect.height);
+
+        let snapshot: string | null = null;
+        if (isResize && hasDrawnRef.current) {
+            try {
+                snapshot = canvas.toDataURL("image/png");
+            } catch {
+                snapshot = null;
             }
         }
+
+        canvas.width = Math.round(rect.width * dpr);
+        canvas.height = Math.round(rect.height * dpr);
+
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.lineWidth = 2.5;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.strokeStyle = "#1f2937";
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, rect.width, rect.height);
+
+        if (snapshot) {
+            const img = new Image();
+            img.onload = () => {
+                ctx.drawImage(img, 0, 0, rect.width, rect.height);
+            };
+            img.src = snapshot;
+        } else if (!hasDrawnRef.current && initialValue) {
+            const img = new Image();
+            img.onload = () => {
+                ctx.drawImage(img, 0, 0, rect.width, rect.height);
+            };
+            img.src = initialValue;
+        }
+
+        lastSizeRef.current = { w: rect.width, h: rect.height };
     }, [initialValue]);
 
     useEffect(() => {
-        sizeCanvas();
-        const onResize = () => sizeCanvas();
-        window.addEventListener("resize", onResize);
-        window.addEventListener("orientationchange", onResize);
+        let rafId: number | null = null;
+        const schedule = () => {
+            if (rafId !== null) return;
+            rafId = window.requestAnimationFrame(() => {
+                rafId = null;
+                sizeCanvas();
+            });
+        };
+
+        // 初始 mount 後等 layout 穩定再 init
+        schedule();
+
+        const canvas = canvasRef.current;
+        let ro: ResizeObserver | null = null;
+        if (canvas && typeof ResizeObserver !== "undefined") {
+            ro = new ResizeObserver(schedule);
+            ro.observe(canvas);
+        }
+        window.addEventListener("resize", schedule);
+        window.addEventListener("orientationchange", schedule);
+        const vv = (typeof window !== "undefined" && window.visualViewport) || null;
+        vv?.addEventListener("resize", schedule);
+        vv?.addEventListener("scroll", schedule);
+
+        // body scroll lock + overscroll
+        const prevOverflow = document.body.style.overflow;
+        const prevOverscroll = document.body.style.overscrollBehavior;
+        const prevTouchAction = document.body.style.touchAction;
+        document.body.style.overflow = "hidden";
+        document.body.style.overscrollBehavior = "contain";
+        document.body.style.touchAction = "none";
+
         return () => {
-            window.removeEventListener("resize", onResize);
-            window.removeEventListener("orientationchange", onResize);
+            if (rafId !== null) window.cancelAnimationFrame(rafId);
+            ro?.disconnect();
+            window.removeEventListener("resize", schedule);
+            window.removeEventListener("orientationchange", schedule);
+            vv?.removeEventListener("resize", schedule);
+            vv?.removeEventListener("scroll", schedule);
+            document.body.style.overflow = prevOverflow;
+            document.body.style.overscrollBehavior = prevOverscroll;
+            document.body.style.touchAction = prevTouchAction;
         };
     }, [sizeCanvas]);
 
@@ -135,7 +183,18 @@ function SignatureModal({
         e.preventDefault();
         canvasRef.current?.setPointerCapture(e.pointerId);
         drawingRef.current = true;
-        lastPointRef.current = getPos(e);
+        hasDrawnRef.current = true;
+        const p = getPos(e);
+        lastPointRef.current = p;
+        // 點下去先畫一個圓點，避免單擊不留痕
+        const ctx = canvasRef.current?.getContext("2d");
+        if (ctx) {
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 1.25, 0, Math.PI * 2);
+            ctx.fillStyle = "#1f2937";
+            ctx.fill();
+            ctx.fillStyle = "#ffffff";
+        }
     }
 
     function handlePointerMove(e: React.PointerEvent<HTMLCanvasElement>) {
@@ -157,7 +216,11 @@ function SignatureModal({
     function handlePointerUp(e: React.PointerEvent<HTMLCanvasElement>) {
         drawingRef.current = false;
         lastPointRef.current = null;
-        canvasRef.current?.releasePointerCapture(e.pointerId);
+        try {
+            canvasRef.current?.releasePointerCapture(e.pointerId);
+        } catch {
+            // pointer may already be released
+        }
     }
 
     function handleClear() {
@@ -168,6 +231,7 @@ function SignatureModal({
         const rect = canvas.getBoundingClientRect();
         ctx.fillStyle = "#ffffff";
         ctx.fillRect(0, 0, rect.width, rect.height);
+        hasDrawnRef.current = false;
     }
 
     function handleDone() {
@@ -179,48 +243,67 @@ function SignatureModal({
 
     return (
         <div
-            className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center"
+            className="fixed inset-0 z-50 bg-black/95 flex flex-col"
             role="dialog"
             aria-modal
+            style={{ touchAction: "none" }}
         >
-            <div className="absolute inset-0 flex flex-col items-stretch p-4">
-                <div className="text-white text-center text-sm mb-2">
-                    {label}：請於下方簽名（手指或筆觸控繪製）
+            {/* 標題列：右上角浮動關閉按鈕（醒目） */}
+            <div className="flex items-center justify-between px-4 py-3 text-white">
+                <div className="text-sm sm:text-base">
+                    <span className="font-semibold">{label}</span>
+                    <span className="ml-2 text-zinc-300 text-xs">請於下方簽名（手指或筆觸控）</span>
                 </div>
-                <div className="flex-1 flex items-stretch justify-stretch">
-                    <canvas
-                        ref={canvasRef}
-                        className="flex-1 bg-white rounded-md touch-none"
-                        onPointerDown={handlePointerDown}
-                        onPointerMove={handlePointerMove}
-                        onPointerUp={handlePointerUp}
-                        onPointerCancel={handlePointerUp}
-                        onPointerLeave={handlePointerUp}
-                    />
-                </div>
-                <div className="mt-3 flex gap-2 justify-end">
-                    <button
-                        type="button"
-                        onClick={handleClear}
-                        className="px-4 py-2 bg-zinc-600 text-white rounded-md text-sm"
-                    >
-                        清除重簽
-                    </button>
-                    <button
-                        type="button"
-                        onClick={onClose}
-                        className="px-4 py-2 bg-zinc-700 text-white rounded-md text-sm"
-                    >
-                        取消
-                    </button>
-                    <button
-                        type="button"
-                        onClick={handleDone}
-                        className="px-5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-md text-sm font-semibold"
-                    >
-                        完成
-                    </button>
-                </div>
+                <button
+                    type="button"
+                    onClick={onClose}
+                    aria-label="取消並關閉簽名"
+                    className="w-10 h-10 rounded-full bg-zinc-700 hover:bg-zinc-600 active:bg-zinc-800 text-white text-xl flex items-center justify-center"
+                >
+                    ✕
+                </button>
+            </div>
+
+            {/* canvas 區塊 */}
+            <div className="flex-1 flex items-stretch justify-stretch px-3 pb-2 min-h-0">
+                <canvas
+                    ref={canvasRef}
+                    className="flex-1 bg-white rounded-md touch-none"
+                    style={{ touchAction: "none" }}
+                    onPointerDown={handlePointerDown}
+                    onPointerMove={handlePointerMove}
+                    onPointerUp={handlePointerUp}
+                    onPointerCancel={handlePointerUp}
+                    onPointerLeave={handlePointerUp}
+                />
+            </div>
+
+            {/* 底部三顆大按鈕 — sticky + safe-area */}
+            <div
+                className="grid grid-cols-3 gap-3 px-4 py-3 bg-black/60 border-t border-zinc-700"
+                style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 0.75rem)" }}
+            >
+                <button
+                    type="button"
+                    onClick={onClose}
+                    className="py-3 bg-zinc-600 hover:bg-zinc-500 active:bg-zinc-700 text-white text-base font-semibold rounded-lg"
+                >
+                    ✕ 取消
+                </button>
+                <button
+                    type="button"
+                    onClick={handleClear}
+                    className="py-3 bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-base font-semibold rounded-lg"
+                >
+                    🔄 重畫
+                </button>
+                <button
+                    type="button"
+                    onClick={handleDone}
+                    className="py-3 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white text-base font-bold rounded-lg shadow-lg"
+                >
+                    ✓ 完成
+                </button>
             </div>
         </div>
     );
