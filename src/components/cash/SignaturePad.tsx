@@ -134,13 +134,41 @@ function SignatureModal({
 
         const resizeCanvas = () => {
             if (isDrawing) return; // 拖曳中不 resize，避免抹掉 stroke
-            const rect = canvas.getBoundingClientRect();
-            if (rect.width === 0 || rect.height === 0) return;
+            // T-ML-013: WebKit canvas as flex-1 child intrinsic width 反饋 bug
+            // owner 6/15 ?debug=1 量到 rect.width=2460 ≈ 橫向 viewport 1230 的 2 倍。
+            // 原因：canvas.width = rect.width * dpr 後 WebKit 把 canvas DOM attribute width
+            // 當作 layout intrinsic preferred size → 在 flex layout 嘗試撐到 intrinsic size
+            // → 下次量 rect.width 又包含 inflated → 雙重 inflate 越跑越大。
+            // 解法：(1) 用 parent rect 算 size、(2) 顯式設 canvas.style.width/.height
+            // 鎖死 CSS 視覺大小、避免 WebKit intrinsic 反饋。
+            const parent = canvas.parentElement;
+            if (!parent) return;
+            const parentRect = parent.getBoundingClientRect();
+            const ps = window.getComputedStyle(parent);
+            const w =
+                parentRect.width -
+                parseFloat(ps.paddingLeft) -
+                parseFloat(ps.paddingRight) -
+                parseFloat(ps.borderLeftWidth) -
+                parseFloat(ps.borderRightWidth);
+            const h =
+                parentRect.height -
+                parseFloat(ps.paddingTop) -
+                parseFloat(ps.paddingBottom) -
+                parseFloat(ps.borderTopWidth) -
+                parseFloat(ps.borderBottomWidth);
+            if (w <= 0 || h <= 0) return;
+
             const ratio = Math.max(window.devicePixelRatio || 1, 1);
             // toData / fromData 保留筆觸，避免 resize 抹掉 user input
             const data = pad.toData();
-            canvas.width = rect.width * ratio;
-            canvas.height = rect.height * ratio;
+
+            // 顯式設 CSS 視覺大小（鎖死 layout、避免 WebKit intrinsic 反饋）
+            canvas.style.width = w + "px";
+            canvas.style.height = h + "px";
+            canvas.width = w * ratio;
+            canvas.height = h * ratio;
+
             // 設 canvas.width 會 reset 2D transform，scale 是 fresh state 不會累積（T-ML-003 已驗）
             const ctx = canvas.getContext("2d");
             ctx?.scale(ratio, ratio);
