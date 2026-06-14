@@ -120,21 +120,16 @@
   }
 }
 
-/* ─── T-ML-008: SignaturePad 直握手機強制橫向 modal ─────────
-   T-ML-007 後 owner 6/14 23:15 回報 iPhone 觸控誤差大 + 要求預設橫向。
-   只在 portrait + 手機尺寸（短邊 < 932px ≈ iPhone Pro Max landscape）觸發；
-   landscape 自然不轉，桌面跟 iPad 大尺寸不影響。
-   inset:auto + top/left:0 是為了 override Tailwind 的 fixed inset-0。
-   用 100dvh / 100dvw 適應 iOS Safari address bar 動態高度。
+/* ─── T-ML-009: SignaturePad 直握手機 UX 提示 ─────────
+   T-ML-008 用 CSS rotate 強制橫向 modal 走不通（iOS Safari + PWA 對 transform
+   的 quirk 太多：直立 modal 變窄條 / 橫向 canvas 純白）。改純 UX prompt 提示
+   user 「請把手機橫過來」。只在 portrait + 手機尺寸觸發；landscape 自然隱藏。
    ────────────────────────────────────────────────── */
+.orientation-portrait-only {
+  display: none;
+}
 @media (orientation: portrait) and (max-width: 932px) {
-  .signature-modal {
-    width: 100dvh;
-    height: 100dvw;
-    transform: translate(0, 100dvh) rotate(-90deg);
-    transform-origin: top left;
-    top: 0;
-    left: 0;
-    inset: auto;
+  .orientation-portrait-only {
+    display: flex;
   }
 }

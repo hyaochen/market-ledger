@@ -119,18 +119,13 @@ function SignatureModal({
 
         const resizeCanvas = () => {
             if (isDrawing) return; // 拖曳中不 resize，避免抹掉 stroke
-            // T-ML-008: 改用 offsetWidth/offsetHeight 對齊 signature_pad 官方 example —
-            // portrait CSS rotate 後 getBoundingClientRect 拿到的是 rotation 變換後的視覺尺寸，
-            // 跟 pointer event coords 對不上；offsetWidth 是元件 layout box 的「原始大小」，
-            // signature_pad 內部 pointer→canvas 座標也走這個 box，這樣才能 1:1 對齊。
-            const w = canvas.offsetWidth;
-            const h = canvas.offsetHeight;
-            if (w === 0 || h === 0) return;
+            const rect = canvas.getBoundingClientRect();
+            if (rect.width === 0 || rect.height === 0) return;
             const ratio = Math.max(window.devicePixelRatio || 1, 1);
             // toData / fromData 保留筆觸，避免 resize 抹掉 user input
             const data = pad.toData();
-            canvas.width = w * ratio;
-            canvas.height = h * ratio;
+            canvas.width = rect.width * ratio;
+            canvas.height = rect.height * ratio;
             // 設 canvas.width 會 reset 2D transform，scale 是 fresh state 不會累積（T-ML-003 已驗）
             const ctx = canvas.getContext("2d");
             ctx?.scale(ratio, ratio);
@@ -150,11 +145,6 @@ function SignatureModal({
                 });
             }
         });
-        // T-ML-008: portrait CSS rotate 套用後再 resize 一次 — modal mount 那一幀 transform
-        // 還在 commit，offsetWidth 可能仍是 pre-rotate 值。100ms 後 transform 已完成，拿到
-        // rotate 後的最終 size，避免簽名 canvas 內部解析度跟視覺尺寸不一致。
-        const postRotateTimerId = window.setTimeout(resizeCanvas, 100);
-
         // T-ML-007: 拿掉 ResizeObserver — modal 是 fixed inset-0，CSS rect 不會隨內容變動，
         // ResizeObserver 多此一舉而且**會在拖曳期間誤觸發**。改靠 visualViewport.resize +
         // orientationchange 應付 iOS Safari address bar 動態高度 + 螢幕旋轉就夠。
@@ -165,7 +155,6 @@ function SignatureModal({
 
         return () => {
             window.cancelAnimationFrame(rafId);
-            window.clearTimeout(postRotateTimerId);
             vv?.removeEventListener("resize", resizeCanvas);
             vv?.removeEventListener("scroll", resizeCanvas);
             window.removeEventListener("orientationchange", resizeCanvas);
@@ -188,7 +177,7 @@ function SignatureModal({
 
     return (
         <div
-            className="signature-modal fixed inset-0 z-50 bg-black/95 flex flex-col"
+            className="fixed inset-0 z-50 bg-black/95 flex flex-col"
             role="dialog"
             aria-modal
         >
@@ -206,6 +195,14 @@ function SignatureModal({
                 >
                     ✕
                 </button>
+            </div>
+
+            {/* T-ML-009: 直握手機 UX 提示 — T-ML-008 CSS rotate 走不通改純 prompt
+                只 portrait + 手機尺寸顯示，landscape 跟桌面/iPad 自動隱藏 */}
+            <div className="orientation-portrait-only flex-col items-center justify-center px-6 py-3 bg-amber-500/95 text-white border-b border-amber-700">
+                <span className="text-2xl mb-1">📱 ↻</span>
+                <span className="font-semibold text-base">請把手機橫過來簽名</span>
+                <span className="text-xs text-amber-100 mt-1">橫向才有完整簽名空間</span>
             </div>
 
             {/* canvas 區塊 */}
