@@ -115,7 +115,6 @@ function draftHasContent(p: DraftPayload): boolean {
 
 export default function CashCountForm({ today, attendantId, attendantName, locationName, checklistItems }: Props) {
     const router = useRouter();
-    const [activeTab, setActiveTab] = useState<"cash" | "checklist">("cash");
     const [cashBox, setCashBox] = useState<Record<string, string>>(emptyDenomState(CASH_BOX_DENOMS));
     const [reserve, setReserve] = useState<Record<string, string>>(emptyDenomState(RESERVE_DENOMS));
     const [sales, setSales] = useState<Record<string, string>>(emptyDenomState(SALES_DENOMS));
@@ -248,7 +247,6 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
 
         if (!signature) {
             setError("請先簽名再提交。");
-            setActiveTab("cash");
             return;
         }
         if (totalSales <= 0) {
@@ -323,115 +321,106 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
                 <div className="mt-1 text-xs text-zinc-500">覆核人：洪怜俼（自動）</div>
             </div>
 
-            {/* Tabs */}
-            <div className="flex border-b border-zinc-300">
-                <TabButton active={activeTab === "cash"} onClick={() => setActiveTab("cash")}>
-                    ① 現金清點
-                </TabButton>
-                <TabButton active={activeTab === "checklist"} onClick={() => setActiveTab("checklist")}>
-                    ② 動作清點（{checkedIds.size}/{checklistItems.length}）
-                </TabButton>
-            </div>
+            <DenomTable
+                title="① 錢盒清點"
+                subtitle={`目標 NT$ 6,580（面額張數固定）`}
+                denoms={[...CASH_BOX_DENOMS]}
+                targetQty={CASH_BOX_TARGET_QTY}
+                values={cashBox}
+                onChange={(d, v) => setCashBox((p) => ({ ...p, [d]: v }))}
+                total={cashBoxTotal}
+                diff={cashBoxDiff}
+            />
 
-            {activeTab === "cash" && (
-                <div className="space-y-4">
-                    <DenomTable
-                        title="① 錢盒清點"
-                        subtitle={`目標 NT$ 6,580（面額張數固定）`}
-                        denoms={[...CASH_BOX_DENOMS]}
-                        targetQty={CASH_BOX_TARGET_QTY}
-                        values={cashBox}
-                        onChange={(d, v) => setCashBox((p) => ({ ...p, [d]: v }))}
-                        total={cashBoxTotal}
-                        diff={cashBoxDiff}
-                    />
+            <DenomTable
+                title="② 備用金清點"
+                subtitle={`目標 NT$ 7,600（總額固定）`}
+                denoms={[...RESERVE_DENOMS]}
+                targetQty={RESERVE_TARGET_QTY}
+                values={reserve}
+                onChange={(d, v) => setReserve((p) => ({ ...p, [d]: v }))}
+                total={reserveTotal}
+                diff={reserveDiff}
+            />
 
-                    <DenomTable
-                        title="② 備用金清點"
-                        subtitle={`目標 NT$ 7,600（總額固定）`}
-                        denoms={[...RESERVE_DENOMS]}
-                        targetQty={RESERVE_TARGET_QTY}
-                        values={reserve}
-                        onChange={(d, v) => setReserve((p) => ({ ...p, [d]: v }))}
-                        total={reserveTotal}
-                        diff={reserveDiff}
-                    />
+            <DenomTable
+                title="③ 當日營業現金"
+                subtitle="扣回錢盒 6,580 / 備用金 7,600 後剩下的現金"
+                denoms={[...SALES_DENOMS]}
+                targetQty={null}
+                values={sales}
+                onChange={(d, v) => setSales((p) => ({ ...p, [d]: v }))}
+                total={salesTotal}
+                diff={null}
+            />
 
-                    <DenomTable
-                        title="③ 當日營業現金"
-                        subtitle="扣回錢盒 6,580 / 備用金 7,600 後剩下的現金"
-                        denoms={[...SALES_DENOMS]}
-                        targetQty={null}
-                        values={sales}
-                        onChange={(d, v) => setSales((p) => ({ ...p, [d]: v }))}
-                        total={salesTotal}
-                        diff={null}
-                    />
-
-                    <section className="border-2 border-zinc-300 rounded-md overflow-hidden">
-                        <header className="bg-amber-100 px-3 py-2 border-b-2 border-zinc-300 flex items-center justify-between">
-                            <h3 className="font-bold text-sm">④ 當天現金支出明細</h3>
-                            <button
-                                type="button"
-                                onClick={addExpenseRow}
-                                className="text-xs text-amber-700 underline"
-                            >
-                                + 新增一列
-                            </button>
-                        </header>
-                        <div className="bg-amber-50/60 px-3 py-1 text-xs text-zinc-600 border-b border-zinc-200">
-                            從錢盒/營業現金支付的項目（進貨、零工、雜支）寫完自動加總。
+            <section className="border-2 border-zinc-300 rounded-md overflow-hidden">
+                <header className="bg-amber-100 px-3 py-2 border-b-2 border-zinc-300 flex items-center justify-between">
+                    <h3 className="font-bold text-sm">④ 當天現金支出明細</h3>
+                    <button
+                        type="button"
+                        onClick={addExpenseRow}
+                        className="text-xs text-amber-700 underline"
+                    >
+                        + 新增一列
+                    </button>
+                </header>
+                <div className="bg-amber-50/60 px-3 py-1 text-xs text-zinc-600 border-b border-zinc-200">
+                    從錢盒/營業現金支付的項目（進貨、零工、雜支）寫完自動加總。
+                </div>
+                <div className="divide-y divide-zinc-200">
+                    {expenses.map((row, i) => (
+                        <div key={i} className="grid grid-cols-12 gap-2 px-2 py-1.5 items-center">
+                            <input
+                                type="text"
+                                placeholder="項目"
+                                value={row.item}
+                                onChange={(e) => updateExpense(i, "item", e.target.value)}
+                                className="col-span-5 border-b border-dashed border-zinc-400 px-1 py-1 text-sm bg-transparent focus:outline-none focus:border-amber-600"
+                            />
+                            <input
+                                type="text"
+                                placeholder="備註"
+                                value={row.note}
+                                onChange={(e) => updateExpense(i, "note", e.target.value)}
+                                className="col-span-4 border-b border-dashed border-zinc-400 px-1 py-1 text-sm bg-transparent focus:outline-none focus:border-amber-600"
+                            />
+                            <input
+                                type="number"
+                                inputMode="numeric"
+                                min="0"
+                                placeholder="金額"
+                                value={row.amount}
+                                onChange={(e) => updateExpense(i, "amount", e.target.value)}
+                                className="col-span-3 border-b border-dashed border-zinc-400 px-1 py-1 text-sm text-right font-bold bg-transparent focus:outline-none focus:border-amber-600"
+                            />
                         </div>
-                        <div className="divide-y divide-zinc-200">
-                            {expenses.map((row, i) => (
-                                <div key={i} className="grid grid-cols-12 gap-2 px-2 py-1.5 items-center">
-                                    <input
-                                        type="text"
-                                        placeholder="項目"
-                                        value={row.item}
-                                        onChange={(e) => updateExpense(i, "item", e.target.value)}
-                                        className="col-span-5 border-b border-dashed border-zinc-400 px-1 py-1 text-sm bg-transparent focus:outline-none focus:border-amber-600"
-                                    />
-                                    <input
-                                        type="text"
-                                        placeholder="備註"
-                                        value={row.note}
-                                        onChange={(e) => updateExpense(i, "note", e.target.value)}
-                                        className="col-span-4 border-b border-dashed border-zinc-400 px-1 py-1 text-sm bg-transparent focus:outline-none focus:border-amber-600"
-                                    />
-                                    <input
-                                        type="number"
-                                        inputMode="numeric"
-                                        min="0"
-                                        placeholder="金額"
-                                        value={row.amount}
-                                        onChange={(e) => updateExpense(i, "amount", e.target.value)}
-                                        className="col-span-3 border-b border-dashed border-zinc-400 px-1 py-1 text-sm text-right font-bold bg-transparent focus:outline-none focus:border-amber-600"
-                                    />
-                                </div>
-                            ))}
-                            <div className="px-3 py-2 bg-amber-100/80 flex justify-between items-center text-sm font-bold">
-                                <span>支出合計</span>
-                                <span className="text-amber-700">{ntFormat(expensesTotal)}</span>
-                            </div>
-                        </div>
-                    </section>
-
-                    <div className="border-4 border-double border-zinc-800 bg-yellow-50 px-5 py-4 rounded-md flex items-center justify-between">
-                        <div>
-                            <div className="text-base font-bold">今日營業額</div>
-                            <div className="text-xs text-zinc-500">＝ 營業現金 ＋ 當天支出</div>
-                        </div>
-                        <div className="text-2xl font-extrabold tracking-wider">
-                            {totalSales > 0 ? `NT$ ${totalSales.toLocaleString()}` : "—"}
-                        </div>
+                    ))}
+                    <div className="px-3 py-2 bg-amber-100/80 flex justify-between items-center text-sm font-bold">
+                        <span>支出合計</span>
+                        <span className="text-amber-700">{ntFormat(expensesTotal)}</span>
                     </div>
                 </div>
-            )}
+            </section>
 
-            {activeTab === "checklist" && (
-                <div className="space-y-3">
-                    <h3 className="font-bold text-sm">② 動作清點</h3>
+            <div className="border-4 border-double border-zinc-800 bg-yellow-50 px-5 py-4 rounded-md flex items-center justify-between">
+                <div>
+                    <div className="text-base font-bold">今日營業額</div>
+                    <div className="text-xs text-zinc-500">＝ 營業現金 ＋ 當天支出</div>
+                </div>
+                <div className="text-2xl font-extrabold tracking-wider">
+                    {totalSales > 0 ? `NT$ ${totalSales.toLocaleString()}` : "—"}
+                </div>
+            </div>
+
+            <section className="border-2 border-zinc-300 rounded-md overflow-hidden">
+                <header className="bg-amber-100 px-3 py-2 border-b-2 border-zinc-300 flex items-center justify-between">
+                    <h3 className="font-bold text-sm">⑤ 動作清點</h3>
+                    <span className="text-xs text-zinc-600 font-mono">
+                        {checkedIds.size}/{checklistItems.length}
+                    </span>
+                </header>
+                <div className="p-3">
                     {checklistItems.length === 0 ? (
                         <p className="text-sm text-zinc-500">尚無動作項目，請聯絡管理員設定。</p>
                     ) : (
@@ -454,7 +443,7 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
                         </ul>
                     )}
                 </div>
-            )}
+            </section>
 
             <section className="space-y-3 border-t-2 border-zinc-200 pt-4">
                 <div className="grid grid-cols-2 gap-3">
@@ -499,28 +488,6 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
                 </button>
             </section>
         </div>
-    );
-}
-
-function TabButton({
-    active,
-    onClick,
-    children,
-}: {
-    active: boolean;
-    onClick: () => void;
-    children: React.ReactNode;
-}) {
-    return (
-        <button
-            type="button"
-            onClick={onClick}
-            className={`flex-1 py-2.5 text-sm font-medium border-b-2 ${
-                active ? "border-amber-600 text-amber-700" : "border-transparent text-zinc-500"
-            }`}
-        >
-            {children}
-        </button>
     );
 }
 

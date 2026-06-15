@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { getCashCountById } from "@/app/actions/cash";
+import PrintButton from "./PrintButton";
 
 type DenomMap = Record<string, number>;
 type ExpenseRow = { item: string; note?: string; amount: number };
@@ -25,24 +26,20 @@ export default async function CashHistoryDetailPage(props: { params: Promise<{ i
     const cc = await getCashCountById(id);
     if (!cc) notFound();
 
-    const dateStr = cc.date.toISOString().slice(0, 10);
-    const handoverStr = cc.handoverTime.toISOString().slice(0, 19).replace("T", " ");
+    const dateStr = cc.date ? cc.date.toISOString().slice(0, 10) : "—";
+    const handoverStr = cc.handoverTime ? cc.handoverTime.toISOString().slice(0, 19).replace("T", " ") : "—";
     const cashBox = safeParseDenom(cc.cashBoxJson);
     const reserve = safeParseDenom(cc.reserveJson);
     const sales = safeParseDenom(cc.salesJson);
     const expenses = safeParseExpenses(cc.expensesJson);
+    const locationName = cc.location?.name ?? "—";
+    const attendantName = cc.attendant?.realName || cc.attendant?.username || "—";
 
     return (
         <div className="p-4 space-y-3 print:p-0">
             <div className="flex items-center justify-between print:hidden">
                 <Link href="/cash/history" className="text-sm text-amber-700">&larr; 返回列表</Link>
-                <button
-                    type="button"
-                    onClick={() => window.print()}
-                    className="text-sm border border-zinc-400 px-2 py-1 rounded hover:bg-white"
-                >
-                    列印
-                </button>
+                <PrintButton />
             </div>
 
             <h1 className="text-xl font-extrabold text-center border-b-2 border-double border-zinc-800 pb-1">
@@ -50,8 +47,8 @@ export default async function CashHistoryDetailPage(props: { params: Promise<{ i
             </h1>
             <div className="grid grid-cols-3 gap-2 text-sm">
                 <div><span className="text-zinc-500">日期：</span><b>{dateStr}</b></div>
-                <div><span className="text-zinc-500">攤位：</span><b>{cc.location.name}</b></div>
-                <div><span className="text-zinc-500">清點人：</span><b>{cc.attendant.realName || cc.attendant.username}</b></div>
+                <div><span className="text-zinc-500">攤位：</span><b>{locationName}</b></div>
+                <div><span className="text-zinc-500">清點人：</span><b>{attendantName}</b></div>
             </div>
 
             <DetailTable
@@ -137,7 +134,7 @@ export default async function CashHistoryDetailPage(props: { params: Promise<{ i
                     <ul className="text-sm space-y-0.5">
                         {cc.checklistDones.map((d) => (
                             <li key={d.id} className={d.done ? "text-zinc-900" : "text-red-600"}>
-                                {d.done ? "✅" : "⬜"} {d.item.name}
+                                {d.done ? "✅" : "⬜"} {d.item?.name ?? "（項目已刪除）"}
                             </li>
                         ))}
                     </ul>

@@ -25,7 +25,9 @@ export default async function CashHistoryPage(props: { searchParams: Promise<Sea
             ) : (
                 <ul className="divide-y divide-zinc-200 border border-zinc-200 rounded-md bg-white">
                     {rows.map((r) => {
-                        const dateStr = r.date.toISOString().slice(0, 10);
+                        const dateStr = r.date ? r.date.toISOString().slice(0, 10) : "—";
+                        const locationName = r.location?.name ?? "—";
+                        const attendantName = r.attendant?.realName || r.attendant?.username || "—";
                         const cashBoxOk = r.cashBoxTotal === 6580;
                         const reserveOk = r.reserveTotal === 7600;
                         const flags: string[] = [];
@@ -38,9 +40,9 @@ export default async function CashHistoryPage(props: { searchParams: Promise<Sea
                                     className="flex items-center justify-between gap-3 px-3 py-3 hover:bg-amber-50"
                                 >
                                     <div className="min-w-0">
-                                        <div className="text-sm font-semibold">{dateStr} · {r.location.name}</div>
+                                        <div className="text-sm font-semibold">{dateStr} · {locationName}</div>
                                         <div className="text-xs text-zinc-500 truncate">
-                                            {r.attendant.realName || r.attendant.username}
+                                            {attendantName}
                                             {flags.length > 0 && (
                                                 <span className="ml-2 text-red-600">⚠ {flags.join("、")}</span>
                                             )}
