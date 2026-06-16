@@ -301,12 +301,12 @@ export async function listCashAlerts(): Promise<CashAlert[]> {
                 cashCountId: cc.id,
             });
         }
-        if (cc.reserveTotal !== 7825) {
+        if (cc.reserveTotal !== 7405) {
             alerts.push({
                 type: "diff",
                 date: dateStr,
                 locationName: cc.location.name,
-                detail: `備用金 ${cc.reserveTotal} ≠ 目標 7,825（差 ${cc.reserveTotal - 7825}）`,
+                detail: `備用金 ${cc.reserveTotal} ≠ 目標 7,405（差 ${cc.reserveTotal - 7405}）`,
                 cashCountId: cc.id,
             });
         }

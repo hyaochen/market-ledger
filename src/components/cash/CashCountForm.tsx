@@ -23,8 +23,8 @@ const CASH_BOX_TARGET_QTY: Record<number, number> = { 500: 5, 100: 28, 50: 19, 1
 const CASH_BOX_TARGET_TOTAL = 6780;
 
 const RESERVE_DENOMS = [500, 100, 50, 10, 5] as const;
-const RESERVE_TARGET_QTY: Record<number, number> = { 500: 5, 100: 28, 50: 20, 10: 100, 5: 105 };
-const RESERVE_TARGET_TOTAL = 7825;
+const RESERVE_TARGET_QTY: Record<number, number> = { 500: 5, 100: 28, 50: 20, 10: 100, 5: 21 };
+const RESERVE_TARGET_TOTAL = 7405;
 
 const SALES_DENOMS = [1000, 500, 100, 50, 10, 5] as const;
 
@@ -334,7 +334,7 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
 
             <DenomTable
                 title="② 備用金清點"
-                subtitle={`目標 NT$ 7,825（總額固定）`}
+                subtitle={`目標 NT$ 7,405（總額固定）`}
                 denoms={[...RESERVE_DENOMS]}
                 targetQty={RESERVE_TARGET_QTY}
                 values={reserve}
@@ -345,7 +345,7 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
 
             <DenomTable
                 title="③ 當日營業現金"
-                subtitle="扣回錢盒 6,780 / 備用金 7,825 後剩下的現金"
+                subtitle="扣回錢盒 6,780 / 備用金 7,405 後剩下的現金"
                 denoms={[...SALES_DENOMS]}
                 targetQty={null}
                 values={sales}

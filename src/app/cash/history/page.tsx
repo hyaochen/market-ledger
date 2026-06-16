@@ -29,10 +29,10 @@ export default async function CashHistoryPage(props: { searchParams: Promise<Sea
                         const locationName = r.location?.name ?? "—";
                         const attendantName = r.attendant?.realName || r.attendant?.username || "—";
                         const cashBoxOk = r.cashBoxTotal === 6780;
-                        const reserveOk = r.reserveTotal === 7825;
+                        const reserveOk = r.reserveTotal === 7405;
                         const flags: string[] = [];
                         if (!cashBoxOk) flags.push(`錢盒${r.cashBoxTotal - 6780 > 0 ? "+" : ""}${r.cashBoxTotal - 6780}`);
-                        if (!reserveOk) flags.push(`備用金${r.reserveTotal - 7825 > 0 ? "+" : ""}${r.reserveTotal - 7825}`);
+                        if (!reserveOk) flags.push(`備用金${r.reserveTotal - 7405 > 0 ? "+" : ""}${r.reserveTotal - 7405}`);
                         return (
                             <li key={r.id}>
                                 <Link
