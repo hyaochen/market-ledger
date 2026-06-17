@@ -191,3 +191,60 @@ test("detectDayOffEntries: 無 location 提示 → 仍盡力抽取", () => {
     assert.equal(result![0].locationName, "測試攤位");
     assert.equal(result![0].isDayOff, true);
 });
+
+// ── T-ML-018：休息 keyword + note 公休 ──────────────────────────────────
+test("detectDayOffEntries(T-ML-018): 休息 keyword 也認", () => {
+    const result = detectDayOffEntries("潮州攤位休息", TODAY, LOC_NAMES);
+    assert.ok(result, "「休息」應該命中");
+    assert.equal(result!.length, 1);
+    assert.equal(result![0].isDayOff, true);
+    assert.equal(result![0].price, 0);
+    assert.equal(result![0].type, "REVENUE");
+});
+
+test("detectDayOffEntries(T-ML-018): 備註欄填「{攤位名}公休」", () => {
+    const r1 = detectDayOffEntries("潮州休息", TODAY, LOC_NAMES);
+    assert.equal(r1![0].note, "潮州公休");
+
+    const r2 = detectDayOffEntries("屏東休假", TODAY, LOC_NAMES);
+    assert.equal(r2![0].note, "屏東公休");
+
+    const r3 = detectDayOffEntries("屏東公休", TODAY, LOC_NAMES);
+    assert.equal(r3![0].note, "屏東公休");
+});
+
+test("detectDayOffEntries(T-ML-018): 未知攤位 fallback 仍寫公休 note", () => {
+    const result = detectDayOffEntries("中山攤位休息", TODAY, LOC_NAMES);
+    assert.ok(result);
+    // 「中山攤位」不在 LOC_NAMES，會走 cleaned-text fallback 抽出 "中山攤位"
+    assert.equal(result![0].locationName, "中山攤位");
+    assert.equal(result![0].note, "中山攤位公休");
+});
+
+// ── T-ML-018：keyword mask + strip 影響 fixNumbersFromRaw ────────────
+test("fixNumbersFromRaw(T-ML-018): masked 「大骨高湯1600」內的 1600 不被當 price", () => {
+    // pre-LLM mask 已把 "1600" 置換成 "大骨高湯1600"。
+    // fixNumbersFromRaw 應該透過 stripCanonicalNumericNames 把整段拿掉，
+    // 避免 1600 被誤抓為 price 覆寫 LLM 的 null
+    const result = fixNumbersFromRaw({
+        rawInput: "進 5 包大骨高湯1600",
+        quantity: 5,
+        unit: "包",
+        price: undefined,
+    });
+    // 1600 不應該被當 price
+    assert.notEqual(result.price, 1600);
+    assert.equal(result.quantity, 5);
+});
+
+test("fixNumbersFromRaw(T-ML-018): 「大骨高湯1601」+ 額外 price 仍正確抽 price", () => {
+    // owner 同時給金額：5 包大骨高湯1601 300
+    const result = fixNumbersFromRaw({
+        rawInput: "5 包大骨高湯1601 300",
+        quantity: 5,
+        unit: "包",
+        price: undefined,
+    });
+    assert.equal(result.quantity, 5);
+    assert.equal(result.price, 300);
+});

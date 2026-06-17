@@ -3,6 +3,7 @@
 import prisma from '../src/lib/prisma';
 import type { ParsedEntry, DbContext } from './types';
 import { loadAliases } from './aliases';
+import { detectItemKeyword, isCanonicalItemKeywordName } from './itemKeywords';
 
 // 載入租戶的完整 DB 上下文（品項、廠商、支出類型、單位、地點）
 export async function loadDbContext(tenantId: string): Promise<DbContext> {
@@ -192,10 +193,44 @@ export async function enrichEntry(entry: ParsedEntry, ctx: DbContext): Promise<P
                 return enriched;
             }
 
-            // ── Alias 快取優先查找 ──────────────────────────────────
-            // 使用者先前確認過「肝連」→「肝蓮」等習慣性錯字，直接命中
+            // ── T-ML-018 關鍵字直接命中 ───────────────────────────────
+            // owner 自訂的 5 個 SKU（味鮮A / 大骨高湯1600/1601 / 滷包香料 / 滷汁粉）
+            // 走特定關鍵字，pre-LLM mask 已把 keyword 置換成標準名稱輸給 LLM；
+            // 這裡做最後兜底：若 LLM 輸出的 itemName 本身就是標準名稱，或
+            // rawInput / cleanedLlmName 內仍含 keyword（mask 沒命中的邊緣狀況），
+            // 直接 exact-match item.name 設 itemId，跳過 fuzzy。
+            const directName = isCanonicalItemKeywordName(llmName) ? llmName
+                : isCanonicalItemKeywordName(rawName) ? rawName
+                : null;
+            let kwItem: typeof ctx.items[0] | undefined;
+            if (directName) {
+                kwItem = ctx.items.find(i => i.name === directName);
+            }
+            if (!kwItem) {
+                const keywordHit = detectItemKeyword(entry.rawInput ?? '')
+                    ?? detectItemKeyword(llmName)
+                    ?? detectItemKeyword(rawName);
+                if (keywordHit) {
+                    kwItem = ctx.items.find(i => i.name === keywordHit.itemName);
+                    if (kwItem) {
+                        console.log(`[Matcher] keyword "${keywordHit.keyword}" → "${kwItem.name}"`);
+                    } else {
+                        console.warn(`[Matcher] keyword "${keywordHit.keyword}" hit but item "${keywordHit.itemName}" not in DB — falling back to fuzzy`);
+                    }
+                }
+            } else {
+                console.log(`[Matcher] canonical name match → "${kwItem.name}"`);
+            }
+            if (kwItem) {
+                enriched.itemId = kwItem.id;
+                enriched.itemName = kwItem.name;
+            }
+
+            // ── Alias 快取查找（仍要跑：keyword 沒命中時走習慣性錯字）─────
             const aliases = loadAliases(ctx.tenantId);
-            const aliasMatch = aliases[llmName] ?? aliases[rawName] ?? null;
+            const aliasMatch = !enriched.itemId
+                ? (aliases[llmName] ?? aliases[rawName] ?? null)
+                : null;
             let hitAlias = false;
             if (aliasMatch) {
                 const aliasedItem = ctx.items.find(i => i.id === aliasMatch.itemId);
@@ -208,7 +243,8 @@ export async function enrichEntry(entry: ParsedEntry, ctx: DbContext): Promise<P
                 // aliasedItem 找不到（品項可能已刪除），略過 alias 繼續正常比對
             }
 
-            if (!hitAlias) {
+            // keyword 已命中 → 跳過 fuzzy（後面 vendor/duplicate 仍要跑）
+            if (!hitAlias && !enriched.itemId) {
             // 收集所有分數 >= 0.5 的候選品項（llmName 和 rawName 取最高分）
             const candidates: { item: typeof ctx.items[0]; score: number }[] = [];
             for (const item of ctx.items) {
@@ -274,7 +310,7 @@ export async function enrichEntry(entry: ParsedEntry, ctx: DbContext): Promise<P
                     console.log(`[Matcher] item "${searchName}" weak match only (best score=${best.score.toFixed(2)})`);
                 }
             }
-            } // end !hitAlias
+            } // end fuzzy block
         }
 
         // 設定預設單位

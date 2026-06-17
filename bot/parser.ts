@@ -3,6 +3,7 @@
 
 import { z } from 'zod';
 import type { ParsedEntry, DbContext } from './types';
+import { maskKeywordsForLlm, stripCanonicalNumericNames } from './itemKeywords';
 
 // LLM 輸出的單筆結構 — 所有欄位都可選，實務上 LLM 會漏填不常見欄位
 const RawExtractedSchema = z.object({
@@ -171,21 +172,23 @@ const CN_QTY_UNIT_RE = new RegExp(`([一兩二三四五六七八九十])\\s*(${Q
 // 斤兩格式：「2斤10兩」→ quantity=210, unit='jl'（1斤=16兩，16進位）
 const JIN_LIANG_RE = /(\d+)斤(\d+)兩/;
 
-// ── 休假意圖 pre-LLM 偵測 ────────────────────────────────────────────────
-// 員工常會把「潮州 5/23 休假」「屏東今天休假」直接打給 bot，這類輸入
+// ── 休假/公休意圖 pre-LLM 偵測 ─────────────────────────────────────────────
+// 員工常會把「潮州 5/23 休假」「屏東今天休息」直接打給 bot，這類輸入
 // 用 LLM 反而容易誤判成 EXPENSE（休假費）；regex 預判穩定且不耗 token。
 // 任一行不符合休假模式則回 null，讓整批走原本 LLM 流程。
+// T-ML-018：擴充 keyword 含「休息」，並把備註欄填「{攤位名}公休」（不再 null）
+const DAY_OFF_RE = /休息|休假|公休/;
 export function detectDayOffEntries(input: string, today: string, locationNames: string[]): ParsedEntry[] | null {
     const text = normalizeNumbers(input);
-    if (!/休假|公休/.test(text)) return null;
+    if (!DAY_OFF_RE.test(text)) return null;
 
     const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
     if (lines.length === 0) return null;
 
     const result: ParsedEntry[] = [];
     for (const line of lines) {
-        if (!/休假|公休/.test(line)) return null; // 混雜非休假行 → 走 LLM
-        // 不接受同行含金額（避免「潮州5000休假」這種模糊輸入直接認定）
+        if (!DAY_OFF_RE.test(line)) return null; // 混雜非休假行 → 走 LLM
+        // 不接受同行含金額（避免「潮州5000休息」這種模糊輸入直接認定）
         const hasPrice = /\d{3,}/.test(line.replace(/\d+[月\/]\d+[日號]?/g, ''));
         if (hasPrice) return null;
 
@@ -210,7 +213,7 @@ export function detectDayOffEntries(input: string, today: string, locationNames:
             const cleaned = line
                 .replace(/\d+[月\/]\d+[日號]?/g, '')
                 .replace(/今天|今日|本日/g, '')
-                .replace(/休假|公休/g, '')
+                .replace(/休息|休假|公休/g, '')
                 .trim();
             if (cleaned) locationName = cleaned;
         }
@@ -230,7 +233,7 @@ export function detectDayOffEntries(input: string, today: string, locationNames:
             price: 0,
             vendorId: null,
             vendorName: null,
-            note: null,
+            note: `${locationName}公休`,
             confident: true,
             uncertainReason: null,
             rawInput: line,
@@ -350,11 +353,13 @@ export function convertChineseNumbers(text: string): string {
 
 // 後處理：用正則從 rawInput 修正 LLM 可能算錯的 quantity/price
 // 策略：找出有單位的數字（→ quantity）和無單位的獨立數字（→ price）
+// T-ML-018：先把已 mask 的數字 keyword 標準名（「大骨高湯1600」）整段拿掉，
+// 否則尾巴的 1600/1601 會被誤抓為 price，蓋掉 LLM 正確的 null/0
 export function fixNumbersFromRaw(entry: RawExtracted): RawExtracted {
     // jl 已由 fixJinLiangFromRaw 處理完畢，跳過此步驟
     if (entry.unit === 'jl') return entry;
 
-    const raw = normalizeNumbers(entry.rawInput ?? '');
+    const raw = stripCanonicalNumericNames(normalizeNumbers(entry.rawInput ?? ''));
 
     // 找所有「數字+量詞」組合
     const unitMatches: { qty: number; unit: string; raw: string }[] = [];
@@ -499,7 +504,10 @@ export async function parseEntries(userText: string, ctx: DbContext): Promise<Pa
     const inputLines = normalizedText.split('\n').map(l => l.trim()).filter(Boolean);
     const isMultiLine = inputLines.length > 1;
 
-    let result = await callOllama(systemPrompt, normalizedText, OLLAMA_MODEL_FAST);
+    // T-ML-018：對 LLM 輸入做關鍵字 mask（味精→味鮮A、1600→大骨高湯1600 等），
+    // 數字 keyword 不 mask 會被 LLM 當成 price。rawInput 後續 post-process 也用 mask 版本。
+    const maskedText = maskKeywordsForLlm(normalizedText);
+    let result = await callOllama(systemPrompt, maskedText, OLLAMA_MODEL_FAST);
 
     if (!result || result.length === 0) {
         console.log('[Parser] Fast model failed or empty, no result');
@@ -511,10 +519,11 @@ export async function parseEntries(userText: string, ctx: DbContext): Promise<Pa
         console.log(`[Parser] Multi-line input (${inputLines.length} lines) but only got ${result.length} entry, retrying per-line`);
         const perLineResults: RawExtracted[] = [];
         for (const line of inputLines) {
-            const lineResult = await callOllama(systemPrompt, line, OLLAMA_MODEL_FAST);
+            const maskedLine = maskKeywordsForLlm(line);
+            const lineResult = await callOllama(systemPrompt, maskedLine, OLLAMA_MODEL_FAST);
             if (lineResult && lineResult.length > 0) {
-                // 確保 rawInput 指向這行
-                perLineResults.push(...lineResult.map(e => ({ ...e, rawInput: e.rawInput ?? line })));
+                // rawInput 用 maskedLine 而非 line，post-process（含 stripCanonicalNumericNames）才一致
+                perLineResults.push(...lineResult.map(e => ({ ...e, rawInput: e.rawInput ?? maskedLine })));
             }
         }
         if (perLineResults.length > result.length) {
@@ -547,7 +556,9 @@ export async function parseEntries(userText: string, ctx: DbContext): Promise<Pa
             note: entry.note ?? null,
             confident: true,
             uncertainReason: null,
-            rawInput: entry.rawInput ?? userText,
+            // T-ML-018：fallback 用 maskedText（含已置換的標準品項名）
+            // 而非原文 userText，post-process 才看得到正確的「大骨高湯1600」整段
+            rawInput: entry.rawInput ?? maskedText,
         };
     });
 }

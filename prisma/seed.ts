@@ -146,6 +146,14 @@ async function main() {
         { name: '香菇', units: ['斤'] },
         { name: '扁魚', units: ['斤'] },
         { name: '番茄醬', units: ['包'] },
+        // T-ML-018：owner 自訂 SKU。代號（16-1203G 等）為 owner 內部編號，DB 不存
+        // 「大骨高湯1600」/「大骨高湯1601」拆名是因為 Item @@unique([name,categoryId,tenantId])
+        // 不允許同名並存；對應 bot/itemKeywords.ts 的 keyword mapping
+        { name: '味鮮A', units: ['包'] },         // 16-1203G  keyword: 味精
+        { name: '大骨高湯1600', units: ['包'] },  // 16-1600G  keyword: 1600
+        { name: '大骨高湯1601', units: ['包'] },  // 16-1601G  keyword: 1601
+        { name: '滷包香料', units: ['包'] },       // 18-1101G  keyword: 滷包
+        { name: '滷汁粉', units: ['包'] },         // 20-0023G  keyword: 滷汁粉
     ]
 
     const upsertItems = async (
