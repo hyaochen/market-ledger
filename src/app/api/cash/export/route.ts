@@ -34,8 +34,8 @@ export async function GET(req: Request) {
                 r.salesTotal,
                 r.expensesTotal,
                 r.totalSales,
-                r.cashBoxTotal - 6780,
-                r.reserveTotal - 7405,
+                r.cashBoxTotal - 6785,
+                r.reserveTotal - 7400,
                 r.note ?? "",
                 createdAt,
             ].map(csvEscape).join(","));

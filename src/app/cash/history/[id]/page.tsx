@@ -52,16 +52,16 @@ export default async function CashHistoryDetailPage(props: { params: Promise<{ i
             </div>
 
             <DetailTable
-                title="① 錢盒清點（目標 6,780）"
+                title="① 錢盒清點（目標 6,785）"
                 rows={[500, 100, 50, 10, 5].map((d) => ({ denom: d, qty: cashBox[String(d)] ?? 0 }))}
                 total={cc.cashBoxTotal}
-                target={6780}
+                target={6785}
             />
             <DetailTable
-                title="② 備用金清點（目標 7,405）"
+                title="② 備用金清點（目標 7,400）"
                 rows={[500, 100, 50, 10, 5].map((d) => ({ denom: d, qty: reserve[String(d)] ?? 0 }))}
                 total={cc.reserveTotal}
-                target={7405}
+                target={7400}
             />
             <DetailTable
                 title="③ 當日營業現金"

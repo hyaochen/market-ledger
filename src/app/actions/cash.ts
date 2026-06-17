@@ -292,21 +292,21 @@ export async function listCashAlerts(): Promise<CashAlert[]> {
     for (const cc of items) {
         const dateStr = cc.date.toISOString().slice(0, 10);
         // 差額未平
-        if (cc.cashBoxTotal !== 6780) {
+        if (cc.cashBoxTotal !== 6785) {
             alerts.push({
                 type: "diff",
                 date: dateStr,
                 locationName: cc.location.name,
-                detail: `錢盒 ${cc.cashBoxTotal} ≠ 目標 6,780（差 ${cc.cashBoxTotal - 6780}）`,
+                detail: `錢盒 ${cc.cashBoxTotal} ≠ 目標 6,785（差 ${cc.cashBoxTotal - 6785}）`,
                 cashCountId: cc.id,
             });
         }
-        if (cc.reserveTotal !== 7405) {
+        if (cc.reserveTotal !== 7400) {
             alerts.push({
                 type: "diff",
                 date: dateStr,
                 locationName: cc.location.name,
-                detail: `備用金 ${cc.reserveTotal} ≠ 目標 7,405（差 ${cc.reserveTotal - 7405}）`,
+                detail: `備用金 ${cc.reserveTotal} ≠ 目標 7,400（差 ${cc.reserveTotal - 7400}）`,
                 cashCountId: cc.id,
             });
         }
