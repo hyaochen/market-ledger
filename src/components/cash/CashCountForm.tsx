@@ -22,7 +22,9 @@ const CASH_BOX_DENOMS = [500, 100, 50, 10, 5] as const;
 const CASH_BOX_TARGET_QTY: Record<number, number> = { 500: 5, 100: 28, 50: 19, 10: 43, 5: 21 };
 const CASH_BOX_TARGET_TOTAL = 6785;
 
-const RESERVE_DENOMS = [500, 100, 50, 10, 5] as const;
+const RESERVE_DENOMS = [1000, 500, 100, 50, 10, 5] as const;
+// T-ML-019: 1000 元不設參考張數（DenomTable 拿 undefined 顯示「—」），
+// 因 1000 是換錢用：放 1 張 1000 ↔ 2 張 500，總額仍 7,400，沒固定張數可參考。
 const RESERVE_TARGET_QTY: Record<number, number> = { 500: 5, 100: 28, 50: 20, 10: 100, 5: 20 };
 const RESERVE_TARGET_TOTAL = 7400;
 
