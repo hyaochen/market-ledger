@@ -5,6 +5,7 @@ import prisma from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
 import { parseLocalDate } from "@/lib/date";
 import { requireCashAuth, requireCashAdmin } from "@/lib/cash-auth";
+import { CASH_BOX_TARGET_TOTAL, RESERVE_TARGET_TOTAL } from "@/lib/cash-constants";
 
 // ---------- Schema ----------
 
@@ -292,21 +293,21 @@ export async function listCashAlerts(): Promise<CashAlert[]> {
     for (const cc of items) {
         const dateStr = cc.date.toISOString().slice(0, 10);
         // 差額未平
-        if (cc.cashBoxTotal !== 6785) {
+        if (cc.cashBoxTotal !== CASH_BOX_TARGET_TOTAL) {
             alerts.push({
                 type: "diff",
                 date: dateStr,
                 locationName: cc.location.name,
-                detail: `錢盒 ${cc.cashBoxTotal} ≠ 目標 6,785（差 ${cc.cashBoxTotal - 6785}）`,
+                detail: `錢盒 ${cc.cashBoxTotal} ≠ 目標 ${CASH_BOX_TARGET_TOTAL.toLocaleString()}（差 ${cc.cashBoxTotal - CASH_BOX_TARGET_TOTAL}）`,
                 cashCountId: cc.id,
             });
         }
-        if (cc.reserveTotal !== 7400) {
+        if (cc.reserveTotal !== RESERVE_TARGET_TOTAL) {
             alerts.push({
                 type: "diff",
                 date: dateStr,
                 locationName: cc.location.name,
-                detail: `備用金 ${cc.reserveTotal} ≠ 目標 7,400（差 ${cc.reserveTotal - 7400}）`,
+                detail: `備用金 ${cc.reserveTotal} ≠ 目標 ${RESERVE_TARGET_TOTAL.toLocaleString()}（差 ${cc.reserveTotal - RESERVE_TARGET_TOTAL}）`,
                 cashCountId: cc.id,
             });
         }

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { requireCashAuth } from "@/lib/cash-auth";
 import { listCashCounts } from "@/app/actions/cash";
+import { CASH_BOX_TARGET_TOTAL, RESERVE_TARGET_TOTAL } from "@/lib/cash-constants";
 import HistoryToolbar from "./HistoryToolbar";
 
 type SearchParams = { from?: string; to?: string };
@@ -28,11 +29,11 @@ export default async function CashHistoryPage(props: { searchParams: Promise<Sea
                         const dateStr = r.date ? r.date.toISOString().slice(0, 10) : "—";
                         const locationName = r.location?.name ?? "—";
                         const attendantName = r.attendant?.realName || r.attendant?.username || "—";
-                        const cashBoxOk = r.cashBoxTotal === 6785;
-                        const reserveOk = r.reserveTotal === 7400;
+                        const cashBoxOk = r.cashBoxTotal === CASH_BOX_TARGET_TOTAL;
+                        const reserveOk = r.reserveTotal === RESERVE_TARGET_TOTAL;
                         const flags: string[] = [];
-                        if (!cashBoxOk) flags.push(`錢盒${r.cashBoxTotal - 6785 > 0 ? "+" : ""}${r.cashBoxTotal - 6785}`);
-                        if (!reserveOk) flags.push(`備用金${r.reserveTotal - 7400 > 0 ? "+" : ""}${r.reserveTotal - 7400}`);
+                        if (!cashBoxOk) flags.push(`錢盒${r.cashBoxTotal - CASH_BOX_TARGET_TOTAL > 0 ? "+" : ""}${r.cashBoxTotal - CASH_BOX_TARGET_TOTAL}`);
+                        if (!reserveOk) flags.push(`備用金${r.reserveTotal - RESERVE_TARGET_TOTAL > 0 ? "+" : ""}${r.reserveTotal - RESERVE_TARGET_TOTAL}`);
                         return (
                             <li key={r.id}>
                                 <Link

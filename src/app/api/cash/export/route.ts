@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { listCashCounts } from "@/app/actions/cash";
+import { CASH_BOX_TARGET_TOTAL, RESERVE_TARGET_TOTAL } from "@/lib/cash-constants";
 
 function csvEscape(v: unknown): string {
     const s = v === null || v === undefined ? "" : String(v);
@@ -34,8 +35,8 @@ export async function GET(req: Request) {
                 r.salesTotal,
                 r.expensesTotal,
                 r.totalSales,
-                r.cashBoxTotal - 6785,
-                r.reserveTotal - 7400,
+                r.cashBoxTotal - CASH_BOX_TARGET_TOTAL,
+                r.reserveTotal - RESERVE_TARGET_TOTAL,
                 r.note ?? "",
                 createdAt,
             ].map(csvEscape).join(","));

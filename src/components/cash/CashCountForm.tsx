@@ -4,6 +4,15 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import SignaturePad from "./SignaturePad";
 import { submitCashCount } from "@/app/actions/cash";
+import {
+    CASH_BOX_DENOMS,
+    CASH_BOX_TARGET_QTY,
+    CASH_BOX_TARGET_TOTAL,
+    RESERVE_DENOMS,
+    RESERVE_TARGET_QTY,
+    RESERVE_TARGET_TOTAL,
+    SALES_DENOMS,
+} from "@/lib/cash-constants";
 
 type ChecklistItemDef = {
     id: string;
@@ -17,18 +26,6 @@ type Props = {
     locationName: string;
     checklistItems: ChecklistItemDef[];
 };
-
-const CASH_BOX_DENOMS = [500, 100, 50, 10, 5] as const;
-const CASH_BOX_TARGET_QTY: Record<number, number> = { 500: 5, 100: 28, 50: 19, 10: 43, 5: 21 };
-const CASH_BOX_TARGET_TOTAL = 6785;
-
-const RESERVE_DENOMS = [1000, 500, 100, 50, 10, 5] as const;
-// T-ML-019: 1000 元不設參考張數（DenomTable 拿 undefined 顯示「—」），
-// 因 1000 是換錢用：放 1 張 1000 ↔ 2 張 500，總額仍 7,400，沒固定張數可參考。
-const RESERVE_TARGET_QTY: Record<number, number> = { 500: 5, 100: 28, 50: 20, 10: 100, 5: 20 };
-const RESERVE_TARGET_TOTAL = 7400;
-
-const SALES_DENOMS = [1000, 500, 100, 50, 10, 5] as const;
 
 const INITIAL_EXPENSE_ROWS = 6;
 
@@ -325,7 +322,7 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
 
             <DenomTable
                 title="① 錢盒清點"
-                subtitle={`目標 NT$ 6,785（面額張數固定）`}
+                subtitle={`目標 NT$ ${CASH_BOX_TARGET_TOTAL.toLocaleString()}（面額張數固定）`}
                 denoms={[...CASH_BOX_DENOMS]}
                 targetQty={CASH_BOX_TARGET_QTY}
                 values={cashBox}
@@ -336,7 +333,7 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
 
             <DenomTable
                 title="② 備用金清點"
-                subtitle={`目標 NT$ 7,400（總額固定）`}
+                subtitle={`目標 NT$ ${RESERVE_TARGET_TOTAL.toLocaleString()}（總額固定）`}
                 denoms={[...RESERVE_DENOMS]}
                 targetQty={RESERVE_TARGET_QTY}
                 values={reserve}
@@ -347,7 +344,7 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
 
             <DenomTable
                 title="③ 當日營業現金"
-                subtitle="扣回錢盒 6,785 / 備用金 7,400 後剩下的現金"
+                subtitle={`扣回錢盒 ${CASH_BOX_TARGET_TOTAL.toLocaleString()} / 備用金 ${RESERVE_TARGET_TOTAL.toLocaleString()} 後剩下的現金`}
                 denoms={[...SALES_DENOMS]}
                 targetQty={null}
                 values={sales}

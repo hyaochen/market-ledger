@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { getCashCountById } from "@/app/actions/cash";
+import { CASH_BOX_TARGET_TOTAL, RESERVE_TARGET_TOTAL } from "@/lib/cash-constants";
 import PrintButton from "./PrintButton";
 
 type DenomMap = Record<string, number>;
@@ -52,16 +53,16 @@ export default async function CashHistoryDetailPage(props: { params: Promise<{ i
             </div>
 
             <DetailTable
-                title="① 錢盒清點（目標 6,785）"
+                title={`① 錢盒清點（目標 ${CASH_BOX_TARGET_TOTAL.toLocaleString()}）`}
                 rows={[500, 100, 50, 10, 5].map((d) => ({ denom: d, qty: cashBox[String(d)] ?? 0 }))}
                 total={cc.cashBoxTotal}
-                target={6785}
+                target={CASH_BOX_TARGET_TOTAL}
             />
             <DetailTable
-                title="② 備用金清點（目標 7,400）"
+                title={`② 備用金清點（目標 ${RESERVE_TARGET_TOTAL.toLocaleString()}）`}
                 rows={[500, 100, 50, 10, 5].map((d) => ({ denom: d, qty: reserve[String(d)] ?? 0 }))}
                 total={cc.reserveTotal}
-                target={7400}
+                target={RESERVE_TARGET_TOTAL}
             />
             <DetailTable
                 title="③ 當日營業現金"
