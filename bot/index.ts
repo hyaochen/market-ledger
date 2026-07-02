@@ -372,6 +372,9 @@ function applyMuteMode(entries: ParsedEntry[]): ParsedEntry[] {
         if (e.type === 'PURCHASE' && !e.itemId) return e;
         // EXPENSE：expenseType 為 null（找不到支出類型）才保留 uncertain
         if (e.type === 'EXPENSE' && !e.expenseType) return e;
+        // F2/F3 fix：REVENUE locationId=null（攤位對不上/品號被誤判為地點）→ 保留 uncertain，
+        // 讓使用者看到「找不到地點」提示並自行澄清，避免靜音模式下直接丟到 saveEntry 回傳 error
+        if (e.type === 'REVENUE' && !e.locationId) return e;
         // 其餘情況（itemId/expenseType/locationId 已解析）→ 強制 confident，清除廠商選擇
         return {
             ...e,

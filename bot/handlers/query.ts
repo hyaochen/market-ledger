@@ -38,6 +38,14 @@ export function detectQueryDate(text: string): Date | 'recent' | null {
         return d;
     }
 
+    // 前天（F6 fix）
+    if (/前天/.test(t)) {
+        const d = new Date();
+        d.setDate(d.getDate() - 2);
+        d.setHours(0, 0, 0, 0);
+        return d;
+    }
+
     // 最近 / 近期
     if (/最近|近期|recent/.test(t)) {
         return 'recent';
@@ -62,7 +70,7 @@ export function detectQueryDate(text: string): Date | 'recent' | null {
 export function isQueryIntent(text: string): boolean {
     const t = normalizeChineseDate(text.trim());
     // 純日期詞直接觸發查詢（不需要額外關鍵字）
-    if (/^(今天|今日|昨天|昨日|最近|近期)$/.test(t)) return true;
+    if (/^(今天|今日|昨天|昨日|前天|最近|近期)$/.test(t)) return true;
     return detectQueryDate(text) !== null &&
         /記|記錄|記了|記了什麼|紀錄|查|什麼|多少/.test(text);
 }
