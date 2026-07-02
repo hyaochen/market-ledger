@@ -536,8 +536,12 @@ export async function parseEntries(userText: string, ctx: DbContext): Promise<Pa
         }
     }
 
-    // 後處理：斤兩格式 → 一般數字修正 → 單位正規化 → EXPENSE 金額欄位修正 → REVENUE 誤判修正 → EXPENSE 誤分類修正 → 備註補救
-    result = result.map(fixJinLiangFromRaw).map(fixNumbersFromRaw).map(normalizeUnit).map(fixExpenseAmountField).map(fixRevenueFromNote).map(fixMisclassifiedExpense).map(fixNoteFromRaw);
+    // 後處理：先補 rawInput fallback，確保 fixJinLiangFromRaw 可靠讀到原始文字
+    // B1 fix：LLM 省略 rawInput 欄位時，fallback 至 maskedText（含品項 keyword 置換版本），
+    // 讓 JIN_LIANG_RE 能從原始文字正確提取「X斤Y兩」，不再誤讀 LLM 的小數格式
+    result = result
+        .map(e => ({ ...e, rawInput: e.rawInput ?? maskedText }))
+        .map(fixJinLiangFromRaw).map(fixNumbersFromRaw).map(normalizeUnit).map(fixExpenseAmountField).map(fixRevenueFromNote).map(fixMisclassifiedExpense).map(fixNoteFromRaw);
 
     // 轉換為 ParsedEntry（itemId/vendorId/expenseType/locationId 留給 matcher.ts 填入）
     return result.map(entry => {
