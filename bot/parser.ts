@@ -67,6 +67,9 @@ EXPENSE 時：itemName 填支出名稱（如「薪資」「清潔費」「洗碗
 - 「清潔費110備註中山」→ {"type":"EXPENSE","itemName":"清潔費","price":110,"note":"中山"}
 - 「潮州3000」→ {"type":"REVENUE","itemName":"潮州","price":3000}（主體是地點→REVENUE）
 - 「屏東攤位5000」→ {"type":"REVENUE","itemName":"屏東攤位","price":5000}
+- 「6月19號潮州攤位17720」→ {"type":"REVENUE","date":"YYYY-06-19","itemName":"潮州攤位","price":17720}（即使前面有日期，主體仍是攤位名+金額→REVENUE）
+- 「6月19號潮州攤位 17720」→ {"type":"REVENUE","date":"YYYY-06-19","itemName":"潮州攤位","price":17720}（中間有空格不影響）
+- 「7/15 屏東 12300」→ {"type":"REVENUE","date":"YYYY-07-15","itemName":"屏東","price":12300}
 - 「洗碗精12桶560」→ {"type":"EXPENSE","itemName":"洗碗精","quantity":12,"unit":"桶","price":560}
 - 「漂白水2桶40」→ {"type":"EXPENSE","itemName":"漂白水","quantity":2,"unit":"桶","price":40}
 - 「肝連2.6台斤218廠商海豐」→ {"type":"PURCHASE","itemName":"肝連","quantity":2.6,"unit":"台斤","price":218,"vendorName":"海豐"}
@@ -92,9 +95,10 @@ async function callOllama(systemPrompt: string, userText: string, model: string)
                 ],
                 format: 'json',
                 stream: false,
+                keep_alive: '30m', // 讓 ollama 把模型常駐記憶體 30 分鐘，避免每次 cold start 4.7GB 重 load
                 options: { temperature: 0.1, num_predict: 1024 },
             }),
-            signal: AbortSignal.timeout(60000),
+            signal: AbortSignal.timeout(120000), // 2 分鐘：容忍 ollama cold start + GPU 競爭
         });
 
         console.log(`[Parser] ${model} responded in ${Date.now() - t0}ms, status=${response.status}`);
