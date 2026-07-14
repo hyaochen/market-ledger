@@ -1,7 +1,8 @@
 #!/bin/sh
 set -eu
 
-PORT="${PORT:-3000}"
+export PORT="${PORT:-3000}"
+export HOSTNAME="${HOSTNAME:-0.0.0.0}"
 export DATABASE_URL="${DATABASE_URL:-file:/app/data/dev.db}"
 
 mkdir -p /app/data
@@ -15,5 +16,5 @@ if [ ! -f /app/data/.seeded ]; then
   touch /app/data/.seeded
 fi
 
-echo "[t_web] next start on :${PORT}"
-npx next start -H 0.0.0.0 -p "${PORT}"
+echo "[t_web] next standalone server on :${PORT}"
+exec node server.js

@@ -3,6 +3,7 @@
     build:
       context: .
       dockerfile: Dockerfile
+      target: runner
     container_name: market-ledger
     mem_limit: 512m
     restart: unless-stopped
@@ -21,6 +22,7 @@
     build:
       context: .
       dockerfile: Dockerfile
+      target: bot
     container_name: market-ledger-bot
     mem_limit: 512m
     restart: unless-stopped
@@ -41,9 +43,7 @@
       - "host.docker.internal:host-gateway"
 
   market-ledger-tunnel:
-    build:
-      context: .
-      dockerfile: Dockerfile.cloudflared
+    image: cloudflare/cloudflared:latest
     container_name: market-ledger-tunnel
     restart: unless-stopped
     depends_on:
