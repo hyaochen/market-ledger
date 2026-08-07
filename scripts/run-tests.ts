@@ -10,6 +10,7 @@ env.NODE_ENV = "test";
 const tests = [
     "bot/parser.test.ts",
     "bot/parser.provider.test.ts",
+    "bot/bridgeHealth.test.ts",
     "bot/handlers/query.test.ts",
     "bot/itemKeywords.test.ts",
     "src/lib/password.test.ts",

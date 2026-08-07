@@ -17,6 +17,8 @@
     "bot": "tsx bot/index.ts",
     "bot:test": "tsx bot/test-runner.ts",
     "claude-bridge": "node scripts/claude-bridge/bridge.js",
+    "claude-bridge:register": "powershell -ExecutionPolicy Bypass -File scripts/claude-bridge/register-task.ps1",
+    "claude-bridge:stop": "powershell -ExecutionPolicy Bypass -File scripts/claude-bridge/stop-bridge.ps1",
     "benchmark:llm": "tsx scripts/claude-bridge/benchmark.ts"
   },
   "prisma": {

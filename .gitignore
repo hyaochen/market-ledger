@@ -50,6 +50,9 @@ next-env.d.ts
 tunnel-config.yml
 tunnel.log
 
+# claude-bridge runtime log (T-ML-026, written by scripts/claude-bridge/run-hidden.bat)
+/logs
+
 # local AI/editor settings
 .claude/
 

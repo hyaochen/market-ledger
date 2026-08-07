@@ -1,4 +1,4 @@
-# claude-bridge（T-ML-024）
+# claude-bridge（T-ML-024 + T-ML-026 收尾）
 
 Host 端的小 HTTP service，把 `claude -p`（走 owner 的 Claude Pro/Max **訂閱**，不是 API key）包成
 一個 `market-ledger-bot` 容器可以打的 endpoint。跟現有「容器打 host 上的 Ollama」是同一種架構，
@@ -20,14 +20,61 @@ Host 端的小 HTTP service，把 `claude -p`（走 owner 的 Claude Pro/Max **�
 
 ## 啟動
 
+### 手動前景執行（除錯用）
+
 ```powershell
 cd C:\Users\a0927\Desktop\t_web
 npm run claude-bridge
 # 或直接：node scripts/claude-bridge/bridge.js
 ```
 
-前景執行即可（跟開發用的 `npm run dev` 一樣）。**這個 task 刻意不設開機自啟 / 不註冊 schtask** —
-要不要常駐、要不要做成 Windows service，是 owner 的決定，不在這次範圍內。
+前景執行即可（跟開發用的 `npm run dev` 一樣），Ctrl+C 停止。
+
+### 開機自啟（T-ML-026，建議常駐用這個）
+
+T-ML-024 當時刻意不設開機自啟；T-ML-026 補上，理由是「bridge 沒開機自啟 → 重開機後
+bot 靜默退回 ollama，且沒人知道」是已知的實務風險（owner 8/7 選 A+B 批准修）。
+
+```powershell
+npm run claude-bridge:register
+```
+
+這會用 `schtasks /Create /XML` 匯入 `scripts/tasks/market-ledger-claude-bridge.xml`，
+註冊一個叫 **`market-ledger-claude-bridge`** 的排程工作：
+
+- **觸發**：`LogonTrigger`（owner 帳號登入 Windows 時，登入後延遲 10 秒），Principal 用
+  `InteractiveToken` + owner 的 SID（跟 trading-bot 專案既有排程用同一套機制，這台機器上已驗證
+  過不需要系統管理員權限就能註冊）
+- **不彈視窗**：node.exe 是 console-subsystem 執行檔，沒有 `pythonw.exe` 那種零視窗版本可用。
+  實際流程是 `wscript.exe run-hidden.vbs`（GUI-subsystem，永遠不開 console）→
+  `WScript.Shell.Run(..., windowStyle=0, waitOnReturn=False)` 隱藏啟動
+  `scripts/claude-bridge/run-hidden.bat` → bat 迴圈裡再啟動 `node scripts/claude-bridge/bridge.js`。
+  已用 `Get-Process | Select MainWindowHandle` 實測整條 process tree 的 `MainWindowHandle` 全部是
+  `0`（=沒有視窗），不是用肉眼「應該看不到」猜的
+- **當機自動重啟**：`run-hidden.bat` 本身是個迴圈——`bridge.js` 結束（不管是 crash 還是被砍）就等
+  5 秒重啟，並把 log 追加寫進 `logs/claude-bridge.log`。**刻意不依賴** schtask 自己的
+  `RestartOnFailure`（那個只會盯 `wscript.exe` 這個啟動器本身，`wscript.exe` 幾乎瞬間就正常結束
+  返回了，跟它後面真正常駐的 `node.exe` 是否還活著無關，schtask 層級的重啟設定在這裡形同虛設）
+- **XML 編碼**：`scripts/tasks/market-ledger-claude-bridge.xml` 宣告 `encoding="UTF-16"`，檔案也
+  真的用 `[System.IO.File]::WriteAllText(path, content, [System.Text.Encoding]::Unicode)` 存成
+  UTF-16LE + BOM（`FF FE` 開頭）——trading-bot 專案踩過「宣告 UTF-16 但檔案是 Write 工具預設的
+  UTF-8」的 mismatch 雷，這次直接對齊那個修法
+
+**確認自啟真的在跑**（不用真的重開機）：
+
+```powershell
+schtasks /Run /TN "market-ledger-claude-bridge"
+curl http://127.0.0.1:5055/health
+```
+
+**停用自啟**：
+
+```powershell
+npm run claude-bridge:stop              # 只停掉目前在跑的 process，排程仍會在下次登入時啟動
+npm run claude-bridge:stop -- -RemoveTask   # 額外把排程工作也刪掉，之後登入不會再自動啟動
+```
+
+（或直接：`powershell -ExecutionPolicy Bypass -File scripts/claude-bridge/stop-bridge.ps1 -RemoveTask`）
 
 ## 確認在跑
 
@@ -50,7 +97,37 @@ curl http://127.0.0.1:5055/health
 
 ## 停止
 
-前景視窗按 `Ctrl+C`（有處理 SIGINT/SIGTERM，會乾淨關閉 HTTP server）。
+- 前景執行：視窗按 `Ctrl+C`（有處理 SIGINT/SIGTERM，會乾淨關閉 HTTP server）。
+- 開機自啟模式：`npm run claude-bridge:stop`（見上方「開機自啟」段落）。
+
+---
+
+## bot 啟動健康檢查 + Telegram 告警（T-ML-026 B）
+
+`bot/index.ts` 啟動時（`preloadStates()` 之後、`bot.startPolling()` 之前）會呼叫
+`bot/bridgeHealth.ts` 的 `runStartupBridgeHealthCheck()` 打一次 `/health`：
+
+- `LLM_PROVIDER != claude` → 直接跳過（bridge 本來就沒在用）
+- 健康 → log 一行，什麼都不做
+- 不健康 → 找 owner 的 Telegram chat id，發一則告警（說明 bridge 沒跑 → 已自動退回本地 ollama →
+  正確率會下降 → 請執行 `npm run claude-bridge`）
+
+**只在啟動時檢查一次，不是常駐輪詢**——`bot/parser.ts` 本來就會每筆訊息各自無感 fallback 到
+ollama，如果健康檢查也做成每次解析都跑一次還告警，會變成訊息騷擾。程式碼裡有一個
+process 層級的 `alreadyAlertedThisProcess` flag 防重複告警（純防禦性，目前設計下本來就只會被
+呼叫一次）。
+
+**owner chat id 怎麼找**：掃 `SystemConfig` 裡的 `tg_session_*`（跟 `bot/auth.ts` /
+`bot/state.ts` preloadStates 用同一份 key 格式），找出 session 裡 `userId` 對應
+`User.isSuperAdmin === true` 的那一筆，用它的 key 尾碼（= Telegram 私聊時的 chat id）當收件人。
+**沒有寫死 chat id，也沒有讀 `.env`**——完全沿用 bot 既有的登入機制。
+
+🔴 **已知落地缺口（2026-08-07 實測發現）**：目前 DB 裡 `isSuperAdmin=true` 的帳號（`chen` /
+`superadmin`）**從來沒有透過 Telegram 登入過這個 bot**——只有 `mom` 這個非 admin 帳號在用。
+也就是說現在告警機制程式碼正確、也真的跑過（見下方驗證記錄），但**目前沒有地方可以送**：
+`findOwnerChatId()` 會正確回傳 `null`，log 一行警告，bot 正常繼續 polling，不會壞掉，但 owner
+收不到任何 Telegram 訊息。**要讓這個機制真的能通知到人，owner 需要自己用 Telegram 傳一次
+`chen <密碼>` 或 `superadmin <密碼>` 給這支 bot 完成登入**（7 天效期，過期要再登入一次）。
 
 ---
 
@@ -128,6 +205,27 @@ owner 的全域 `~/.claude/CLAUDE.md` 和 auto-memory（`MEMORY.md`），導致�
 瓶頸主要是 CLI process 啟動開銷（載入 agent、驗證 auth 等），不是模型推論時間本身。如果之後
 owner 決定要走「Claude API + Haiku」而不是「`claude -p` CLI」，那是完全不同的呼叫路徑（直接
 API call，不經過 CLI 啟動流程），速度特性會不一樣，不能直接套用這裡的結論。
+
+### 4. `--safe-mode` 不擋工具，`--disallowed-tools` 清單也要涵蓋這台機器實際有的工具（T-ML-026 C）
+
+`--safe-mode` 的 `--help` 白紙黑字寫「Auth, model selection, **built-in tools, and permissions
+work normally**」——它只清系統提示（CLAUDE.md/skills/plugins/hooks/auto-memory），完全不管工具
+權限。實測（`--safe-mode` 但沒加 `--tools`/`--disallowed-tools`）：問 claude 一個「答案只寫在
+`~/.claude/CLAUDE.md` 和 `vault/projects/memoria/*.md` 裡」的問題，它會**主動用工具去讀那些檔案**
+然後正確答出來——等於記帳 bot 的 LLM 呼叫可以被誘導翻主機任意檔案。
+
+修法是雙層擋：既有的 `'--tools', ''`（空白名單，經驗證單獨就能完全擋住）+ 新加的
+`--disallowed-tools`（明確黑名單，防未來版本新增預設開的工具繞過空白名單）。
+
+🔴 **Windows 專屬踩坑**：一開始用通用 Unix 清單
+`Read Grep Glob Bash Task WebFetch WebSearch Edit Write NotebookEdit` 測，**完全沒擋住**——
+用 `--output-format stream-json --verbose` 攤開實際呼叫的工具才發現，這台機器的 claude CLI 把
+**`PowerShell`** 列成跟 `Bash` 平行的獨立工具（不是同一個），claude 直接改用 `PowerShell`
+讀檔繞過清單；另外還用了 `ToolSearch`（執行期動態載入其他延遲工具）。清單補上
+`PowerShell ToolSearch Agent Skill` 後才真的擋住（見 `scripts/claude-bridge/bridge.js` 裡
+`runClaude()` 的完整清單和驗證記錄）。**教訓**：光看官方文件列的通用工具名稱清單不夠，同一支
+CLI 在不同作業系統/環境下實際暴露的工具集合可能不同，黑名單要用 `--verbose` 攤開真實呼叫來驗證，
+不能憑經驗直接抄別的平台的清單。
 
 ---
 

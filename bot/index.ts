@@ -16,6 +16,7 @@ import {
     startConfirmation, acceptCurrent, rejectCurrent, getAllConfirmed,
     removeLastConfirmed, addToConfirmed, enterNewItemFlow, exitNewItemFlow,
 } from './state';
+import { runStartupBridgeHealthCheck } from './bridgeHealth';
 import {
     processEntries, formatSummary, formatEntry,
 } from './handlers/entry';
@@ -62,6 +63,13 @@ console.log('🤖 Bot 啟動中...');
 
 (async () => {
     await preloadStates();
+    // T-ML-026 (B)：啟動時打一次 claude-bridge /health，不通就 Telegram 告警給 owner
+    // （isSuperAdmin，見 bot/bridgeHealth.ts）。只在啟動時檢查一次，不在每次解析時檢查
+    // ——bot/parser.ts 本來就會每筆訊息無感 fallback 到 ollama，這裡只是加一層「該讓人
+    // 知道」，過度告警本身就是一種擾民，所以刻意不做成常駐輪詢。
+    await runStartupBridgeHealthCheck({
+        sendAlert: async (chatId, text) => { await bot.sendMessage(chatId, text); },
+    });
     await bot.startPolling();
     console.log('🤖 Bot polling started');
 })().catch((err) => {

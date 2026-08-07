@@ -148,6 +148,21 @@ function runClaude(system, user, model, timeoutMs) {
             // 不吃 OAuth，等於繞過訂閱認證，違背這個 task 的目的（wiki bridge 已踩過這雷）。
             '--safe-mode',
             '--tools', '',
+            // T-ML-026 (C)：--safe-mode 的 --help 說明白紙黑字寫「Auth, model selection,
+            // built-in tools, and permissions work normally」—— 它只清系統提示，不管工具。
+            // 實測驗證（無 --tools/--disallowed-tools 時）：claude 真的會主動用工具讀
+            // ~/.claude/CLAUDE.md 和 vault/projects/memoria/*.md，答出只寫在那些檔案裡的
+            // owner 專案對照資訊。bot 只需要「文字→JSON」，不需要任何工具，所以兩層都擋：
+            // --tools ''（空白名單）+ 明確 --disallowed-tools 黑名單（防未來版本新增
+            // 預設開啟的工具繞過空白名單）。
+            // 🔴 Windows 專屬踩坑：這台機器的 claude CLI 把 "PowerShell" 列成獨立工具
+            // （不是併入 "Bash"）—— 只擋 Bash/Read/Grep/... 這種通用 Unix 清單完全沒用，
+            // claude 直接改用 PowerShell 讀檔，外洩照樣發生。ToolSearch 可在執行期動態
+            // 載入其他延遲工具，Agent/Skill 能開子任務拿到自己的工具權限，兩者也一併擋掉，
+            // 不然只擋「看起來明顯」的檔案/網路工具還是留了側門。
+            '--disallowed-tools',
+            'Read', 'Grep', 'Glob', 'Bash', 'PowerShell', 'Task', 'Agent', 'Skill',
+            'ToolSearch', 'WebFetch', 'WebSearch', 'Edit', 'Write', 'NotebookEdit',
             '--system-prompt', system || '你是個有用的 AI 助理。',
         ];
         const proc = spawn(CLAUDE_BIN, args, {
