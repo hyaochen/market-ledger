@@ -33,6 +33,10 @@
       DATABASE_URL: file:/app/data/dev.db
       # 容器內連到 host 的 Ollama（Windows/Mac 用 host.docker.internal）
       OLLAMA_BASE_URL: http://host.docker.internal:11434
+      # T-ML-024：LLM provider 切換。claude 走 owner 的 Pro/Max 訂閱額度（透過 host 上的
+      # claude-bridge，見 scripts/claude-bridge/README.md），失敗時自動退回 ollama。
+      LLM_PROVIDER: claude
+      CLAUDE_BRIDGE_URL: http://host.docker.internal:5055
     volumes:
       - ./docker-data:/app/data
     depends_on:

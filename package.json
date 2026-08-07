@@ -15,7 +15,9 @@
     "test": "tsx scripts/run-tests.ts",
     "lint": "next lint",
     "bot": "tsx bot/index.ts",
-    "bot:test": "tsx bot/test-runner.ts"
+    "bot:test": "tsx bot/test-runner.ts",
+    "claude-bridge": "node scripts/claude-bridge/bridge.js",
+    "benchmark:llm": "tsx scripts/claude-bridge/benchmark.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
