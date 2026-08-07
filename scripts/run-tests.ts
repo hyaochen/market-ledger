@@ -15,6 +15,22 @@ const tests = [
     "bot/itemKeywords.test.ts",
     "src/lib/password.test.ts",
     "src/lib/session.test.ts",
+    // T-ML-025 批 1：分析・搜尋・分類核心邏輯層
+    "src/lib/analytics/dateRange.test.ts",
+    "src/lib/analytics/stallInference.test.ts",
+    "src/lib/analytics/priceNormalize.test.ts",
+    "src/lib/analytics/textMatch.test.ts",
+    "src/lib/analytics/stats.test.ts",
+    "src/lib/analytics/itemSearch.test.ts",
+    "src/lib/analytics/noteSearch.test.ts",
+    "src/lib/analytics/vendorCompare.test.ts",
+    "src/lib/analytics/priceTrend.test.ts",
+    "src/lib/analytics/stallProfit.test.ts",
+    "src/lib/analytics/periodCompare.test.ts",
+    "src/lib/analytics/anomalies.test.ts",
+    "src/lib/analytics/classifyPurchase.test.ts",
+    "src/lib/analytics/classifyExpense.test.ts",
+    "src/lib/analytics/classifyStall.test.ts",
 ];
 
 const child = spawn("tsx", ["--test", ...tests], {
