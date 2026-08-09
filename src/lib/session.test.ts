@@ -33,8 +33,15 @@ test("verifySession: malformed token returns null", () => {
 test("verifySession: tampered signature rejected", () => {
     const token = signSession({ userId: "u1", tenantId: null, isSuperAdmin: false, issuedAt: Date.now() });
     const [payload, sig] = token.split(".");
-    // Flip a byte in sig
-    const tamperedSig = sig.slice(0, -1) + (sig.endsWith("A") ? "B" : "A");
+    // 🔴 2026-08-09 主控 spot-check：這裡原本翻的是 sig 的「最後一個」字元，會
+    // flaky（實測連跑 3 次會失敗 1 次）。原因是簽章是 base64url 的 HMAC-SHA256
+    // （32 bytes → 43 字元），最後一個字元只承載 4 個有效 bit，低 2 bit 在解碼時
+    // 直接被丟棄 —— 所以把它換成「同一組」的另一個字元（例如 B→A），解出來的
+    // bytes 完全相同、簽章依舊有效，verifySession 正確地回傳 session，但測試卻
+    // 期待 null 而失敗。翻「第一個」字元則一定承載完整 6 bit，改了必然改變解碼
+    // 結果，這個測試就變成確定性的。
+    const tamperedSig = (sig.startsWith("A") ? "B" : "A") + sig.slice(1);
+    assert.notEqual(tamperedSig, sig);
     assert.equal(verifySession(`${payload}.${tamperedSig}`), null);
 });
 

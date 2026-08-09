@@ -203,14 +203,19 @@ test("案例6 固定支出缺漏：7 月已補齊區間（7/1-7/30）符合星�
     assert.deepEqual(missing, [], `7/1-7/30 應該零缺口：${JSON.stringify(missing)}`);
 });
 
-test("案例6 固定支出缺漏：實測發現 7/31 屏東整天沒有清潔費也沒有洗攤（稽核報告 7/1-7/30 表格沒涵蓋到這天）", async () => {
-    // 這是批 1 開發時用偵測器實跑才發現的新缺口，不在主控 8/4 報告的逐日表格內
-    // （報告表格範圍只到 7/30）。有真實營業額（9,595）卻沒有對應固定支出。
+test("案例6 固定支出缺漏：7 月全月（含 7/31）現已零缺口", async () => {
+    // 沿革：批 1 開發時用偵測器實跑，發現 7/31 屏東有營業額（9,595）卻整天沒有
+    // 清潔費也沒有洗攤 —— 那天不在主控 8/4 稽核報告的逐日表格內（表格只到 7/30）。
+    // 當時這個測試斷言「7/31 屏東缺 2 筆」，等於把一個**待修的缺陷狀態**寫死成
+    // 預期值。2026-08-09 T-ML-028 依 owner 指示補登後（7/31 屏東 220+300、
+    // 7/31 潮州 220+250），這個斷言必然失效 —— 主控 spot-check 時親跑測試抓到。
+    //
+    // 🔴 教訓（跟 stallProfit.test.ts 那條同一類）：不要把「目前資料剛好長這樣」
+    // 當斷言，尤其當那個「這樣」本身就是等著被修掉的缺漏。改成驗證修完後應該
+    // 恆成立的性質 —— 全月零缺口 —— 這在未來再補登或調規則之後依然說得通。
     const range = monthRangeUTC(2026, 7);
     const missing = await detectMissingFixedExpenses(REAL_TENANT_ID, range);
-    const july31 = missing.filter((m) => m.date === "2026-07-31" && m.stall === "pingtung");
-    assert.equal(july31.length, 2, "7/31 屏東應該缺清潔費跟洗攤兩筆");
-    assert.ok(july31.every((m) => m.status === "missing"));
+    assert.deepEqual(missing, [], `7 月全月應零缺口（含 7/31）：${JSON.stringify(missing)}`);
 });
 
 test("案例6 固定支出缺漏：demo 租戶沒有設清潔費/洗攤字典 → 回空陣列而非丟錯", async () => {
