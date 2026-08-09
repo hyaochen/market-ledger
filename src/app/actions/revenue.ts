@@ -4,8 +4,34 @@ import prisma from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
 import { parseLocalDate } from '@/lib/date';
 import { ensureRole, getTenantId } from '@/lib/auth';
+import {
+    previewFixedExpenses,
+    applyFixedExpenses,
+    stallForLocation,
+    realEntryDb,
+    type FixedExpenseLine,
+    type FixedExpensePreview,
+} from '@/lib/fixedExpenseAutofill';
 
-export async function recordRevenue(date: string, locationId: string, amount: number, isDayOff: boolean) {
+/**
+ * 給 RevenueForm 用：日期/地點一變動就呼叫，回傳「將自動帶入」的預覽（可能為
+ * null = 這個地點/租戶不適用固定支出功能）。純查詢，不寫入。
+ */
+export async function getFixedExpensePreview(date: string, locationId: string): Promise<FixedExpensePreview | null> {
+    const auth = await ensureRole('write');
+    if (!auth.ok) return null;
+    const tenantId = await getTenantId();
+    const targetDate = parseLocalDate(date) ?? new Date();
+    return previewFixedExpenses(tenantId, targetDate, locationId);
+}
+
+export async function recordRevenue(
+    date: string,
+    locationId: string,
+    amount: number,
+    isDayOff: boolean,
+    fixedExpenses?: FixedExpenseLine[]
+) {
     try {
         const auth = await ensureRole('write');
         if (!auth.ok) return { success: false, error: auth.error };
@@ -41,9 +67,21 @@ export async function recordRevenue(date: string, locationId: string, amount: nu
             }
         });
 
+        // T-ML-027 範圍 A：自動帶固定支出（清潔費+洗攤）。休假日不帶；items 由前端
+        // 表單的預覽區塊決定（使用者可取消勾選/改金額），這裡完全信任傳進來的數字，
+        // 冪等由 applyFixedExpenses 內部的 upsertExpenseEntry('skip-if-exists') 保證。
+        let fixedExpenseResult: { created: FixedExpenseLine[]; skipped: FixedExpenseLine[] } | null = null;
+        if (!isDayOff && fixedExpenses && fixedExpenses.length > 0) {
+            const stall = await stallForLocation(tenantId, locationId);
+            if (stall) {
+                const applied = await applyFixedExpenses(realEntryDb, tenantId, targetDate, stall, auth.user.id, fixedExpenses);
+                fixedExpenseResult = { created: applied.created, skipped: applied.skipped };
+            }
+        }
+
         revalidatePath('/revenue');
         revalidatePath('/');
-        return { success: true };
+        return { success: true, fixedExpenseResult };
     } catch (error) {
         console.error('Record Revenue Error:', error);
         return { success: false, error: '儲存失敗' };

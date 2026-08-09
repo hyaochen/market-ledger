@@ -18,7 +18,7 @@ import {
 } from './state';
 import { runStartupBridgeHealthCheck } from './bridgeHealth';
 import {
-    processEntries, formatSummary, formatEntry,
+    processEntries, formatSummary, formatEntry, autofillFixedExpensesForSaved,
 } from './handlers/entry';
 import {
     detectQueryDate, isQueryIntent, queryByDate, queryRecent,
@@ -797,6 +797,10 @@ bot.on('message', async (msg) => {
         const summary = formatSummary(saved, failed, ctx);
         resetToIdle(chatId);
         await bot.sendMessage(chatId, summary);
+        const fixedExpenseNotes = await autofillFixedExpensesForSaved(saved, session);
+        for (const note of fixedExpenseNotes) {
+            await bot.sendMessage(chatId, note);
+        }
     } else {
         if (confident.length > 0) {
             const preview = confident.map(e => `  • ${formatEntry(e, ctx)}`).join('\n');
@@ -1179,6 +1183,10 @@ async function finalizeEntries(
     const { saved, failed } = await processEntries(confirmed, session, freshCtx);
     const summary = formatSummary(saved, failed, freshCtx);
     await bot.sendMessage(chatId, summary);
+    const fixedExpenseNotes = await autofillFixedExpensesForSaved(saved, session);
+    for (const note of fixedExpenseNotes) {
+        await bot.sendMessage(chatId, note);
+    }
 }
 
 // ── 錯誤處理 ────────────────────────────────────────────────
