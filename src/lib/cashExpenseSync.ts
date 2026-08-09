@@ -106,15 +106,32 @@ export async function syncCashExpensesToEntry(
             continue;
         }
 
-        const outcome = await upsertExpenseEntry(db, {
-            tenantId,
-            date,
-            expenseType: target.expenseType,
-            note: target.note,
-            amount: row.amount,
-            userId,
-            mode: 'overwrite',
-        });
+        // 【T-ML-028 範圍 B】有信心分類的項目 note 本質上就是攤位標籤（見
+        // resolveCashExpenseTarget），改用攤位模糊比對（matchMode='stall'）取代
+        // note 完全相等 —— 讓既有的「潮州攤」「朝洲」等錯字紀錄也能被正確覆寫，
+        // 不會因為 note 字串對不上而多開一筆重複紀錄。雜支 fallback 的複合備註
+        // （攤位｜品項文字）不是攤位標籤，維持舊版 matchMode='note' 完全相等比對。
+        const outcome = target.confident
+            ? await upsertExpenseEntry(db, {
+                  tenantId,
+                  date,
+                  expenseType: target.expenseType,
+                  amount: row.amount,
+                  userId,
+                  mode: 'overwrite',
+                  matchMode: 'stall',
+                  stall,
+              })
+            : await upsertExpenseEntry(db, {
+                  tenantId,
+                  date,
+                  expenseType: target.expenseType,
+                  note: target.note,
+                  amount: row.amount,
+                  userId,
+                  mode: 'overwrite',
+                  matchMode: 'note',
+              });
 
         result.synced.push({
             item: itemTrimmed,

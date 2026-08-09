@@ -65,7 +65,7 @@ interface FakeRow {
     type: string;
     date: Date;
     expenseType: string;
-    note: string;
+    note: string | null;
     totalPrice: number;
 }
 
@@ -86,6 +86,21 @@ class FakeEntryWriteDb implements EntryWriteDb {
             );
             return row ? { id: row.id, totalPrice: row.totalPrice } : null;
         },
+        // T-ML-028：攤位模式用，不篩 note，交給 upsertExpenseEntry 內部用
+        // inferStallFromNote 逐筆判斷。依 insertion order（等同 createdAt 升序）回傳，
+        // 跟 realEntryDb 的 orderBy: { createdAt: 'asc' } 行為一致。
+        findCandidates: async (args: { where: { tenantId: string; type: string; date: Date; expenseType: string } }) => {
+            const w = args.where;
+            return this.rows
+                .filter(
+                    (r) =>
+                        r.tenantId === w.tenantId &&
+                        r.type === w.type &&
+                        r.date.getTime() === w.date.getTime() &&
+                        r.expenseType === w.expenseType
+                )
+                .map((r) => ({ id: r.id, totalPrice: r.totalPrice, note: r.note as string | null }));
+        },
         create: async (args: { data: Record<string, unknown> }) => {
             const id = `fake-${++this.seq}`;
             this.rows.push({
@@ -94,7 +109,7 @@ class FakeEntryWriteDb implements EntryWriteDb {
                 type: args.data.type as string,
                 date: args.data.date as Date,
                 expenseType: args.data.expenseType as string,
-                note: args.data.note as string,
+                note: args.data.note as string | null,
                 totalPrice: args.data.totalPrice as number,
             });
             return { id };
@@ -102,30 +117,41 @@ class FakeEntryWriteDb implements EntryWriteDb {
         update: async (args: { where: { id: string }; data: Record<string, unknown> }) => {
             const row = this.rows.find((r) => r.id === args.where.id);
             if (row && typeof args.data.totalPrice === "number") row.totalPrice = args.data.totalPrice;
+            // note 欄位刻意不處理 —— upsertExpenseEntry 的 update() 呼叫本來就不會帶
+            // note，這裡的 assert 確保就算未來不小心傳了 note 也不會被這個假 DB 偷偷
+            // 接受並掩蓋掉 bug（如果 args.data 真的帶了 note，代表程式碼寫錯了）。
+            if ("note" in args.data) {
+                throw new Error("FakeEntryWriteDb.update() 收到 note —— upsertExpenseEntry 不應該在 update 時改寫 note");
+            }
             return { id: args.where.id };
         },
     };
 }
 
+function pushRow(db: FakeEntryWriteDb, row: Omit<FakeRow, "id">): void {
+    db.rows.push({ id: `seed-${db.rows.length + 1}`, ...row });
+}
+
 const TENANT = "test-tenant";
 const DATE = utcDate(2026, 8, 10); // Monday
 
-// ── upsertExpenseEntry ───────────────────────────────────────────────────
+// ── upsertExpenseEntry（matchMode='stall'，A/C 的清潔費/洗攤主路徑） ────────
 
-test("upsertExpenseEntry: 不存在時建立新的一筆", async () => {
+test("upsertExpenseEntry: 不存在時建立新的一筆，note 寫乾淨標籤", async () => {
     const db = new FakeEntryWriteDb();
     const result = await upsertExpenseEntry(db, {
-        tenantId: TENANT, date: DATE, expenseType: "清潔費", note: "中山", amount: 220, userId: "u1", mode: "skip-if-exists",
+        tenantId: TENANT, date: DATE, expenseType: "清潔費", matchMode: "stall", stall: "pingtung", amount: 220, userId: "u1", mode: "skip-if-exists",
     });
     assert.equal(result.action, "created");
     assert.equal(db.rows.length, 1);
     assert.equal(db.rows[0].totalPrice, 220);
+    assert.equal(db.rows[0].note, "中山");
 });
 
 test("upsertExpenseEntry: skip-if-exists 模式 — 已存在就跳過，絕不覆寫（A 的冪等保證）", async () => {
     const db = new FakeEntryWriteDb();
-    await upsertExpenseEntry(db, { tenantId: TENANT, date: DATE, expenseType: "清潔費", note: "中山", amount: 220, userId: "u1", mode: "skip-if-exists" });
-    const second = await upsertExpenseEntry(db, { tenantId: TENANT, date: DATE, expenseType: "清潔費", note: "中山", amount: 999, userId: "u1", mode: "skip-if-exists" });
+    await upsertExpenseEntry(db, { tenantId: TENANT, date: DATE, expenseType: "清潔費", matchMode: "stall", stall: "pingtung", amount: 220, userId: "u1", mode: "skip-if-exists" });
+    const second = await upsertExpenseEntry(db, { tenantId: TENANT, date: DATE, expenseType: "清潔費", matchMode: "stall", stall: "pingtung", amount: 999, userId: "u1", mode: "skip-if-exists" });
     assert.equal(second.action, "skipped");
     assert.equal(db.rows.length, 1);
     assert.equal(db.rows[0].totalPrice, 220, "skip-if-exists 不可覆寫既有金額");
@@ -133,8 +159,8 @@ test("upsertExpenseEntry: skip-if-exists 模式 — 已存在就跳過，絕不�
 
 test("upsertExpenseEntry: overwrite 模式 — 已存在且金額不同就更新（C 覆蓋 A 的實作核心）", async () => {
     const db = new FakeEntryWriteDb();
-    await upsertExpenseEntry(db, { tenantId: TENANT, date: DATE, expenseType: "清潔費", note: "中山", amount: 220, userId: null, mode: "skip-if-exists" }); // 模擬 A 先寫的formula guess
-    const overwrite = await upsertExpenseEntry(db, { tenantId: TENANT, date: DATE, expenseType: "清潔費", note: "中山", amount: 110, userId: "attendant1", mode: "overwrite" }); // C 帶著實付數字來
+    await upsertExpenseEntry(db, { tenantId: TENANT, date: DATE, expenseType: "清潔費", matchMode: "stall", stall: "pingtung", amount: 220, userId: null, mode: "skip-if-exists" }); // 模擬 A 先寫的formula guess
+    const overwrite = await upsertExpenseEntry(db, { tenantId: TENANT, date: DATE, expenseType: "清潔費", matchMode: "stall", stall: "pingtung", amount: 110, userId: "attendant1", mode: "overwrite" }); // C 帶著實付數字來
     assert.equal(overwrite.action, "updated");
     assert.equal(db.rows.length, 1, "不應該產生第二筆，是同一筆被更新");
     assert.equal(db.rows[0].totalPrice, 110, "C 的實付數字應該覆蓋 A 的 formula 猜測");
@@ -142,17 +168,74 @@ test("upsertExpenseEntry: overwrite 模式 — 已存在且金額不同就更新
 
 test("upsertExpenseEntry: overwrite 模式重複送出相同金額 — 冪等，不重複建立也不無謂 update", async () => {
     const db = new FakeEntryWriteDb();
-    await upsertExpenseEntry(db, { tenantId: TENANT, date: DATE, expenseType: "EXP011", note: "中山", amount: 300, userId: "a1", mode: "overwrite" });
-    const second = await upsertExpenseEntry(db, { tenantId: TENANT, date: DATE, expenseType: "EXP011", note: "中山", amount: 300, userId: "a1", mode: "overwrite" });
+    await upsertExpenseEntry(db, { tenantId: TENANT, date: DATE, expenseType: "EXP011", matchMode: "stall", stall: "pingtung", amount: 300, userId: "a1", mode: "overwrite" });
+    const second = await upsertExpenseEntry(db, { tenantId: TENANT, date: DATE, expenseType: "EXP011", matchMode: "stall", stall: "pingtung", amount: 300, userId: "a1", mode: "overwrite" });
     assert.equal(second.action, "skipped");
     assert.equal(db.rows.length, 1);
 });
 
 test("upsertExpenseEntry: amount<=0 一律跳過，不建立任何紀錄", async () => {
     const db = new FakeEntryWriteDb();
-    const result = await upsertExpenseEntry(db, { tenantId: TENANT, date: DATE, expenseType: "清潔費", note: "中山", amount: 0, userId: "u1", mode: "overwrite" });
+    const result = await upsertExpenseEntry(db, { tenantId: TENANT, date: DATE, expenseType: "清潔費", matchMode: "stall", stall: "pingtung", amount: 0, userId: "u1", mode: "overwrite" });
     assert.equal(result.action, "skipped");
     assert.equal(db.rows.length, 0);
+});
+
+// ── upsertExpenseEntry: matchMode='note'（雜支 fallback 等自由文字比對，向下相容） ──
+
+test("upsertExpenseEntry: matchMode='note' 維持完全相等比對（雜支 fallback 情境）", async () => {
+    const db = new FakeEntryWriteDb();
+    await upsertExpenseEntry(db, { tenantId: TENANT, date: DATE, expenseType: "misc", matchMode: "note", note: "中山｜大腸", amount: 250, userId: "u1", mode: "overwrite" });
+    // note 不完全相同（多一個字）→ 不能算同一筆，應該視為新的一筆
+    const other = await upsertExpenseEntry(db, { tenantId: TENANT, date: DATE, expenseType: "misc", matchMode: "note", note: "中山｜昨日大腸", amount: 260, userId: "u1", mode: "overwrite" });
+    assert.equal(other.action, "created");
+    assert.equal(db.rows.length, 2);
+});
+
+// ── upsertExpenseEntry: T-ML-028 範圍 B — 攤位 typo 正規化 ──────────────────
+
+test("T-ML-028 B: 既有 typo note（朝洲）能被 stall 模式判為同一攤，overwrite 更新同一筆而非多開一筆", async () => {
+    const db = new FakeEntryWriteDb();
+    pushRow(db, { tenantId: TENANT, type: "EXPENSE", date: DATE, expenseType: "清潔費", note: "朝洲", totalPrice: 220 });
+    const result = await upsertExpenseEntry(db, {
+        tenantId: TENANT, date: DATE, expenseType: "清潔費", matchMode: "stall", stall: "chaozhou", amount: 999, userId: "attendant1", mode: "overwrite",
+    });
+    assert.equal(result.action, "updated");
+    assert.equal(db.rows.length, 1, "不應該多開一筆，是同一筆（朝洲=潮州的錯字）被更新");
+    assert.equal(db.rows[0].totalPrice, 999);
+    assert.equal(db.rows[0].note, "朝洲", "既有 Entry 的 note 文字絕對不能被改寫，即使是錯字");
+});
+
+test("T-ML-028 B: 既有 typo note（屏東攤）在 skip-if-exists 模式下也能被判為同一攤而跳過", async () => {
+    const db = new FakeEntryWriteDb();
+    pushRow(db, { tenantId: TENANT, type: "EXPENSE", date: DATE, expenseType: "EXP011", note: "屏東攤", totalPrice: 300 });
+    const result = await upsertExpenseEntry(db, {
+        tenantId: TENANT, date: DATE, expenseType: "EXP011", matchMode: "stall", stall: "pingtung", amount: 300, userId: "u1", mode: "skip-if-exists",
+    });
+    assert.equal(result.action, "skipped");
+    assert.equal(db.rows.length, 1, "不應該因為 note 字面不同而多開一筆");
+    assert.equal(db.rows[0].note, "屏東攤", "skip 分支完全不觸碰既有 note");
+});
+
+test("T-ML-028 B: note 為 NULL 不會被誤判成任一攤位，仍會另外建立新的一筆", async () => {
+    const db = new FakeEntryWriteDb();
+    pushRow(db, { tenantId: TENANT, type: "EXPENSE", date: DATE, expenseType: "清潔費", note: null, totalPrice: 220 });
+    const result = await upsertExpenseEntry(db, {
+        tenantId: TENANT, date: DATE, expenseType: "清潔費", matchMode: "stall", stall: "pingtung", amount: 220, userId: "u1", mode: "skip-if-exists",
+    });
+    assert.equal(result.action, "created", "NULL note 不能被當成中山，必須視為找不到既有紀錄");
+    assert.equal(db.rows.length, 2, "NULL 那筆保留不動 + 新建一筆乾淨標籤的中山");
+    assert.equal(db.rows[1].note, "中山");
+});
+
+test("T-ML-028 B: 屏東跟潮州各自的 typo note 不會互相污染（攤位隔離仍然成立）", async () => {
+    const db = new FakeEntryWriteDb();
+    pushRow(db, { tenantId: TENANT, type: "EXPENSE", date: DATE, expenseType: "清潔費", note: "潮州攤", totalPrice: 220 });
+    const result = await upsertExpenseEntry(db, {
+        tenantId: TENANT, date: DATE, expenseType: "清潔費", matchMode: "stall", stall: "pingtung", amount: 220, userId: "u1", mode: "skip-if-exists",
+    });
+    assert.equal(result.action, "created", "潮州的 typo 紀錄不該讓屏東被誤判成已存在");
+    assert.equal(db.rows.length, 2);
 });
 
 // ── applyFixedExpenses（A 的完整流程） ────────────────────────────────────
