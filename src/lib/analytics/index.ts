@@ -19,3 +19,4 @@ export * from './anomalies';
 export * from './classifyPurchase';
 export * from './classifyExpense';
 export * from './classifyStall';
+export * from './fixedExpenseRules';

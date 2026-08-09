@@ -14,6 +14,7 @@ import { inferStallFromNote, type StallCode } from './stallInference';
 import { isoDateKeyUTC, resolveRange, getWeekdayUTC, type DateRange } from './dateRange';
 import { normalizeToKgPrice } from './priceNormalize';
 import { median, robustZScore } from './stats';
+import { expectedCleaningFee, expectedWashFee, getFixedExpenseDictValues } from './fixedExpenseRules';
 
 const MIN_VALID_YEAR = 2020;
 const DEFAULT_Z_THRESHOLD = 3.5; // Iglewicz & Hoaglin 建議值
@@ -366,34 +367,27 @@ export interface MissingFixedExpense {
     status: 'missing' | 'amount_mismatch';
 }
 
-function expectedCleaningFee(stall: StallCode, weekdayUTC: number): number {
-    if (stall === 'chaozhou') return 220;
-    // 屏東：週一/三/五=220、週二/四/六/日=110
-    return weekdayUTC === 1 || weekdayUTC === 3 || weekdayUTC === 5 ? 220 : 110;
-}
-
-function expectedWashFee(stall: StallCode): number {
-    return stall === 'pingtung' ? 300 : 250;
-}
+// expectedCleaningFee() / expectedWashFee() 規則移到 fixedExpenseRules.ts（T-ML-027
+// 需要在自動帶入/補登腳本重用同一套規則，避免分叉），這裡改為 import。
 
 export async function detectMissingFixedExpenses(tenantId: string, range: DateRange): Promise<MissingFixedExpense[]> {
-    const [revenues, cleaningDict, washDict] = await Promise.all([
+    const [revenues, dictValues] = await Promise.all([
         prisma.revenue.findMany({
             where: { tenantId, date: { gte: range.gte, lt: range.lt }, isDayOff: false, amount: { gt: 0 } },
             include: { location: true },
         }),
-        prisma.dictionary.findFirst({ where: { tenantId, category: 'expense_type', label: '清潔費' } }),
-        prisma.dictionary.findFirst({ where: { tenantId, category: 'expense_type', label: '洗攤' } }),
+        getFixedExpenseDictValues(tenantId),
     ]);
 
-    if (!cleaningDict || !washDict) return []; // 該租戶沒設這兩個支出類型，無法比對（例如 demo 租戶）
+    if (!dictValues) return []; // 該租戶沒設這兩個支出類型，無法比對（例如 demo 租戶）
+    const { cleaningValue, washValue } = dictValues;
 
     const feeEntries = await prisma.entry.findMany({
         where: {
             tenantId,
             type: 'EXPENSE',
             date: { gte: range.gte, lt: range.lt },
-            expenseType: { in: [cleaningDict.value, washDict.value] },
+            expenseType: { in: [cleaningValue, washValue] },
         },
         select: { date: true, expenseType: true, note: true, totalPrice: true },
     });
@@ -422,7 +416,7 @@ export async function detectMissingFixedExpenses(tenantId: string, range: DateRa
         const stallLabel = stall === 'pingtung' ? '屏東' : '潮州';
 
         const cleaningExpected = expectedCleaningFee(stall, weekday);
-        const cleaningActual = actualMap.get(`${dateKey}|${stall}|${cleaningDict.value}`) ?? null;
+        const cleaningActual = actualMap.get(`${dateKey}|${stall}|${cleaningValue}`) ?? null;
         if (cleaningActual == null) {
             missing.push({ date: dateKey, stall, stallLabel, expenseLabel: '清潔費', expectedAmount: cleaningExpected, actualAmount: null, status: 'missing' });
         } else if (cleaningActual !== cleaningExpected) {
@@ -430,7 +424,7 @@ export async function detectMissingFixedExpenses(tenantId: string, range: DateRa
         }
 
         const washExpected = expectedWashFee(stall);
-        const washActual = actualMap.get(`${dateKey}|${stall}|${washDict.value}`) ?? null;
+        const washActual = actualMap.get(`${dateKey}|${stall}|${washValue}`) ?? null;
         if (washActual == null) {
             missing.push({ date: dateKey, stall, stallLabel, expenseLabel: '洗攤', expectedAmount: washExpected, actualAmount: null, status: 'missing' });
         } else if (washActual !== washExpected) {

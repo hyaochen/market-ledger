@@ -9,11 +9,18 @@ test("需求5 攤位損益：7 月營收精準分攤位（Revenue.locationId）"
     // 是 463,899，report 當時是 454,304，差額剛好等於 7/31 那筆金額差），報告數字已經是
     // 歷史快照而非目前真相。這裡改成先用同一支函式當下查出來的值當 baseline，
     // 只驗證「屏東 + 潮州 = 全租戶總營收」這個內部一致性，不綁死一個會過期的魔術數字。
+    //
+    // 🔴 2026-08-09（T-ML-027）：潮州那行原本也寫死 425,925 比對，結果被本次任務
+    // 期間真實發生的資料變動打破（唯讀查證：owner 8/9 20:06 透過 Telegram bot 補打
+    // 「8月7號潮州攤位18820」，7 月潮州總營收從 425,925 變成 441,045，count 26→27
+    // 筆 —— 跟本次任務程式碼改動完全無關，純粹是租戶在使用中新增了一筆歷史日期的
+    // 營收記錄）。這證明連「當下查出來的值」都可能在測試之間漂移，索性跟屏東那行
+    // 用同樣的寬鬆手法：只驗證量級合理 + 內部一致性，不綁死任何時間點的快照數字。
     const result = await getStallProfitComparison({ tenantId: REAL_TENANT_ID, from: "2026-07-01", to: "2026-07-31" });
     const pingtung = result.byStall.find((b) => b.stall === "pingtung")!;
     const chaozhou = result.byStall.find((b) => b.stall === "chaozhou")!;
     assert.ok(pingtung.revenue > 400000);
-    assert.equal(chaozhou.revenue, 425925, "潮州營收目前跟報告一致，未被後續同步機制改動過");
+    assert.ok(chaozhou.revenue > 400000, `潮州 7 月營收應該在合理量級（目前 ${chaozhou.revenue}）`);
     assert.equal(result.totals.revenue, pingtung.revenue + chaozhou.revenue);
 });
 
