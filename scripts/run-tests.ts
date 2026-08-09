@@ -31,6 +31,10 @@ const tests = [
     "src/lib/analytics/classifyPurchase.test.ts",
     "src/lib/analytics/classifyExpense.test.ts",
     "src/lib/analytics/classifyStall.test.ts",
+    // T-ML-027：營業額自動帶固定支出 + cash 清點支出同步
+    "src/lib/analytics/fixedExpenseRules.test.ts",
+    "src/lib/fixedExpenseAutofill.test.ts",
+    "src/lib/cashExpenseSync.test.ts",
 ];
 
 const child = spawn("tsx", ["--test", ...tests], {
