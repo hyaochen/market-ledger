@@ -17,6 +17,7 @@ import {
     removeLastConfirmed, addToConfirmed, enterNewItemFlow, exitNewItemFlow,
 } from './state';
 import { runStartupBridgeHealthCheck } from './bridgeHealth';
+import { startHeartbeat } from './heartbeat';
 import {
     processEntries, formatSummary, formatEntry, autofillFixedExpensesForSaved,
 } from './handlers/entry';
@@ -48,6 +49,10 @@ if (!TOKEN) {
     console.error('❌ TELEGRAM_BOT_TOKEN 未設定，請檢查 .env');
     process.exit(1);
 }
+
+// T-ML-031：容器健康檢查心跳。跟 Telegram polling 能不能啟動成功無關，故意放在
+// bot 物件建立之前就開始跑，越早開始寫心跳檔越好（細節見 bot/heartbeat.ts 檔頭註解）。
+startHeartbeat();
 
 // 啟動前先從 DB 拉回所有對話狀態（撐過 bot 重啟不丟進度）
 // autoStart:false 讓我們先載入完狀態再開 polling

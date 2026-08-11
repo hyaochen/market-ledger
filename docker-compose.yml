@@ -60,6 +60,35 @@
     command: ["node_modules/.bin/tsx", "bot/index.ts"]
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    healthcheck:
+      # T-ML-031：bot 在此之前完全沒有健康檢查（T-ML-030 只顧到 web）。8/10 事故使用者
+      # 端實際看到的是「bot 登入一直失敗」——Telegram 正是 owner 母親記帳的主要管道，
+      # 只顧 web 端會漏掉這個 bot 專屬的失效模式。
+      #
+      # 🔴 為什麼不能比照 web 那樣「另開一個 process 查 DB」：主控 2026-08-11 20:00 實測，
+      # 在容器內用 docker exec 另開一個 process 去開同一個 WAL DB，穩定拿到 SqliteError
+      # 522（2/2 重現）；但同一時間 bot 本體長駐 process 的既有連線完全正常服務中（見
+      # vault/projects/market-ledger/bugs-log.md 2026-08-11「事後追查補充」）。失效的
+      # 單位是「連線」不是「容器」——healthcheck 若自己開新 process/新連線查 DB，會被這
+      # 個現象騙成「假 unhealthy」，看門狗因此無限重啟一個其實健康的 bot，直接打斷正在
+      # 記帳的使用者，比完全沒有監控更糟。
+      #
+      # 所以改用心跳檔案（bot/heartbeat.ts）：bot 主流程每 60 秒用自己既有的 Prisma
+      # 連線查一次，成功就把時間戳寫到 /tmp/bot-heartbeat（容器可寫層，刻意不用
+      # /app/data 的 Windows bind mount——那正是事故根因的所在地）。這裡的 test 只檢查
+      # 檔案新不新鮮（180 秒＝3 個心跳週期，吸收單次 tick 被事件迴圈延遲或單次查詢失敗
+      # 的雜訊），全程是純檔案系統操作，不開任何新連線、不啟動任何新 process。
+      # 路徑寫死跟 bot/heartbeat.ts 的 HEARTBEAT_FILE 對齊，改動要兩邊一起改。
+      # 用 node -e 不用 curl/wget：node:20-bookworm-slim 兩者都沒裝。
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "const fs=require('fs');try{const s=fs.statSync('/tmp/bot-heartbeat');process.exit((Date.now()-s.mtimeMs)<180000?0:1);}catch(e){process.exit(1);}"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   market-ledger-tunnel:
     image: cloudflare/cloudflared:latest

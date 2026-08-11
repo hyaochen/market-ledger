@@ -7,6 +7,18 @@
 # down, so a stale SQLite file handle (Windows bind mount + WAL, see bugs-log.md
 # 2026-08-11) gets caught and fixed automatically instead of silently for hours.
 #
+# T-ML-031 addition: the web check alone only catches the case where BOTH
+# containers happened to be down together (true on 2026-08-10/11 by coincidence).
+# If only the bot's DB connection ever fails while web stays healthy, the old
+# version of this script would stay silent forever -- and the bot (Telegram) is
+# the primary channel the owner's mother uses to record entries, so a bot-only
+# outage is exactly as user-facing as a web-only one. This version additionally
+# reads the bot container's own Docker healthcheck status (see docker-compose.yml
+# market-ledger-bot healthcheck + bot/heartbeat.ts for why that healthcheck is a
+# heartbeat-file freshness check and not a live DB query). Both signals feed the
+# SAME consecutive-failure counter and throttle below -- deliberately not widened,
+# per task spec.
+#
 # Designed to be invoked periodically (every 10 minutes) by Windows Task Scheduler,
 # NOT to run as a long-lived loop itself -- each invocation is a single
 # check-and-maybe-act cycle. State (consecutive failure count, last restart time)
@@ -24,8 +36,9 @@ $ErrorActionPreference = "Stop"
 
 # ---- config ----
 $HealthUrl = "http://127.0.0.1:3000/api/health"
-$FailThreshold = 3          # consecutive failures required before restarting
-$ThrottleMinutes = 30        # minimum gap between automatic restarts
+$BotContainerName = "market-ledger-bot"   # T-ML-031: checked via `docker inspect --format {{.State.Health.Status}}`
+$FailThreshold = 3          # consecutive failures required before restarting (unchanged by T-ML-031)
+$ThrottleMinutes = 30        # minimum gap between automatic restarts (unchanged by T-ML-031)
 $Containers = @("market-ledger", "market-ledger-bot")
 $AttentionPath = "C:\Users\a0927\vault\ops\attention.md"
 
@@ -86,6 +99,28 @@ function Test-HealthEndpoint {
     }
 }
 
+# T-ML-031: reads the bot container's own Docker healthcheck status (a heartbeat-file
+# freshness check, see docker-compose.yml + bot/heartbeat.ts -- NOT a live DB query,
+# so this function itself never touches dev.db, directly or indirectly). Returns the
+# raw status string ("healthy" / "unhealthy" / "starting") or "error" if `docker
+# inspect` itself fails (container missing, Docker not running, etc.) -- "error" is
+# deliberately never treated as healthy by the caller.
+function Get-BotHealthStatus {
+    try {
+        $output = & docker inspect $BotContainerName --format "{{.State.Health.Status}}" 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            return "error"
+        }
+        $status = ($output | Out-String).Trim()
+        if ([string]::IsNullOrWhiteSpace($status)) {
+            return "error"
+        }
+        return $status
+    } catch {
+        return "error"
+    }
+}
+
 # Only ASCII text is used to find the insertion point (no literal Chinese in this
 # .ps1 file -- PowerShell 5.1 mangles non-ASCII source into ParserError garbage
 # when written by some tools; the vault heading is "## Active(...)" in Chinese but
@@ -143,11 +178,20 @@ function Invoke-ContainerRestart {
 
 # ---- main ----
 $state = Get-State
-$healthy = Test-HealthEndpoint
+
+# T-ML-031: combined check -- overall healthy only if BOTH the web /api/health
+# endpoint AND the bot container's own healthcheck status report healthy. Either one
+# failing counts as an overall failure and feeds the SAME $state.ConsecutiveFailures
+# counter below (no separate threshold per check -- deliberately not widened, see
+# task spec / header comment).
+$webHealthy = Test-HealthEndpoint
+$botStatus = Get-BotHealthStatus
+$botHealthy = ($botStatus -eq "healthy")
+$healthy = $webHealthy -and $botHealthy
 
 if ($healthy) {
     if ($state.ConsecutiveFailures -gt 0) {
-        Write-Log "Health check OK, resetting failure count from $($state.ConsecutiveFailures)"
+        Write-Log "Health check OK (web=up bot=healthy), resetting failure count from $($state.ConsecutiveFailures)"
     }
     $state.ConsecutiveFailures = 0
     Save-State $state
@@ -155,7 +199,8 @@ if ($healthy) {
 }
 
 $state.ConsecutiveFailures += 1
-Write-Log "Health check FAILED ($HealthUrl), consecutive failures: $($state.ConsecutiveFailures)"
+$webWord = if ($webHealthy) { "up" } else { "DOWN" }
+Write-Log "Health check FAILED (web=$webWord [$HealthUrl] bot=$botStatus [$BotContainerName]), consecutive failures: $($state.ConsecutiveFailures)"
 
 if ($state.ConsecutiveFailures -lt $FailThreshold) {
     Save-State $state
@@ -190,7 +235,7 @@ $entry = @"
 ### AUTO $((Get-Date -Format "yyyy-MM-dd HH:mm")) | market-ledger | health-watchdog auto-restart triggered
 
 - Status: $statusWord (unattended, triggered by scripts\health-watchdog.ps1)
-- Detected: $FailThreshold consecutive /api/health failures before $((Get-Date -Format "yyyy-MM-dd HH:mm:ss"))
+- Detected: $FailThreshold consecutive combined-health failures before $((Get-Date -Format "yyyy-MM-dd HH:mm:ss")) (web=$webWord bot=$botStatus at time of trigger; either check failing counts toward the same threshold)
 - Action: docker restart market-ledger market-ledger-bot
 - Detail log: C:\Users\a0927\Desktop\t_web\logs\health-watchdog.log
 "@
