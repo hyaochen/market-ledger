@@ -16,7 +16,14 @@
       DATABASE_URL: file:/app/data/dev.db
       PORT: 3000
     volumes:
-      - ./docker-data:/app/data
+      # T-ML-032: moved off the Windows bind mount (./docker-data) onto a Docker
+      # named volume. Root cause of the 2026-08-11 35h outage (bugs-log.md) was
+      # SQLite WAL mode's -shm shared-memory file not working across the Windows
+      # bind mount's filesystem translation layer -- a host process opening
+      # dev.db could leave the container's handle stale. Named volumes live on
+      # the WSL2 ext4 filesystem, sidestepping that layer entirely. See
+      # vault/projects/market-ledger/learnings/2026-08-11-t-ml-032-*.md.
+      - market-ledger-data:/app/data
     healthcheck:
       # T-ML-030：2026-08-11 事故証明「登入頁回 200」騙過所有看 HTTP status 的監控 ——
       # 靜態頁永遠 200，DB 卡死 35 小時沒人發現。改打真的會查 DB 的 /api/health。
@@ -53,7 +60,9 @@
       LLM_PROVIDER: claude
       CLAUDE_BRIDGE_URL: http://host.docker.internal:5055
     volumes:
-      - ./docker-data:/app/data
+      # T-ML-032: same named volume as market-ledger above -- both services must
+      # share the identical volume to see the same dev.db.
+      - market-ledger-data:/app/data
     depends_on:
       - market-ledger
     # 略過 next build，直接跑 bot
@@ -100,4 +109,11 @@
     volumes:
       - ./cloudflared-docker.yml:/app/cloudflared-docker.yml:ro
       - ${CLOUDFLARED_DIR}:/etc/cloudflared:ro
+
+volumes:
+  market-ledger-data:
+    # T-ML-032: explicit name (not compose's default "<project>_market-ledger-data"
+    # prefix) so the one-off migration container that pre-populates this volume
+    # (see learning brief) targets the exact same volume compose creates here.
+    name: market-ledger-data
 
