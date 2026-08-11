@@ -17,6 +17,21 @@
       PORT: 3000
     volumes:
       - ./docker-data:/app/data
+    healthcheck:
+      # T-ML-030：2026-08-11 事故証明「登入頁回 200」騙過所有看 HTTP status 的監控 ——
+      # 靜態頁永遠 200，DB 卡死 35 小時沒人發現。改打真的會查 DB 的 /api/health。
+      # 用 127.0.0.1 不用 localhost：容器內 localhost 解析成 IPv6 ::1，但 Next 綁
+      # 0.0.0.0（IPv4），healthcheck 會永遠失敗（checkin 專案踩過整整 3 週的教訓）。
+      # 用 node -e 不用 curl/wget：node:20-bookworm-slim 兩者都沒裝。
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "const req=require('http').get('http://127.0.0.1:3000/api/health',res=>{process.exit(res.statusCode===200?0:1)});req.on('error',()=>process.exit(1));req.setTimeout(3000,()=>{req.destroy();process.exit(1)})"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   market-ledger-bot:
     build:
