@@ -25,6 +25,7 @@ import {
     detectQueryDate, classifyQueryIntent, queryByDate, queryRecent,
     detectVendorMonthQuery, queryByVendorMonth,
     detectDateRangeQuery, queryByDateRange,
+    detectDailyRevenueQuery, queryDailyRevenue,
     detectMonthYearQuery, queryByMonthYear,
     detectItemMonthQuery, queryByItemMonth,
     detectExpenseTypeMonthQuery, queryByExpenseTypeMonth,
@@ -108,6 +109,8 @@ const HELP_TEXT = `📖 *使用說明*
 
 *📊 查詢*：
 
+_懶得打字就傳 /menu，常用查詢都做成按鈕了_
+
 _📅 指定日期 / 最近_：
 • \`今天\`  \`昨天\`  \`最近\`
 • \`今天記了什麼\`  \`3/3 記錄\`
@@ -150,6 +153,7 @@ _🔄 同比 / 環比（新）_：
 • \`同比\` — 本月 vs 去年同月
 
 *🔧 指令*：
+• /menu — **按鈕選單**（不用記指令，點就好）
 • /today — 今天記錄
 • /mute — 切換靜音模式（品項已知直接記錄，不詢問廠商）
 • /logout — 登出
@@ -399,6 +403,124 @@ function applyMuteMode(entries: ParsedEntry[]): ParsedEntry[] {
     });
 }
 
+
+// ── 查詢選單（按鈕式）────────────────────────────────────────
+// owner 2026-08-30：「把常用的幾個功能變成按鈕式的查詢，這樣我才知道有哪些功能」。
+// 文字查詢全部保留，選單只是把最常用的幾條做成看得見、點得到的入口。
+//
+// callback_data 上限 64 bytes，所以一律用短前綴 + id/value，不放中文標籤：
+//   m:<node>              切換選單頁
+//   r:<action>[:<args>]   執行查詢
+// 月份用「往回幾個月」的 offset 表示（0=本月、1=上月），不寫死年月。
+
+function periodFromOffset(off: number): { from: Date; to: Date; label: string } {
+    const now = new Date();
+    const from = new Date(now.getFullYear(), now.getMonth() - off, 1);
+    const to = new Date(now.getFullYear(), now.getMonth() - off + 1, 1);
+    return { from, to, label: `${from.getFullYear()}年${from.getMonth() + 1}月` };
+}
+
+const MENU_ROOT_TEXT = '📊 *想查什麼？*\n\n_也可以直接打字問，例如「8月薪水」「8月每天營業額」_';
+
+function buildRootMenu() {
+    return {
+        inline_keyboard: [
+            [
+                { text: '📅 今天', callback_data: 'r:day:0' },
+                { text: '📅 昨天', callback_data: 'r:day:1' },
+                { text: '📆 最近7天', callback_data: 'r:recent' },
+            ],
+            [
+                { text: '💰 營業額', callback_data: 'm:rev' },
+                { text: '💸 支出', callback_data: 'm:exp' },
+            ],
+            [
+                { text: '🛒 進貨', callback_data: 'm:pur' },
+                { text: '📈 分析比較', callback_data: 'm:ana' },
+            ],
+        ],
+    };
+}
+
+function buildRevenueMenu(ctx: DbContext) {
+    const rows: { text: string; callback_data: string }[][] = [];
+    rows.push([{ text: '📋 本月每日明細（全部）', callback_data: 'r:revd:0:_' }]);
+    for (const l of ctx.locations) {
+        rows.push([{ text: `📋 本月每日 · ${l.name}`, callback_data: `r:revd:0:${l.id}` }]);
+    }
+    rows.push([{ text: '📋 上月每日明細（全部）', callback_data: 'r:revd:1:_' }]);
+    rows.push([
+        { text: '📊 本月總計', callback_data: 'r:revt:0' },
+        { text: '📊 上月總計', callback_data: 'r:revt:1' },
+    ]);
+    rows.push([{ text: '⬅️ 返回', callback_data: 'm:root' }]);
+    return { inline_keyboard: rows };
+}
+
+// 支出選單只列「這個月真的有記到的類型」，並附上金額 ——
+// 字典裡有 21 個類型但常用的就那幾個，全列出來反而找不到。
+async function buildExpenseMenu(session: SessionData, ctx: DbContext, off: number) {
+    const period = periodFromOffset(off);
+    const ents = await prisma.entry.findMany({
+        where: { tenantId: session.tenantId, type: 'EXPENSE', date: { gte: period.from, lt: period.to } },
+        select: { expenseType: true, totalPrice: true },
+    });
+
+    // 依 label 合併：同一個 label 可能對應多個 value（租金＝rent/EXP001）
+    const byLabel = new Map<string, { values: Set<string>; sum: number }>();
+    for (const e of ents) {
+        const raw = e.expenseType ?? '其他';
+        const label = ctx.expenseTypes.find(x => x.value === raw)?.label ?? raw;
+        const g = byLabel.get(label) ?? { values: new Set<string>(), sum: 0 };
+        g.values.add(raw);
+        g.sum += e.totalPrice;
+        byLabel.set(label, g);
+    }
+
+    const rows: { text: string; callback_data: string }[][] = [];
+    const sorted = [...byLabel.entries()].sort((a, b) => b[1].sum - a[1].sum);
+    for (const [label, g] of sorted) {
+        const values = [...g.values].join(',');
+        const cb = `r:expt:${off}:${values}`;
+        // callback_data 超過 64 bytes 就退回只用第一個 value（極少見，但不能讓按鈕壞掉）
+        const safe = Buffer.byteLength(cb, 'utf8') <= 64 ? cb : `r:expt:${off}:${[...g.values][0]}`;
+        rows.push([{ text: `${label}  $${g.sum.toLocaleString()}`, callback_data: safe }]);
+    }
+    if (rows.length === 0) rows.push([{ text: `（${period.label} 沒有支出記錄）`, callback_data: 'm:exp' }]);
+
+    rows.push([{ text: '📊 全部支出彙總', callback_data: `r:expa:${off}` }]);
+    rows.push([
+        { text: off === 0 ? '📅 看上月' : '📅 看本月', callback_data: `m:exp:${off === 0 ? 1 : 0}` },
+        { text: '⬅️ 返回', callback_data: 'm:root' },
+    ]);
+    return { inline_keyboard: rows };
+}
+
+function buildPurchaseMenu() {
+    return {
+        inline_keyboard: [
+            [
+                { text: '📦 本月進貨', callback_data: 'r:pura:0' },
+                { text: '📦 上月進貨', callback_data: 'r:pura:1' },
+            ],
+            [{ text: '🏆 本月廠商 TOP5', callback_data: 'r:rank:vendor:0' }],
+            [{ text: '🏆 本月熱門品項 TOP5', callback_data: 'r:rank:item:0' }],
+            [{ text: '⬅️ 返回', callback_data: 'm:root' }],
+        ],
+    };
+}
+
+function buildAnalysisMenu() {
+    return {
+        inline_keyboard: [
+            [{ text: '🔄 本月 vs 上月', callback_data: 'r:cmp:0:1' }],
+            [{ text: '🔄 上月 vs 前月', callback_data: 'r:cmp:1:2' }],
+            [{ text: '🏆 本月攤位排行', callback_data: 'r:rank:location:0' }],
+            [{ text: '📊 本月全部（營收/進貨/支出/淨利）', callback_data: 'r:all:0' }],
+            [{ text: '⬅️ 返回', callback_data: 'm:root' }],
+        ],
+    };
+}
 // ── 意圖釐清鍵盤（有日期但看不出是查詢還是記帳時使用）────────────
 const INTENT_CLARIFY_KEYBOARD = {
     inline_keyboard: [[
@@ -501,7 +623,7 @@ bot.on('message', async (msg) => {
         const session = await getSession(telegramId);
         if (session) {
             await bot.sendMessage(chatId,
-                `👋 你好，${session.realName || session.username}！已登入（${session.tenantName}）\n\n直接輸入記帳內容或傳 /help 查看說明。`);
+                `👋 你好，${session.realName || session.username}！已登入（${session.tenantName}）\n\n直接輸入記帳內容開始記錄。\n查資料就傳 /menu（按鈕選單），或 /help 看完整說明。`);
         } else {
             await bot.sendMessage(chatId, '👋 歡迎！請先登入。\n格式：`帳號 密碼`\n例如：`mom mom123`', { parse_mode: 'Markdown' });
             setState(chatId, { phase: 'awaiting_auth', session: null });
@@ -519,6 +641,20 @@ bot.on('message', async (msg) => {
         setSession(chatId, null);
         resetToIdle(chatId);
         await bot.sendMessage(chatId, '👋 已登出。');
+        return;
+    }
+
+    // ── 查詢選單（需登入）────────────────────────────────
+    if (text === '/menu' || text === '/查詢' || text === '選單') {
+        const menuSession = await getSession(telegramId);
+        if (!menuSession) {
+            await bot.sendMessage(chatId, '請先登入。\n格式：`帳號 密碼`', { parse_mode: 'Markdown' });
+            return;
+        }
+        await bot.sendMessage(chatId, MENU_ROOT_TEXT, {
+            parse_mode: 'Markdown',
+            reply_markup: buildRootMenu(),
+        });
         return;
     }
 
@@ -591,7 +727,7 @@ bot.on('message', async (msg) => {
         setState(chatId, { phase: 'idle', pendingReplayText: null });
 
         await bot.sendMessage(chatId,
-            `✅ 登入成功，歡迎 ${newSession.realName || newSession.username}！\n帳戶：${newSession.tenantName}（${newSession.roleCode === 'admin' ? '管理員' : '一般'}）\n登入有效期 90 天。\n\n直接輸入記帳內容開始記錄。`);
+            `✅ 登入成功，歡迎 ${newSession.realName || newSession.username}！\n帳戶：${newSession.tenantName}（${newSession.roleCode === 'admin' ? '管理員' : '一般'}）\n登入有效期 90 天。\n\n直接輸入記帳內容開始記錄。\n查資料就傳 /menu 叫出按鈕選單。`);
 
         // 把 session 過期時被擋下的那則訊息補送回自己，使用者不用重打。
         // 用 re-emit 而不是遞迴呼叫：這時 session 已存在，不會再走進上面這個分支，
@@ -804,6 +940,16 @@ bot.on('message', async (msg) => {
         return;
     }
 
+    // ── 每日營業額明細（「8月每天營業額」「本月屏東每日」）──
+    // 排在整月查詢之前：「8月營業額每天」否則會被 detectMonthYearQuery 先接走、只回總數
+    const dailyRev = detectDailyRevenueQuery(text, queryCtx.locations);
+    if (dailyRev) {
+        logLine('QUERY', chatId, `dailyRevenue ${dailyRev.period.label} loc=${dailyRev.locationName ?? 'all'}`);
+        const result = await queryDailyRevenue(dailyRev.period, dailyRev.locationId, dailyRev.locationName, session, queryCtx);
+        await bot.sendMessage(chatId, result);
+        return;
+    }
+
     // ── 廠商月份查詢（例如「4月 阿明」「查阿明4月進了什麼」）──
     const vendorMonth = detectVendorMonthQuery(text, queryCtx.vendors);
     if (vendorMonth) {
@@ -920,6 +1066,90 @@ bot.on('callback_query', async (query) => {
 
     const ctx = await loadDbContext(session.tenantId);
     const state = getState(chatId);
+
+    // ── 查詢選單：切換頁面 ────────────────────────────────────
+    if (data === 'm:root') {
+        await bot.editMessageText(MENU_ROOT_TEXT, {
+            chat_id: chatId, message_id: query.message?.message_id,
+            parse_mode: 'Markdown', reply_markup: buildRootMenu(),
+        }).catch(async () => {
+            await bot.sendMessage(chatId, MENU_ROOT_TEXT, { parse_mode: 'Markdown', reply_markup: buildRootMenu() });
+        });
+        return;
+    }
+    if (data === 'm:rev' || data === 'm:pur' || data === 'm:ana' || data.startsWith('m:exp')) {
+        let title = '';
+        let markup;
+        if (data === 'm:rev') { title = '💰 *營業額*'; markup = buildRevenueMenu(ctx); }
+        else if (data === 'm:pur') { title = '🛒 *進貨*'; markup = buildPurchaseMenu(); }
+        else if (data === 'm:ana') { title = '📈 *分析比較*'; markup = buildAnalysisMenu(); }
+        else {
+            const off = Number(data.split(':')[2] ?? 0) || 0;
+            title = `💸 *支出* — ${periodFromOffset(off).label}\n_點類型看逐筆明細_`;
+            markup = await buildExpenseMenu(session, ctx, off);
+        }
+        await bot.editMessageText(title, {
+            chat_id: chatId, message_id: query.message?.message_id,
+            parse_mode: 'Markdown', reply_markup: markup,
+        }).catch(async () => {
+            await bot.sendMessage(chatId, title, { parse_mode: 'Markdown', reply_markup: markup });
+        });
+        return;
+    }
+
+    // ── 查詢選單：執行查詢 ────────────────────────────────────
+    if (data.startsWith('r:')) {
+        const parts = data.split(':');
+        const action = parts[1];
+        let result = '';
+
+        try {
+            if (action === 'day') {
+                const d = new Date();
+                d.setDate(d.getDate() - (Number(parts[2]) || 0));
+                d.setHours(0, 0, 0, 0);
+                result = await queryByDate(d, session, ctx);
+            } else if (action === 'recent') {
+                result = await queryRecent(session, ctx);
+            } else if (action === 'revd') {
+                const off = Number(parts[2]) || 0;
+                const locId = parts[3] === '_' ? undefined : parts[3];
+                const locName = locId ? ctx.locations.find(l => l.id === locId)?.name : undefined;
+                result = await queryDailyRevenue(periodFromOffset(off), locId, locName, session, ctx);
+            } else if (action === 'revt') {
+                result = await queryByMonthYear(periodFromOffset(Number(parts[2]) || 0), 'revenue', session, ctx);
+            } else if (action === 'expa') {
+                result = await queryByMonthYear(periodFromOffset(Number(parts[2]) || 0), 'expense', session, ctx);
+            } else if (action === 'expt') {
+                const off = Number(parts[2]) || 0;
+                const values = (parts[3] ?? '').split(',').filter(Boolean);
+                const label = ctx.expenseTypes.find(x => values.includes(x.value))?.label ?? values[0] ?? '支出';
+                result = await queryByExpenseTypeMonth(values.length > 1 ? values : values[0], label, periodFromOffset(off), session, ctx);
+            } else if (action === 'pura') {
+                result = await queryByMonthYear(periodFromOffset(Number(parts[2]) || 0), 'purchase', session, ctx);
+            } else if (action === 'all') {
+                result = await queryByMonthYear(periodFromOffset(Number(parts[2]) || 0), undefined, session, ctx);
+            } else if (action === 'rank') {
+                const target = parts[2] as 'vendor' | 'item' | 'location';
+                result = await queryRanking(periodFromOffset(Number(parts[3]) || 0), target, 5, session, ctx);
+            } else if (action === 'cmp') {
+                result = await queryComparison(
+                    periodFromOffset(Number(parts[2]) || 0),
+                    periodFromOffset(Number(parts[3]) || 1),
+                    session, ctx);
+            } else {
+                result = '這個選項我還不認得，請重新開 /menu。';
+            }
+        } catch (e) {
+            console.error('[Menu query error]', data, e);
+            result = '⚠️ 查詢時發生錯誤，請再試一次或改用打字查詢。';
+        }
+
+        logLine('MENU', chatId, data);
+        // 查詢結果另發一則，選單訊息保持在原地讓使用者可以連續點
+        await bot.sendMessage(chatId, result);
+        return;
+    }
 
     // ── 意圖釐清：使用者選「查詢」還是「記帳」──────────────────
     if (data === 'intent_query' || data === 'intent_entry') {

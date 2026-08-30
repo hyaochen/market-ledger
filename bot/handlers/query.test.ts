@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import {
     detectQueryDate, isQueryIntent, classifyQueryIntent,
     detectVendorMonthQuery, detectExpenseTypeMonthQuery,
+    detectDailyRevenueQuery,
 } from "./query";
 
 // ── detectQueryDate ─────────────────────────────────────────────
@@ -183,4 +184,56 @@ test("detectExpenseTypeMonthQuery: 原本就正確的用詞不受影響", () => 
     const r = detectExpenseTypeMonthQuery("8月薪資", EXPENSE_TYPES);
     assert.ok(r);
     assert.equal(r!.expenseTypeLabel, "薪資");
+});
+
+// ── detectDailyRevenueQuery（2026-08-30 新增）────────────────────
+const LOCATIONS = [
+    { id: "l1", name: "屏東攤位" },
+    { id: "l2", name: "潮州攤位" },
+];
+
+test("detectDailyRevenueQuery: 每天 + 營業額 → 命中，無指定攤位", () => {
+    for (const t of ["8月每天營業額", "8月營業額每天是多少", "本月每日營收"]) {
+        const r = detectDailyRevenueQuery(t, LOCATIONS);
+        assert.ok(r, `「${t}」應命中每日營業額`);
+        assert.equal(r!.locationId, undefined, "未指定攤位時不應綁定地點");
+    }
+});
+
+test("detectDailyRevenueQuery: 指定攤位（全名或簡稱皆可）", () => {
+    const full = detectDailyRevenueQuery("8月屏東攤位每天營業額", LOCATIONS);
+    assert.equal(full?.locationName, "屏東攤位");
+    const short = detectDailyRevenueQuery("8月屏東每天", LOCATIONS);
+    assert.equal(short?.locationName, "屏東攤位", "簡稱「屏東」也要對得上");
+    const chao = detectDailyRevenueQuery("本月潮州每日營業額", LOCATIONS);
+    assert.equal(chao?.locationName, "潮州攤位");
+});
+
+test("detectDailyRevenueQuery: 沒有「每天」→ null（交給整月查詢）", () => {
+    assert.equal(detectDailyRevenueQuery("8月營業額", LOCATIONS), null);
+    assert.equal(detectDailyRevenueQuery("8月屏東營業額", LOCATIONS), null);
+});
+
+test("detectDailyRevenueQuery: 有「每天」但無地點也無營收詞 → null", () => {
+    assert.equal(detectDailyRevenueQuery("8月每天進了什麼", LOCATIONS), null);
+});
+
+test("detectDailyRevenueQuery: 沒有期間 → null", () => {
+    assert.equal(detectDailyRevenueQuery("每天營業額", LOCATIONS), null);
+});
+
+// ── 支出類型重複 label 要全部帶上（租金＝rent/EXP001）──────────
+test("detectExpenseTypeMonthQuery: 同 label 多 value → 回傳陣列", () => {
+    const dup = [
+        { id: "a", value: "rent", label: "租金" },
+        { id: "b", value: "EXP001", label: "租金" },
+        { id: "c", value: "薪資", label: "薪資" },
+    ];
+    const r = detectExpenseTypeMonthQuery("8月租金", dup);
+    assert.ok(r);
+    assert.ok(Array.isArray(r!.expenseTypeValue), "重複 label 應回傳所有 value");
+    assert.deepEqual([...(r!.expenseTypeValue as string[])].sort(), ["EXP001", "rent"]);
+
+    const single = detectExpenseTypeMonthQuery("8月薪資", dup);
+    assert.equal(single!.expenseTypeValue, "薪資", "只有一個 value 時維持字串");
 });

@@ -653,7 +653,7 @@ export async function queryByMonthYear(
     period: { from: Date; to: Date; label: string },
     type: string | undefined,
     session: SessionData,
-    _ctx: DbContext,
+    ctx: DbContext,
 ): Promise<string> {
     const lines: string[] = [`📊 ${period.label} 統計`];
     let grandRev = 0, grandPur = 0, grandExp = 0;
@@ -705,7 +705,9 @@ export async function queryByMonthYear(
         if (exps.length) {
             const byType = new Map<string, number>();
             for (const e of exps) {
-                const t2 = e.expenseType ?? '其他';
+                // 顯示中文標籤而不是原始 value —— 否則使用者看到的是「EXP011」「rent」這種代碼
+                const raw = e.expenseType ?? '其他';
+                const t2 = ctx.expenseTypes.find(x => x.value === raw)?.label ?? raw;
                 byType.set(t2, (byType.get(t2) || 0) + e.totalPrice);
                 grandExp += e.totalPrice;
             }
@@ -723,6 +725,133 @@ export async function queryByMonthYear(
         lines.push(`📈 毛收入：$${grandRev.toLocaleString()}`);
         lines.push(`📉 總成本：$${(grandPur + grandExp).toLocaleString()}`);
         lines.push(`💵 ${profit >= 0 ? '淨利' : '虧損'}：$${profit.toLocaleString()}`);
+    }
+
+    return lines.join('\n');
+}
+
+// ── 每日營業額明細 ─────────────────────────────────────────────
+// owner 2026-08-30：「8月我的營業額每天是多少，列出來，屏東或潮州，不只有總數」。
+// 既有的 queryByMonthYear / queryByDateRange 都只給「依攤位分組的總額」，
+// 看不出哪一天好哪一天差，也看不出公休落在哪。
+
+const WEEKDAY = ['日', '一', '二', '三', '四', '五', '六'];
+
+/** 「8月每天營業額」「本月屏東每日營業額」「8月屏東每天」 */
+export function detectDailyRevenueQuery(
+    text: string,
+    locations: { id: string; name: string }[],
+): { period: { from: Date; to: Date; label: string }; locationId?: string; locationName?: string } | null {
+    const t = normalizeChineseDate(text.trim());
+
+    if (!/每天|每日|逐日|每一天|天天/.test(t)) return null;
+    const period = resolvePeriod(t);
+    if (!period) return null;
+
+    // 地點（可省略 = 全部）
+    let locationId: string | undefined;
+    let locationName: string | undefined;
+    for (const loc of locations) {
+        const short = loc.name.replace(/攤位|門市|店/g, '');
+        if (t.includes(loc.name) || (short && t.includes(short))) {
+            locationId = loc.id;
+            locationName = loc.name;
+            break;
+        }
+    }
+
+    // 沒有地點時，至少要出現營收類詞，避免「8月每天進了什麼」被誤接
+    if (!locationId && !/營業額|營收|收入|業績|賣/.test(t)) return null;
+
+    return { period, locationId, locationName };
+}
+
+export async function queryDailyRevenue(
+    period: { from: Date; to: Date; label: string },
+    locationId: string | undefined,
+    locationName: string | undefined,
+    session: SessionData,
+    ctx: DbContext,
+): Promise<string> {
+    const where: Record<string, unknown> = {
+        tenantId: session.tenantId,
+        date: { gte: period.from, lt: period.to },
+    };
+    if (locationId) where.locationId = locationId;
+
+    const revs = await prisma.revenue.findMany({
+        where,
+        include: { location: true },
+        orderBy: [{ date: 'asc' }],
+    });
+
+    const title = locationName
+        ? `💰 ${period.label} 每日營業額 — ${locationName}`
+        : `💰 ${period.label} 每日營業額（全部攤位）`;
+
+    if (revs.length === 0) return `${title}\n\n此期間無營業額記錄`;
+
+    // 依「日期」分組，每組再依攤位列出
+    type DayRow = { total: number; byLoc: Map<string, number>; dayOff: Set<string> };
+    const byDay = new Map<string, DayRow>();
+    const locTotals = new Map<string, number>();
+
+    for (const r of revs) {
+        const key = `${r.date.getMonth() + 1}/${String(r.date.getDate()).padStart(2, '0')}|${r.date.getDay()}`;
+        if (!byDay.has(key)) byDay.set(key, { total: 0, byLoc: new Map(), dayOff: new Set() });
+        const row = byDay.get(key)!;
+        const ln = r.location?.name ?? '?';
+        if (r.isDayOff) {
+            row.dayOff.add(ln);
+        } else {
+            row.total += r.amount;
+            row.byLoc.set(ln, (row.byLoc.get(ln) ?? 0) + r.amount);
+            locTotals.set(ln, (locTotals.get(ln) ?? 0) + r.amount);
+        }
+    }
+
+    const lines: string[] = [title, ''];
+    const multiLoc = !locationId && locTotals.size > 1;
+
+    let grand = 0, openDays = 0;
+    let best: { day: string; amt: number } | null = null;
+    let worst: { day: string; amt: number } | null = null;
+
+    for (const [key, row] of byDay) {
+        const [md, dow] = key.split('|');
+        const wd = WEEKDAY[Number(dow)];
+        const label = `${md} ${wd}`;
+
+        if (row.total === 0 && row.dayOff.size > 0) {
+            lines.push(`  ${label}  公休（${[...row.dayOff].join('、')}）`);
+            continue;
+        }
+
+        grand += row.total;
+        openDays++;
+        if (!best || row.total > best.amt) best = { day: label, amt: row.total };
+        if (!worst || row.total < worst.amt) worst = { day: label, amt: row.total };
+
+        if (multiLoc) {
+            const parts = [...row.byLoc.entries()].map(([n, a]) => `${n.replace(/攤位/, '')} $${a.toLocaleString()}`);
+            const off = row.dayOff.size ? `（${[...row.dayOff].map(n => n.replace(/攤位/, '')).join('、')}公休）` : '';
+            lines.push(`  ${label}  ${parts.join(' ｜ ')}${off}  = $${row.total.toLocaleString()}`);
+        } else {
+            lines.push(`  ${label}  $${row.total.toLocaleString()}`);
+        }
+    }
+
+    lines.push('─────────────');
+    lines.push(`合計 $${grand.toLocaleString()}`);
+    if (openDays > 0) {
+        lines.push(`營業 ${openDays} 天 ｜ 日均 $${Math.round(grand / openDays).toLocaleString()}`);
+    }
+    if (best && worst && openDays > 1) {
+        lines.push(`最高 ${best.day} $${best.amt.toLocaleString()} ｜ 最低 ${worst.day} $${worst.amt.toLocaleString()}`);
+    }
+    if (multiLoc) {
+        const parts = [...locTotals.entries()].map(([n, a]) => `${n} $${a.toLocaleString()}`);
+        lines.push(`📍 ${parts.join(' ｜ ')}`);
     }
 
     return lines.join('\n');
@@ -956,7 +1085,7 @@ function applyExpenseSynonyms(text: string): string {
 export function detectExpenseTypeMonthQuery(
     text: string,
     expenseTypes: { id: string; value: string; label: string }[],
-): { expenseTypeValue: string; expenseTypeLabel: string; period: { from: Date; to: Date; label: string } } | null {
+): { expenseTypeValue: string | string[]; expenseTypeLabel: string; period: { from: Date; to: Date; label: string } } | null {
     const t = applyExpenseSynonyms(normalizeChineseDate(text.trim()));
 
     // 必須有時間 period
@@ -990,25 +1119,31 @@ export function detectExpenseTypeMonthQuery(
     if (!best) return null;
     if (!hasExpenseHint && best.label.length < 2) return null; // 防止單字 false positive
 
+    // 同一個 label 可能對應多個 value（租金＝rent/EXP001 等），全部帶上才不會漏資料
+    const sameLabel = expenseTypes.filter(et => et.label === best!.label).map(et => et.value);
+
     return {
-        expenseTypeValue: best.value,
+        expenseTypeValue: sameLabel.length > 1 ? sameLabel : best.value,
         expenseTypeLabel: best.label,
         period,
     };
 }
 
+// expenseTypeValue 接受多個 value：字典裡「租金」同時存在 `rent` 與 `EXP001`、
+// 「瓦斯」有 `gas`/`EXP003`、「雜支」有 `misc`/`EXP004`。只查其中一個會漏掉另一半的資料。
 export async function queryByExpenseTypeMonth(
-    expenseTypeValue: string,
+    expenseTypeValue: string | string[],
     expenseTypeLabel: string,
     period: { from: Date; to: Date; label: string },
     session: SessionData,
     _ctx: DbContext,
 ): Promise<string> {
+    const values = Array.isArray(expenseTypeValue) ? expenseTypeValue : [expenseTypeValue];
     const ents = await prisma.entry.findMany({
         where: {
             tenantId: session.tenantId,
             type: 'EXPENSE',
-            expenseType: expenseTypeValue,
+            expenseType: values.length === 1 ? values[0] : { in: values },
             date: { gte: period.from, lt: period.to },
         },
         orderBy: { date: 'asc' },
