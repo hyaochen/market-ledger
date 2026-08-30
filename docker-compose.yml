@@ -16,7 +16,29 @@
       DATABASE_URL: file:/app/data/dev.db
       PORT: 3000
     volumes:
-      - ./docker-data:/app/data
+      # T-ML-032: moved off the Windows bind mount (./docker-data) onto a Docker
+      # named volume. Root cause of the 2026-08-11 35h outage (bugs-log.md) was
+      # SQLite WAL mode's -shm shared-memory file not working across the Windows
+      # bind mount's filesystem translation layer -- a host process opening
+      # dev.db could leave the container's handle stale. Named volumes live on
+      # the WSL2 ext4 filesystem, sidestepping that layer entirely. See
+      # vault/projects/market-ledger/learnings/2026-08-11-t-ml-032-*.md.
+      - market-ledger-data:/app/data
+    healthcheck:
+      # T-ML-030：2026-08-11 事故証明「登入頁回 200」騙過所有看 HTTP status 的監控 ——
+      # 靜態頁永遠 200，DB 卡死 35 小時沒人發現。改打真的會查 DB 的 /api/health。
+      # 用 127.0.0.1 不用 localhost：容器內 localhost 解析成 IPv6 ::1，但 Next 綁
+      # 0.0.0.0（IPv4），healthcheck 會永遠失敗（checkin 專案踩過整整 3 週的教訓）。
+      # 用 node -e 不用 curl/wget：node:20-bookworm-slim 兩者都沒裝。
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "const req=require('http').get('http://127.0.0.1:3000/api/health',res=>{process.exit(res.statusCode===200?0:1)});req.on('error',()=>process.exit(1));req.setTimeout(3000,()=>{req.destroy();process.exit(1)})"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   market-ledger-bot:
     build:
@@ -33,14 +55,49 @@
       DATABASE_URL: file:/app/data/dev.db
       # 容器內連到 host 的 Ollama（Windows/Mac 用 host.docker.internal）
       OLLAMA_BASE_URL: http://host.docker.internal:11434
+      # T-ML-024：LLM provider 切換。claude 走 owner 的 Pro/Max 訂閱額度（透過 host 上的
+      # claude-bridge，見 scripts/claude-bridge/README.md），失敗時自動退回 ollama。
+      LLM_PROVIDER: claude
+      CLAUDE_BRIDGE_URL: http://host.docker.internal:5055
     volumes:
-      - ./docker-data:/app/data
+      # T-ML-032: same named volume as market-ledger above -- both services must
+      # share the identical volume to see the same dev.db.
+      - market-ledger-data:/app/data
     depends_on:
       - market-ledger
     # 略過 next build，直接跑 bot
     command: ["node_modules/.bin/tsx", "bot/index.ts"]
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    healthcheck:
+      # T-ML-031：bot 在此之前完全沒有健康檢查（T-ML-030 只顧到 web）。8/10 事故使用者
+      # 端實際看到的是「bot 登入一直失敗」——Telegram 正是 owner 母親記帳的主要管道，
+      # 只顧 web 端會漏掉這個 bot 專屬的失效模式。
+      #
+      # 🔴 為什麼不能比照 web 那樣「另開一個 process 查 DB」：主控 2026-08-11 20:00 實測，
+      # 在容器內用 docker exec 另開一個 process 去開同一個 WAL DB，穩定拿到 SqliteError
+      # 522（2/2 重現）；但同一時間 bot 本體長駐 process 的既有連線完全正常服務中（見
+      # vault/projects/market-ledger/bugs-log.md 2026-08-11「事後追查補充」）。失效的
+      # 單位是「連線」不是「容器」——healthcheck 若自己開新 process/新連線查 DB，會被這
+      # 個現象騙成「假 unhealthy」，看門狗因此無限重啟一個其實健康的 bot，直接打斷正在
+      # 記帳的使用者，比完全沒有監控更糟。
+      #
+      # 所以改用心跳檔案（bot/heartbeat.ts）：bot 主流程每 60 秒用自己既有的 Prisma
+      # 連線查一次，成功就把時間戳寫到 /tmp/bot-heartbeat（容器可寫層，刻意不用
+      # /app/data 的 Windows bind mount——那正是事故根因的所在地）。這裡的 test 只檢查
+      # 檔案新不新鮮（180 秒＝3 個心跳週期，吸收單次 tick 被事件迴圈延遲或單次查詢失敗
+      # 的雜訊），全程是純檔案系統操作，不開任何新連線、不啟動任何新 process。
+      # 路徑寫死跟 bot/heartbeat.ts 的 HEARTBEAT_FILE 對齊，改動要兩邊一起改。
+      # 用 node -e 不用 curl/wget：node:20-bookworm-slim 兩者都沒裝。
+      test:
+        - "CMD"
+        - "node"
+        - "-e"
+        - "const fs=require('fs');try{const s=fs.statSync('/tmp/bot-heartbeat');process.exit((Date.now()-s.mtimeMs)<180000?0:1);}catch(e){process.exit(1);}"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   market-ledger-tunnel:
     image: cloudflare/cloudflared:latest
@@ -52,4 +109,11 @@
     volumes:
       - ./cloudflared-docker.yml:/app/cloudflared-docker.yml:ro
       - ${CLOUDFLARED_DIR}:/etc/cloudflared:ro
+
+volumes:
+  market-ledger-data:
+    # T-ML-032: explicit name (not compose's default "<project>_market-ledger-data"
+    # prefix) so the one-off migration container that pre-populates this volume
+    # (see learning brief) targets the exact same volume compose creates here.
+    name: market-ledger-data
 

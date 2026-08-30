@@ -3,6 +3,7 @@
 import prisma from '../../src/lib/prisma';
 import type { SessionData, DbContext } from '../types';
 import { formatJinLiang } from '../../src/lib/units';
+import { fuzzyScore } from '../../src/lib/analytics/textMatch';
 
 // 中文月份轉數字（「三月」→「3月」、「十一月」→「11月」）
 function normalizeChineseDate(text: string): string {
@@ -66,13 +67,46 @@ export function detectQueryDate(text: string): Date | 'recent' | null {
     return null;
 }
 
-// 是否為查詢指令
-export function isQueryIntent(text: string): boolean {
+// 查詢關鍵字白名單。
+// 2026-08-30：原本只有「記/紀錄/查/什麼/多少」，漏掉 owner 最常用的「營收/支出/營業額」，
+// 導致「8/29 營收跟支出情況?」判為非查詢、靜默降級走記帳解析（見 bugs-log 2026-08-30）。
+const QUERY_KEYWORD_RE =
+    /記|記錄|記了|紀錄|查|什麼|多少|營收|營業額|收入|業績|賣了|賣多少|支出|花費|開銷|進貨|買了|情況|狀況|明細|統計|報表/;
+
+// 移除日期本身後，是否還有其他數字。
+// 記帳一定帶數量或金額（「8/13 頭皮2個240」），查詢通常不帶（「8/29 營收情況」）。
+function hasNonDateDigits(normalized: string): boolean {
+    const stripped = normalized
+        .replace(/(\d{1,2})[/月](\d{1,2})[日號]?/g, ' ')
+        .replace(/\d{4}\s*年/g, ' ');
+    return /\d/.test(stripped);
+}
+
+/**
+ * 三態意圖判斷。
+ * - 'query'     ：確定是查詢
+ * - 'ambiguous' ：有日期、無查詢關鍵字、且日期以外沒有任何數字 → 必須回頭問使用者
+ * - 'entry'     ：其餘一律照原本記帳流程
+ *
+ * 為什麼需要 'ambiguous'：關鍵字白名單永遠補不完，但**誤判方向可以固定成安全的那邊**。
+ * 「查詢誤判成記帳」會把查詢句丟給 LLM 去「提取」不存在的數字——2026-08-30 ollama 就
+ * 這樣憑空生出一筆營收，只差網路剛好斷線才沒寫進 DB。「記帳誤判成查詢」最多只是沒反應。
+ *
+ * 用 hasNonDateDigits 收斂範圍，是為了不干擾 owner 補登舊帳這個主要流程——
+ * 「8/13 頭皮2個240」帶了數字，仍然直接走記帳，不會多問一句。
+ */
+export function classifyQueryIntent(text: string): 'query' | 'ambiguous' | 'entry' {
     const t = normalizeChineseDate(text.trim());
     // 純日期詞直接觸發查詢（不需要額外關鍵字）
-    if (/^(今天|今日|昨天|昨日|前天|最近|近期)$/.test(t)) return true;
-    return detectQueryDate(text) !== null &&
-        /記|記錄|記了|記了什麼|紀錄|查|什麼|多少/.test(text);
+    if (/^(今天|今日|昨天|昨日|前天|最近|近期)$/.test(t)) return 'query';
+    if (detectQueryDate(text) === null) return 'entry';
+    if (QUERY_KEYWORD_RE.test(text)) return 'query';
+    return hasNonDateDigits(t) ? 'entry' : 'ambiguous';
+}
+
+// 是否為查詢指令
+export function isQueryIntent(text: string): boolean {
+    return classifyQueryIntent(text) === 'query';
 }
 
 // 格式化日期為 M/D
@@ -119,8 +153,15 @@ export async function queryByDate(date: Date, session: SessionData, ctx: DbConte
     }
 
     // 進貨 & 支出
-    for (const e of entries) {
-        if (e.type === 'PURCHASE') {
+    // 2026-08-30：原本兩者共用一個 for 迴圈且完全沒有 section header，
+    // 視覺上整批被歸到上面的「💰 營業額：」底下（合計那行是對的，只有列表誤導）。
+    // 這裡拆成兩段並補上標題，與 queryByDateRange / queryByMonthYear 的格式一致。
+    const purchases = entries.filter(e => e.type === 'PURCHASE');
+    const expenses = entries.filter(e => e.type !== 'PURCHASE');
+
+    if (purchases.length > 0) {
+        lines.push('🛒 進貨：');
+        for (const e of purchases) {
             purchaseTotal += e.totalPrice;
             const qty = e.inputQuantity != null
                 ? (e.inputUnit === 'jl'
@@ -130,7 +171,12 @@ export async function queryByDate(date: Date, session: SessionData, ctx: DbConte
             const vendor = e.vendor ? `（${e.vendor.name}）` : '';
             const note = e.note ? ` 備註：${e.note}` : '';
             lines.push(`  • ${e.item?.name ?? '?'} ${qty}$${e.totalPrice}${vendor}${note}`);
-        } else {
+        }
+    }
+
+    if (expenses.length > 0) {
+        lines.push('💸 支出：');
+        for (const e of expenses) {
             expenseTotal += e.totalPrice;
             const et = ctx.expenseTypes.find(t => t.value === e.expenseType);
             const note = e.note ? ` 備註：${e.note}` : '';
@@ -161,7 +207,14 @@ export async function queryByDate(date: Date, session: SessionData, ctx: DbConte
 //   - the extracted vendor name starts with a digit (nonsense — real vendor names don't)
 //   - the extracted vendor name contains a known location token like "攤位"
 //   - the extracted vendor name ends with pure digits (clearly an amount)
-export function detectVendorMonthQuery(text: string): { vendorName: string; month: number; year: number } | null {
+// 廠商名比對門檻。fuzzyScore 的 0.85 = 其中一方是另一方的子字串，1.0 = 完全相等。
+// 低於這個分數就不算「使用者在問某家廠商」。
+const VENDOR_MATCH_THRESHOLD = 0.85;
+
+export function detectVendorMonthQuery(
+    text: string,
+    vendors: { id: string; name: string }[],
+): { vendorName: string; month: number; year: number } | null {
     const t = normalizeChineseDate(text.trim());
 
     // Quick reject: if a specific date marker follows the month, this is a dated entry, not a month query.
@@ -192,6 +245,26 @@ export function detectVendorMonthQuery(text: string): { vendorName: string; mont
 
     const month = parseInt(monthStr);
     if (month < 1 || month > 12) return null;
+
+    // 2026-08-30：抽出來的字串必須真的對得上一家已知廠商，否則交給後面的 detector。
+    //
+    // 舊版靠上面那串「排除詞黑名單」反推剩下的字是不是廠商名 —— 黑名單永遠列不完，
+    // 結果這個 detector 變成貪婪的 catch-all，把「N月＋任何詞」全吃掉：
+    //   「8月薪資」    → ❌ 找不到廠商「薪資」
+    //   「8月清潔費多少」→ ❌ 找不到廠商「清潔費多少」
+    //   「8月頭皮買了多少」→ ❌ 找不到廠商「頭皮買了多少」
+    // 它排在 detectExpenseTypeMonthQuery / detectItemMonthQuery 前面，所以真正該接手
+    // 的 detector 從來沒機會執行，白話文查詢等於整片失效。
+    // 詳見 vault reports/2026-08-30_bot-usage-log-analysis。
+    //
+    // 改成「拿真實廠商清單驗證」＝ 要有正面證據才認定是廠商查詢，跟 classifyQueryIntent
+    // 同一個原則：寧可漏判成別的 detector，也不要貪婪地吞掉再回一句沒用的錯誤訊息。
+    let bestScore = 0;
+    for (const v of vendors) {
+        const s = fuzzyScore(vendorStr, v.name);
+        if (s > bestScore) bestScore = s;
+    }
+    if (bestScore < VENDOR_MATCH_THRESHOLD) return null;
 
     const now = new Date();
     const year = month > now.getMonth() + 1 ? now.getFullYear() - 1 : now.getFullYear();
@@ -541,7 +614,7 @@ function resolvePeriod(text: string): { from: Date; to: Date; label: string } | 
     // 「N月」（純月份，假設今年；若 N > 當前月則去年）
     const monthMatch = t.match(/^(\d{1,2})月(?![\d/])/);
     if (monthMatch) {
-        let mn = parseInt(monthMatch[1]);
+        const mn = parseInt(monthMatch[1]);
         if (mn < 1 || mn > 12) return null;
         let year = y;
         if (mn > m + 1) year = y - 1;
@@ -864,11 +937,27 @@ export async function queryRanking(
 // ── 2-3b: 支出類型 + 月份查詢 ───────────────────────────────────
 // Pattern: 「3月薪資支出」「本月租金」「上月瓦斯費」「3月份薪資支出了多少」
 // 必須在 ctx.expenseTypes 找到 label 才算 valid
+// 白話同義詞 → DB 裡的支出類型 label。
+// DB 存的是正式用詞（薪資／租金），但使用者講的是白話（薪水／工資／房租），
+// 原本的比對只做 label 子字串，「8月薪水」永遠對不到「薪資」。
+// 刻意只收沒有歧義的幾組：像「電費」同時像「水電費」也像「中山電費」，
+// 交給既有的子字串比對去處理，不在這裡硬指定，免得選錯還更難查。
+const EXPENSE_SYNONYMS: [RegExp, string][] = [
+    [/薪水|工資|薪餉|薪俸/g, '薪資'],
+    [/房租/g, '租金'],
+];
+
+function applyExpenseSynonyms(text: string): string {
+    let out = text;
+    for (const [re, canonical] of EXPENSE_SYNONYMS) out = out.replace(re, canonical);
+    return out;
+}
+
 export function detectExpenseTypeMonthQuery(
     text: string,
     expenseTypes: { id: string; value: string; label: string }[],
 ): { expenseTypeValue: string; expenseTypeLabel: string; period: { from: Date; to: Date; label: string } } | null {
-    const t = normalizeChineseDate(text.trim());
+    const t = applyExpenseSynonyms(normalizeChineseDate(text.trim()));
 
     // 必須有時間 period
     const period = resolvePeriod(t);

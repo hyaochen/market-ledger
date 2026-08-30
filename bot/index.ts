@@ -8,7 +8,7 @@ import {
     getSession, saveSession, clearSession,
     parseLoginInput, verifyLogin,
 } from './auth';
-import { parseEntries } from './parser';
+import { parseEntries, newParseDiagnostics } from './parser';
 import { loadDbContext, enrichEntry } from './matcher';
 import {
     preloadStates,
@@ -16,11 +16,13 @@ import {
     startConfirmation, acceptCurrent, rejectCurrent, getAllConfirmed,
     removeLastConfirmed, addToConfirmed, enterNewItemFlow, exitNewItemFlow,
 } from './state';
+import { runStartupBridgeHealthCheck } from './bridgeHealth';
+import { startHeartbeat } from './heartbeat';
 import {
-    processEntries, formatSummary, formatEntry,
+    processEntries, formatSummary, formatEntry, autofillFixedExpensesForSaved,
 } from './handlers/entry';
 import {
-    detectQueryDate, isQueryIntent, queryByDate, queryRecent,
+    detectQueryDate, classifyQueryIntent, queryByDate, queryRecent,
     detectVendorMonthQuery, queryByVendorMonth,
     detectDateRangeQuery, queryByDateRange,
     detectMonthYearQuery, queryByMonthYear,
@@ -48,6 +50,10 @@ if (!TOKEN) {
     process.exit(1);
 }
 
+// T-ML-031：容器健康檢查心跳。跟 Telegram polling 能不能啟動成功無關，故意放在
+// bot 物件建立之前就開始跑，越早開始寫心跳檔越好（細節見 bot/heartbeat.ts 檔頭註解）。
+startHeartbeat();
+
 // 啟動前先從 DB 拉回所有對話狀態（撐過 bot 重啟不丟進度）
 // autoStart:false 讓我們先載入完狀態再開 polling
 const bot = new TelegramBot(TOKEN, {
@@ -62,6 +68,13 @@ console.log('🤖 Bot 啟動中...');
 
 (async () => {
     await preloadStates();
+    // T-ML-026 (B)：啟動時打一次 claude-bridge /health，不通就 Telegram 告警給 owner
+    // （isSuperAdmin，見 bot/bridgeHealth.ts）。只在啟動時檢查一次，不在每次解析時檢查
+    // ——bot/parser.ts 本來就會每筆訊息無感 fallback 到 ollama，這裡只是加一層「該讓人
+    // 知道」，過度告警本身就是一種擾民，所以刻意不做成常駐輪詢。
+    await runStartupBridgeHealthCheck({
+        sendAlert: async (chatId, text) => { await bot.sendMessage(chatId, text); },
+    });
     await bot.startPolling();
     console.log('🤖 Bot polling started');
 })().catch((err) => {
@@ -386,6 +399,90 @@ function applyMuteMode(entries: ParsedEntry[]): ParsedEntry[] {
     });
 }
 
+// ── 意圖釐清鍵盤（有日期但看不出是查詢還是記帳時使用）────────────
+const INTENT_CLARIFY_KEYBOARD = {
+    inline_keyboard: [[
+        { text: '🔍 查詢', callback_data: 'intent_query' },
+        { text: '📝 記帳', callback_data: 'intent_entry' },
+    ]],
+};
+
+// ── 日期查詢：把指定日期的記錄回給使用者 ────────────────────────
+// preloaded：呼叫端已經載好 ctx 時直接沿用，避免同一則訊息重複打 DB
+async function runDateQuery(chatId: number, session: SessionData, text: string, preloaded?: DbContext): Promise<void> {
+    const dateResult = detectQueryDate(text);
+    logLine('QUERY', chatId, `date=${dateResult === 'recent' ? 'recent' : dateResult?.toLocaleDateString('zh-TW') ?? 'null'}`);
+    const ctx = preloaded ?? await loadDbContext(session.tenantId);
+    if (dateResult === 'recent') {
+        await bot.sendMessage(chatId, await queryRecent(session, ctx));
+    } else if (dateResult) {
+        await bot.sendMessage(chatId, await queryByDate(dateResult, session, ctx));
+    } else {
+        // classifyQueryIntent 判為查詢但這裡拿不到日期（理論上不會發生）
+        await bot.sendMessage(chatId, '❓ 看不出你要查哪一天，可以說「今天」「昨天」或「8/29」。');
+    }
+}
+
+// ── 記帳解析：原本 message handler 的尾段，抽出來讓意圖釐清也能重用 ──
+async function runEntryParse(chatId: number, session: SessionData, text: string, preloaded?: DbContext): Promise<void> {
+    logLine('PARSE', chatId, text.slice(0, 120));
+    await bot.sendMessage(chatId, '🔄 解析中，請稍候...');
+
+    const ctx = preloaded ?? await loadDbContext(session.tenantId);
+    const diag = newParseDiagnostics();
+    const rawEntries = await parseEntries(text, ctx, diag);
+
+    if (rawEntries.length === 0) {
+        await bot.sendMessage(chatId,
+            '❓ 無法解析輸入內容。\n\n請確認格式，例如：\n`肝連2.6台斤218`\n\n或傳 /help 查看說明',
+            { parse_mode: 'Markdown' });
+        return;
+    }
+
+    // 逐筆 enrichment
+    const enrichedRaw = await Promise.all(rawEntries.map(e => enrichEntry(e, ctx)));
+
+    // 靜音模式：品項已知則強制 confident，跳過廠商選擇與二次確認
+    let enriched = getState(chatId).muteMode ? applyMuteMode(enrichedRaw) : enrichedRaw;
+
+    // 2026-08-30：主要模型（claude-bridge）失敗退回 ollama 時，一律強制二次確認。
+    // ollama 實測正確率 4/10，且 8/29 曾憑空生出一筆不存在的營收；它的輸出不能
+    // 跟 claude 一樣直接存進去。靜音模式也蓋掉 —— 這是正確性問題，不是吵不吵的問題。
+    if (diag.usedFallback) {
+        logLine('FALLBACK', chatId, `ollama fallback: ${diag.fallbackReason}`);
+        enriched = enriched.map(e => ({
+            ...e,
+            confident: false,
+            uncertainReason: e.uncertainReason
+                ? `${e.uncertainReason}；⚠️ 備援模型解析，請確認`
+                : '⚠️ 主要模型逾時，改用備援模型解析，請確認內容正確',
+        }));
+        await bot.sendMessage(chatId, '⚠️ 主要解析模型逾時，這批改用備援模型，請逐筆確認再存。');
+    }
+
+    const { confident, uncertain } = startConfirmation(chatId, enriched);
+
+    if (uncertain.length === 0) {
+        const { saved, failed } = await processEntries(confident, session, ctx);
+        const summary = formatSummary(saved, failed, ctx);
+        resetToIdle(chatId);
+        await bot.sendMessage(chatId, summary);
+        const fixedExpenseNotes = await autofillFixedExpensesForSaved(saved, session);
+        for (const note of fixedExpenseNotes) {
+            await bot.sendMessage(chatId, note);
+        }
+    } else {
+        if (confident.length > 0) {
+            const preview = confident.map(e => `  • ${formatEntry(e, ctx)}`).join('\n');
+            await bot.sendMessage(chatId, `以下 ${confident.length} 筆確認無誤，稍後儲存：\n${preview}`);
+        }
+        const first = getState(chatId).currentUncertain;
+        if (first) {
+            await sendUncertainPrompt(chatId, first, 0, ctx);
+        }
+    }
+}
+
 // ── 主要訊息處理 ──────────────────────────────────────────────
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
@@ -457,8 +554,19 @@ bot.on('message', async (msg) => {
     if (!session) {
         const credentials = parseLoginInput(text);
         if (!credentials) {
-            await bot.sendMessage(chatId, '請先登入。\n格式：`帳號 密碼`\n例如：`mom mom123`', { parse_mode: 'Markdown' });
-            setState(chatId, { phase: 'awaiting_auth' });
+            // 2026-08-30：session 過期時這則訊息原本被直接丟掉，使用者登入後必須重打
+            // （log 分析：33 次重新登入造成 41 則訊息被迫重打）。改成暫存下來，
+            // 登入成功後自動重播。指令不暫存（重播 /help 沒有意義）。
+            const worthReplaying = !text.startsWith('/');
+            if (worthReplaying) {
+                setState(chatId, { phase: 'awaiting_auth', pendingReplayText: text });
+                await bot.sendMessage(chatId,
+                    '🔑 登入已過期，請先登入。\n格式：`帳號 密碼`\n例如：`mom mom123`\n\n_登入後我會自動幫你送出剛才那則，不用重打。_',
+                    { parse_mode: 'Markdown' });
+            } else {
+                setState(chatId, { phase: 'awaiting_auth' });
+                await bot.sendMessage(chatId, '請先登入。\n格式：`帳號 密碼`\n例如：`mom mom123`', { parse_mode: 'Markdown' });
+            }
             return;
         }
 
@@ -479,9 +587,27 @@ bot.on('message', async (msg) => {
         setSession(chatId, newSession);
         session = newSession;
 
+        const replayText = getState(chatId).pendingReplayText;
+        setState(chatId, { phase: 'idle', pendingReplayText: null });
+
         await bot.sendMessage(chatId,
-            `✅ 登入成功，歡迎 ${newSession.realName || newSession.username}！\n帳戶：${newSession.tenantName}（${newSession.roleCode === 'admin' ? '管理員' : '一般'}）\n登入有效期 7 天。\n\n直接輸入記帳內容開始記錄。`);
+            `✅ 登入成功，歡迎 ${newSession.realName || newSession.username}！\n帳戶：${newSession.tenantName}（${newSession.roleCode === 'admin' ? '管理員' : '一般'}）\n登入有效期 90 天。\n\n直接輸入記帳內容開始記錄。`);
+
+        // 把 session 過期時被擋下的那則訊息補送回自己，使用者不用重打。
+        // 用 re-emit 而不是遞迴呼叫：這時 session 已存在，不會再走進上面這個分支，
+        // 不會無限迴圈，而且完整重跑一次正常流程（查詢/記帳判斷都照舊）。
+        if (replayText) {
+            logLine('REPLAY', chatId, replayText.slice(0, 120));
+            await bot.sendMessage(chatId, `↩️ 幫你送出剛才那則：「${replayText}」`);
+            // node-telegram-bot-api 的型別把 emit 收斂成唯讀事件集合，明確轉型後重新派送
+            (bot as unknown as NodeJS.EventEmitter).emit('message', { ...msg, text: replayText });
+        }
         return;
+    }
+
+    // ── 等待意圖釐清中又收到新訊息 → 放掉舊的，照新訊息重新判斷（避免卡死）──
+    if (state.phase === 'awaiting_intent_clarify') {
+        setState(chatId, { phase: 'idle', pendingClarifyText: null });
     }
 
     // ── 等待支出項目確認（awaiting_new_expense，僅有按鈕互動）──
@@ -665,22 +791,24 @@ bot.on('message', async (msg) => {
         return;
     }
 
+    // 查詢類 detector 共用同一份 ctx（原本每個分支各自 loadDbContext，重複打 DB；
+    // 且 detectVendorMonthQuery 現在需要真實廠商清單才能判斷，必須先載好）
+    const queryCtx = await loadDbContext(session.tenantId);
+
     // ── 日期範圍查詢（例如「3月1號到3月31號屏東攤位的總營收」）──
     const dateRange = detectDateRangeQuery(text);
     if (dateRange) {
         logLine('QUERY', chatId, `range=${dateRange.from.toLocaleDateString()}~${dateRange.to.toLocaleDateString()} loc=${dateRange.locationName || 'all'} type=${dateRange.type || 'all'}`);
-        const ctx = await loadDbContext(session.tenantId);
-        const result = await queryByDateRange(dateRange.from, dateRange.to, dateRange.locationName, dateRange.type, session, ctx);
+        const result = await queryByDateRange(dateRange.from, dateRange.to, dateRange.locationName, dateRange.type, session, queryCtx);
         await bot.sendMessage(chatId, result);
         return;
     }
 
     // ── 廠商月份查詢（例如「4月 阿明」「查阿明4月進了什麼」）──
-    const vendorMonth = detectVendorMonthQuery(text);
+    const vendorMonth = detectVendorMonthQuery(text, queryCtx.vendors);
     if (vendorMonth) {
         logLine('QUERY', chatId, `vendor=${vendorMonth.vendorName} month=${vendorMonth.month}`);
-        const ctx = await loadDbContext(session.tenantId);
-        const result = await queryByVendorMonth(vendorMonth.vendorName, vendorMonth.month, vendorMonth.year, session, ctx);
+        const result = await queryByVendorMonth(vendorMonth.vendorName, vendorMonth.month, vendorMonth.year, session, queryCtx);
         await bot.sendMessage(chatId, result);
         return;
     }
@@ -689,8 +817,7 @@ bot.on('message', async (msg) => {
     const comparison = detectComparisonQuery(text);
     if (comparison) {
         logLine('QUERY', chatId, `compare ${comparison.p1.label} vs ${comparison.p2.label}`);
-        const ctx = await loadDbContext(session.tenantId);
-        const result = await queryComparison(comparison.p1, comparison.p2, session, ctx);
+        const result = await queryComparison(comparison.p1, comparison.p2, session, queryCtx);
         await bot.sendMessage(chatId, result);
         return;
     }
@@ -699,15 +826,14 @@ bot.on('message', async (msg) => {
     const ranking = detectRankingQuery(text);
     if (ranking) {
         logLine('QUERY', chatId, `ranking ${ranking.target} top${ranking.topN} ${ranking.period.label}`);
-        const ctx = await loadDbContext(session.tenantId);
-        const result = await queryRanking(ranking.period, ranking.target, ranking.topN, session, ctx);
+        const result = await queryRanking(ranking.period, ranking.target, ranking.topN, session, queryCtx);
         await bot.sendMessage(chatId, result);
         return;
     }
 
     // ── 品項月份 / 支出類型月份查詢 ──
     {
-        const ctxForLookup = await loadDbContext(session.tenantId);
+        const ctxForLookup = queryCtx;
 
         // 先試備註查詢（備註關鍵字優先，避免被普通支出類型攔截）
         const noteQ = detectNoteQuery(text, ctxForLookup.expenseTypes);
@@ -741,64 +867,31 @@ bot.on('message', async (msg) => {
     const monthYear = detectMonthYearQuery(text);
     if (monthYear) {
         logLine('QUERY', chatId, `monthYear ${monthYear.period.label} type=${monthYear.type || 'all'}`);
-        const ctx = await loadDbContext(session.tenantId);
-        const result = await queryByMonthYear(monthYear.period, monthYear.type, session, ctx);
+        const result = await queryByMonthYear(monthYear.period, monthYear.type, session, queryCtx);
         await bot.sendMessage(chatId, result);
         return;
     }
 
-    // ── 查詢意圖 ──────────────────────────────────────────
-    if (isQueryIntent(text)) {
-        const dateResult = detectQueryDate(text);
-        logLine('QUERY', chatId, `date=${dateResult === 'recent' ? 'recent' : dateResult?.toLocaleDateString('zh-TW') ?? 'null'}`);
-        const ctx = await loadDbContext(session.tenantId);
-        if (dateResult === 'recent') {
-            const result = await queryRecent(session, ctx);
-            await bot.sendMessage(chatId, result);
-        } else if (dateResult) {
-            const result = await queryByDate(dateResult, session, ctx);
-            await bot.sendMessage(chatId, result);
-        }
+    // ── 意圖判斷：查詢 / 意圖不明 / 記帳 ───────────────────
+    const intent = classifyQueryIntent(text);
+
+    if (intent === 'query') {
+        await runDateQuery(chatId, session, text, queryCtx);
         return;
     }
 
-    // ── 解析記帳輸入 ──────────────────────────────────────
-    logLine('PARSE', chatId, text.slice(0, 120));
-    await bot.sendMessage(chatId, '🔄 解析中，請稍候...');
-
-    const ctx = await loadDbContext(session.tenantId);
-    const rawEntries = await parseEntries(text, ctx);
-
-    if (rawEntries.length === 0) {
+    // 有日期但看不出是查詢還是記帳 → 回頭問，絕不擅自走記帳路徑。
+    // （2026-08-30：靜默降級曾讓 LLM 對查詢句「提取」出一筆不存在的營收）
+    if (intent === 'ambiguous') {
+        logLine('CLARIFY', chatId, text.slice(0, 120));
+        setState(chatId, { phase: 'awaiting_intent_clarify', pendingClarifyText: text });
         await bot.sendMessage(chatId,
-            '❓ 無法解析輸入內容。\n\n請確認格式，例如：\n`肝連2.6台斤218`\n\n或傳 /help 查看說明',
-            { parse_mode: 'Markdown' });
+            `🤔 「${text}」我不確定你是要查詢還是要記帳，請選一個：`,
+            { reply_markup: INTENT_CLARIFY_KEYBOARD });
         return;
     }
 
-    // 逐筆 enrichment
-    const enrichedRaw = await Promise.all(rawEntries.map(e => enrichEntry(e, ctx)));
-
-    // 靜音模式：品項已知則強制 confident，跳過廠商選擇與二次確認
-    const enriched = getState(chatId).muteMode ? applyMuteMode(enrichedRaw) : enrichedRaw;
-
-    const { confident, uncertain } = startConfirmation(chatId, enriched);
-
-    if (uncertain.length === 0) {
-        const { saved, failed } = await processEntries(confident, session, ctx);
-        const summary = formatSummary(saved, failed, ctx);
-        resetToIdle(chatId);
-        await bot.sendMessage(chatId, summary);
-    } else {
-        if (confident.length > 0) {
-            const preview = confident.map(e => `  • ${formatEntry(e, ctx)}`).join('\n');
-            await bot.sendMessage(chatId, `以下 ${confident.length} 筆確認無誤，稍後儲存：\n${preview}`);
-        }
-        const first = getState(chatId).currentUncertain;
-        if (first) {
-            await sendUncertainPrompt(chatId, first, 0, ctx);
-        }
-    }
+    await runEntryParse(chatId, session, text, queryCtx);
     // ── handler body end ────────────────────────────────
     } catch (err) {
         console.error('[MessageHandler Error]', err);
@@ -827,6 +920,22 @@ bot.on('callback_query', async (query) => {
 
     const ctx = await loadDbContext(session.tenantId);
     const state = getState(chatId);
+
+    // ── 意圖釐清：使用者選「查詢」還是「記帳」──────────────────
+    if (data === 'intent_query' || data === 'intent_entry') {
+        const pendingText = state.pendingClarifyText;
+        setState(chatId, { phase: 'idle', pendingClarifyText: null });
+        if (!pendingText) {
+            await bot.sendMessage(chatId, '這則訊息已經過期了，請重新輸入一次。');
+            return;
+        }
+        if (data === 'intent_query') {
+            await runDateQuery(chatId, session, pendingText);
+        } else {
+            await runEntryParse(chatId, session, pendingText);
+        }
+        return;
+    }
 
     // ── 廠商：新增 ──────────────────────────────────────────
     if (data === 'vendor_create') {
@@ -1171,6 +1280,10 @@ async function finalizeEntries(
     const { saved, failed } = await processEntries(confirmed, session, freshCtx);
     const summary = formatSummary(saved, failed, freshCtx);
     await bot.sendMessage(chatId, summary);
+    const fixedExpenseNotes = await autofillFixedExpensesForSaved(saved, session);
+    for (const note of fixedExpenseNotes) {
+        await bot.sendMessage(chatId, note);
+    }
 }
 
 // ── 錯誤處理 ────────────────────────────────────────────────

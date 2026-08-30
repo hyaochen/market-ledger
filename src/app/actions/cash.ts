@@ -6,6 +6,8 @@ import { revalidatePath } from "next/cache";
 import { parseLocalDate } from "@/lib/date";
 import { requireCashAuth, requireCashAdmin } from "@/lib/cash-auth";
 import { CASH_BOX_TARGET_TOTAL, RESERVE_TARGET_TOTAL } from "@/lib/cash-constants";
+import { previewFixedExpenses, applyFixedExpenses, stallForLocation, realEntryDb } from "@/lib/fixedExpenseAutofill";
+import { syncCashExpensesToEntry } from "@/lib/cashExpenseSync";
 
 // ---------- Schema ----------
 
@@ -166,10 +168,41 @@ export async function submitCashCount(input: SubmitCashCountInput) {
             return { cashCountId: cashCount.id, revenueId: revenue.id };
         });
 
+        // T-ML-027 範圍 C + A（cash 清點入口）：
+        // C 先跑 —— 把清點表「當天現金支出明細」實際填的每一筆（清潔費/洗攤/大腸/
+        // 袋子…）同步進 Entry，用 'overwrite' 模式（cash 清點的實付數字永遠是最後
+        // 真相）。A 接著跑 —— 只補 C 沒寫到的清潔費/洗攤（例如今天忘記填清潔費那
+        // 一列），用 'skip-if-exists' 模式，絕不覆蓋 C 剛寫的實付數字。
+        // 兩者都在主要 $transaction commit 之後才執行（cash 清點本身的正確性不依賴
+        // 這兩步是否成功；就算這裡失敗，CashCount/Revenue 已經正確落地，之後重新
+        // 送出同一天的清點也會被同一把自然鍵冪等地補上/更新，不會造成資料不一致）。
+        const stall = await stallForLocation(user.tenantId, user.locationId!);
+        if (stall) {
+            try {
+                await syncCashExpensesToEntry(realEntryDb, user.tenantId, date, stall, user.id, expensesClean);
+            } catch (syncError) {
+                console.error("submitCashCount: cash expense sync (C) failed (non-fatal):", syncError);
+            }
+            try {
+                const preview = await previewFixedExpenses(user.tenantId, date, user.locationId!);
+                if (preview) {
+                    const toApply = preview.items
+                        .filter((it) => !it.alreadyExists)
+                        .map((it) => ({ expenseType: it.expenseType, expenseLabel: it.expenseLabel, amount: it.amount }));
+                    if (toApply.length > 0) {
+                        await applyFixedExpenses(realEntryDb, user.tenantId, date, stall, user.id, toApply);
+                    }
+                }
+            } catch (autofillError) {
+                console.error("submitCashCount: fixed expense autofill (A) failed (non-fatal):", autofillError);
+            }
+        }
+
         revalidatePath("/cash/history");
         revalidatePath("/cash/stats");
         revalidatePath("/revenue");
         revalidatePath("/reports");
+        revalidatePath("/entry");
         return { success: true, ...result };
     } catch (error) {
         console.error("submitCashCount error:", error);

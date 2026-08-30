@@ -11,11 +11,16 @@
     "tunnel:setup": "powershell -ExecutionPolicy Bypass -File ./setup-tunnel.ps1",
     "tunnel": "start-tunnel.bat",
     "backup:db": "tsx scripts/backup-db.ts",
+    "backup:cleanup-report": "tsx scripts/backup-db.ts --cleanup-report",
     "prune:logs": "tsx scripts/prune-logs.ts",
     "test": "tsx scripts/run-tests.ts",
     "lint": "next lint",
     "bot": "tsx bot/index.ts",
-    "bot:test": "tsx bot/test-runner.ts"
+    "bot:test": "tsx bot/test-runner.ts",
+    "claude-bridge": "node scripts/claude-bridge/bridge.js",
+    "claude-bridge:register": "powershell -ExecutionPolicy Bypass -File scripts/claude-bridge/register-task.ps1",
+    "claude-bridge:stop": "powershell -ExecutionPolicy Bypass -File scripts/claude-bridge/stop-bridge.ps1",
+    "benchmark:llm": "tsx scripts/claude-bridge/benchmark.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

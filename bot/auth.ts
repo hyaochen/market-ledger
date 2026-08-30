@@ -5,7 +5,10 @@ import { hashPassword, verifyPassword } from '../src/lib/password';
 import type { SessionData } from './types';
 
 const SESSION_KEY_PREFIX = 'tg_session_';
-const SESSION_DAYS = 7;
+// 2026-08-30：7 → 90 天。log 分析顯示重新登入的間隔幾乎全是整齊的 7 天
+// （33 次重新登入），而每次過期都會吃掉使用者當下那則記帳訊息，累計 41 則被迫重打。
+// 這是家用 bot，身分本來就綁在 Telegram 帳號上，7 天的安全收益遠低於它造成的損失。
+const SESSION_DAYS = 90;
 
 // 從 DB 讀取 Telegram 會話
 export async function getSession(telegramId: number): Promise<SessionData | null> {

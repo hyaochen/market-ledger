@@ -18,8 +18,27 @@ const RawExtractedSchema = z.object({
     rawInput: z.string().optional(),
 }).catchall(z.unknown()); // 容忍多餘欄位
 
-const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
+// getOllamaBaseUrl 讀成 function（而非 module-level const）純粹是為了讓 T-ML-024
+// 的 fallback 測試能在同一個 test process 內把 ollama 呼叫導向本地 mock server，
+// 不需要真的打正式 ollama。production 行為完全不變（env var 啟動後不會再變）。
+function getOllamaBaseUrl(): string {
+    return process.env.OLLAMA_BASE_URL ?? 'http://localhost:11434';
+}
 const OLLAMA_MODEL_FAST = process.env.OLLAMA_MODEL ?? 'qwen2.5:7b';
+
+// T-ML-024：LLM provider 切換（claude -p 走 owner 訂閱額度為主，ollama 為 fallback）。
+// 讀成 function 而非 module-level const，讓測試可以在同一個 process 內用
+// process.env 切換 provider / bridge URL，不必重啟 process。
+function getLlmProvider(): 'claude' | 'ollama' {
+    return (process.env.LLM_PROVIDER ?? 'claude').toLowerCase() === 'ollama' ? 'ollama' : 'claude';
+}
+function getClaudeBridgeUrl(): string {
+    return process.env.CLAUDE_BRIDGE_URL ?? 'http://host.docker.internal:5055';
+}
+function getClaudeBridgeTimeoutMs(): number {
+    const v = Number(process.env.CLAUDE_BRIDGE_TIMEOUT_MS);
+    return Number.isFinite(v) && v > 0 ? v : 30000; // 建議 30 秒，需 > bridge 端自己的 budget（預設 25s）
+}
 
 // 精簡 prompt：只提取文字資訊，不傳 DB 清單，不要求 ID
 function buildSystemPrompt(today: string, locationNames: string[]): string {
@@ -80,11 +99,73 @@ EXPENSE 時：itemName 填支出名稱（如「薪資」「清潔費」「洗碗
 {"entries":[{"type":"PURCHASE","date":"${today}","itemName":"品項名稱","quantity":2,"unit":"斤","price":6000,"vendorName":"廠商名稱","note":null,"rawInput":"原始文字"}]}`;
 }
 
+// LLM 輸出的原始結構（不含 DB ID）— schema 定義在檔案頂部
+type RawExtracted = z.infer<typeof RawExtractedSchema>;
+
+// 共用：把 LLM 回傳的原始文字內容解析成驗證過的 RawExtracted[]。
+// ollama 和 claude bridge 都走這條路，確保「回傳格式、Zod schema 驗證、數字校正」
+// 不因為換 provider 而有任何行為差異（T-ML-024 要求）。
+// 回傳 null = 徹底解析失敗（JSON.parse 失敗 / 找不到陣列結構），呼叫端應視為失敗；
+// 回傳 []（空陣列）= 合法解析但 0 筆結果（例如全部欄位都被 Zod 拒絕），不是失敗。
+function parseModelContent(content: string | undefined | null, label: string): RawExtracted[] | null {
+    if (!content) {
+        console.error(`[Parser] Empty content from model (${label})`);
+        return null;
+    }
+
+    // qwen3 思考模式會在 JSON 前輸出 <think>...</think>；claude 有時會用 ```json fence 包住輸出。兩者都先剝掉。
+    let cleaned = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+    cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim();
+
+    console.log(`[Parser] Raw response (${label}): ${cleaned.slice(0, 400)}`);
+
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(cleaned);
+    } catch (err) {
+        console.error(`[Parser] JSON.parse failed (${label}):`, err);
+        return null;
+    }
+
+    let rawArr: unknown[] | null = null;
+    if (Array.isArray(parsed)) {
+        rawArr = parsed;
+    } else if (typeof parsed === 'object' && parsed !== null) {
+        for (const val of Object.values(parsed)) {
+            if (Array.isArray(val)) { rawArr = val; break; }
+        }
+    }
+    if (!rawArr) {
+        if (typeof parsed === 'object' && parsed !== null && 'type' in parsed) {
+            rawArr = [parsed];
+            console.log(`[Parser] Wrapped single entry object in array (${label})`);
+        } else {
+            const keys = parsed && typeof parsed === 'object' ? Object.keys(parsed).join(', ') : typeof parsed;
+            console.error(`[Parser] No array found (${label}). Got:`, keys);
+            return null;
+        }
+    }
+
+    // Zod 驗證：過濾掉明顯壞掉的 entry（保留能驗過的）
+    const validated: RawExtracted[] = [];
+    for (const raw of rawArr) {
+        const result = RawExtractedSchema.safeParse(raw);
+        if (result.success) {
+            validated.push(result.data as RawExtracted);
+        } else {
+            console.warn(`[Parser] Zod rejected entry (${label}):`, result.error.issues.slice(0, 3));
+        }
+    }
+
+    console.log(`[Parser] Extracted ${rawArr.length}, validated ${validated.length} (${label})`);
+    return validated;
+}
+
 async function callOllama(systemPrompt: string, userText: string, model: string): Promise<RawExtracted[] | null> {
-    console.log(`[Parser] Calling ${model} for: ${userText.slice(0, 60)}`);
+    console.log(`[Parser] Calling ollama:${model} for: ${userText.slice(0, 60)}`);
     const t0 = Date.now();
     try {
-        const response = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
+        const response = await fetch(`${getOllamaBaseUrl()}/api/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -101,71 +182,129 @@ async function callOllama(systemPrompt: string, userText: string, model: string)
             signal: AbortSignal.timeout(120000), // 2 分鐘：容忍 ollama cold start + GPU 競爭
         });
 
-        console.log(`[Parser] ${model} responded in ${Date.now() - t0}ms, status=${response.status}`);
+        console.log(`[Parser] ollama:${model} responded in ${Date.now() - t0}ms, status=${response.status}`);
         if (!response.ok) {
-            console.error(`[Parser] HTTP error ${response.status}`);
+            console.error(`[Parser] ollama HTTP error ${response.status}`);
             return null;
         }
         const data = await response.json() as { message?: { content?: string } };
-        let content = data?.message?.content;
-        if (!content) {
-            console.error('[Parser] Empty content from model');
-            return null;
-        }
-
-        // qwen3 思考模式會在 JSON 前輸出 <think>...</think>，需要先移除
-        content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-
-        console.log(`[Parser] Raw response: ${content.slice(0, 400)}`);
-
-        let parsed: unknown;
-        try {
-            parsed = JSON.parse(content);
-        } catch (err) {
-            console.error('[Parser] JSON.parse failed:', err);
-            return null;
-        }
-
-        let rawArr: unknown[] | null = null;
-        if (Array.isArray(parsed)) {
-            rawArr = parsed;
-        } else if (typeof parsed === 'object' && parsed !== null) {
-            for (const val of Object.values(parsed)) {
-                if (Array.isArray(val)) { rawArr = val; break; }
-            }
-        }
-        if (!rawArr) {
-            if (typeof parsed === 'object' && parsed !== null && 'type' in parsed) {
-                rawArr = [parsed];
-                console.log('[Parser] Wrapped single entry object in array');
-            } else {
-                const keys = parsed && typeof parsed === 'object' ? Object.keys(parsed).join(', ') : typeof parsed;
-                console.error('[Parser] No array found. Got:', keys);
-                return null;
-            }
-        }
-
-        // Zod 驗證：過濾掉明顯壞掉的 entry（保留能驗過的）
-        const validated: RawExtracted[] = [];
-        for (const raw of rawArr) {
-            const result = RawExtractedSchema.safeParse(raw);
-            if (result.success) {
-                validated.push(result.data as RawExtracted);
-            } else {
-                console.warn('[Parser] Zod rejected entry:', result.error.issues.slice(0, 3));
-            }
-        }
-
-        console.log(`[Parser] Extracted ${rawArr.length}, validated ${validated.length}`);
-        return validated;
+        return parseModelContent(data?.message?.content, `ollama:${model}`);
     } catch (e) {
-        console.error(`[Parser] Failed (${model}) after ${Date.now() - t0}ms:`, e);
+        console.error(`[Parser] ollama failed (${model}) after ${Date.now() - t0}ms:`, e);
         return null;
     }
 }
 
-// LLM 輸出的原始結構（不含 DB ID）— schema 定義在檔案頂部
-type RawExtracted = z.infer<typeof RawExtractedSchema>;
+// claude bridge 呼叫結果：用 discriminated union 讓「成功」跟「要 fallback」在型別上就分開，
+// 避免呼叫端誤把 bridge 的失敗當成「claude 說沒有任何記錄」（那應該回 []，不是 fallback）。
+type ClaudeBridgeResult =
+    | { ok: true; data: RawExtracted[] | null }
+    | { ok: false; reason: string };
+
+async function callClaudeBridge(systemPrompt: string, userText: string): Promise<ClaudeBridgeResult> {
+    const bridgeUrl = getClaudeBridgeUrl();
+    const timeoutMs = getClaudeBridgeTimeoutMs();
+    console.log(`[Parser] Calling claude-bridge (${bridgeUrl}) for: ${userText.slice(0, 60)}`);
+    const t0 = Date.now();
+
+    let response: Response;
+    try {
+        response = await fetch(`${bridgeUrl}/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ system: systemPrompt, user: userText }),
+            signal: AbortSignal.timeout(timeoutMs),
+        });
+    } catch (e) {
+        // fallback 條件 1：bridge 連不上（ECONNREFUSED / DNS 解析失敗等）
+        // fallback 條件 2：逾時（AbortSignal.timeout 觸發，Node fetch 丟 DOMException name=TimeoutError）
+        const err = e as { name?: string; cause?: { code?: string }; message?: string };
+        const isTimeout = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+        const reason = isTimeout
+            ? `timeout>${timeoutMs}ms`
+            : `connect-error: ${err?.cause?.code ?? err?.message ?? String(e)}`;
+        console.error(`[Parser] claude-bridge unreachable after ${Date.now() - t0}ms: ${reason}`);
+        return { ok: false, reason };
+    }
+
+    console.log(`[Parser] claude-bridge responded in ${Date.now() - t0}ms, status=${response.status}`);
+
+    // fallback 條件 3：HTTP 非 2xx（bridge 自己會用 401/429/500/503/504 標示 auth/quota/exec/busy/timeout）
+    if (!response.ok) {
+        let bodyText = '';
+        try { bodyText = (await response.text()).slice(0, 300); } catch { /* ignore body read error */ }
+        // fallback 條件 5：claude 回傳額度/authentication 相關錯誤（bridge 用 401/429 標示，這裡再用文字比對兜底）
+        const isAuthOrQuota = response.status === 401 || response.status === 429
+            || /quota|usage limit|rate limit|authentication|unauthorized|not logged in|credit balance/i.test(bodyText);
+        return { ok: false, reason: `http ${response.status}${isAuthOrQuota ? ' (auth/quota)' : ''}: ${bodyText}` };
+    }
+
+    let payload: unknown;
+    try {
+        payload = await response.json();
+    } catch (e) {
+        // fallback 條件 4：回傳無法解析成預期 JSON
+        return { ok: false, reason: `bad json body: ${e}` };
+    }
+
+    const content = (payload as { content?: unknown })?.content;
+    if (typeof content !== 'string' || !content) {
+        return { ok: false, reason: 'empty/missing content field in bridge response' };
+    }
+
+    const data = parseModelContent(content, 'claude-bridge');
+    if (data === null) {
+        // fallback 條件 4：claude 有回應，但內容解析不出預期 JSON 結構
+        return { ok: false, reason: 'unparseable response content (JSON parse or no array found)' };
+    }
+    return { ok: true, data };
+}
+
+/**
+ * 一次解析的診斷資訊。用明確的 out-param 傳遞，而不是模組級變數 ——
+ * 多個使用者的訊息會在 await 之間交錯，全域旗標會互相污染。
+ */
+export type ParseDiagnostics = {
+    usedFallback: boolean;
+    fallbackReason: string | null;
+};
+
+export function newParseDiagnostics(): ParseDiagnostics {
+    return { usedFallback: false, fallbackReason: null };
+}
+
+/**
+ * 統一的 LLM 呼叫入口（T-ML-024）。取代原本直接呼叫 callOllama 的地方。
+ * LLM_PROVIDER=claude（預設）：先打 host 上的 claude bridge，任何失敗（見
+ *   callClaudeBridge 內 5 種 fallback 條件）都會記 log 並退回 ollama。
+ * LLM_PROVIDER=ollama：略過 claude，直接走原本的 ollama 呼叫（行為與 T-ML-024 前完全一致）。
+ *
+ * 2026-08-30：退回 ollama 原本是刻意「無感」的（使用者看不出 provider 換過）。
+ * 那正是 8/29 那句查詢被 ollama 憑空編出一筆營收卻沒人察覺的原因 —— ollama 實測
+ * 正確率 4/10、claude 10/10，兩者的輸出不該被當成同一等級。改成回報給呼叫端，
+ * 由 bot 端提示使用者並強制二次確認。
+ */
+export async function callLLM(
+    systemPrompt: string,
+    userText: string,
+    model: string,
+    diag?: ParseDiagnostics,
+): Promise<RawExtracted[] | null> {
+    if (getLlmProvider() === 'ollama') {
+        return callOllama(systemPrompt, userText, model);
+    }
+
+    const claudeResult = await callClaudeBridge(systemPrompt, userText);
+    if (claudeResult.ok) {
+        return claudeResult.data;
+    }
+    console.warn(`[Parser] claude-bridge fallback → ollama:${model}. reason=${claudeResult.reason}`);
+    if (diag) {
+        diag.usedFallback = true;
+        diag.fallbackReason = claudeResult.reason ?? 'unknown';
+    }
+    return callOllama(systemPrompt, userText, model);
+}
 
 // 量詞單位（重量/數量）— 不含貨幣詞
 const QTY_UNITS = ['臺斤', '台斤', '公斤', '斤', 'kg', 'KG', 'g', 'G', '個', '包', '條', '份', '箱', '罐', '瓶', '桶', '組', '片', '顆', '克', '袋'];
@@ -476,7 +615,7 @@ function fixMisclassifiedExpense(entry: RawExtracted): RawExtracted {
 }
 
 // 主要解析函式：只用快速模型，不再 fallback 到 32b
-export async function parseEntries(userText: string, ctx: DbContext): Promise<ParsedEntry[]> {
+export async function parseEntries(userText: string, ctx: DbContext, diag?: ParseDiagnostics): Promise<ParsedEntry[]> {
     const today = new Date().toLocaleDateString('zh-TW', {
         timeZone: 'Asia/Taipei',
         year: 'numeric',
@@ -511,7 +650,7 @@ export async function parseEntries(userText: string, ctx: DbContext): Promise<Pa
     // T-ML-018：對 LLM 輸入做關鍵字 mask（味精→味鮮A、1600→大骨高湯1600 等），
     // 數字 keyword 不 mask 會被 LLM 當成 price。rawInput 後續 post-process 也用 mask 版本。
     const maskedText = maskKeywordsForLlm(normalizedText);
-    let result = await callOllama(systemPrompt, maskedText, OLLAMA_MODEL_FAST);
+    let result = await callLLM(systemPrompt, maskedText, OLLAMA_MODEL_FAST, diag);
 
     if (!result || result.length === 0) {
         console.log('[Parser] Fast model failed or empty, no result');
@@ -524,7 +663,7 @@ export async function parseEntries(userText: string, ctx: DbContext): Promise<Pa
         const perLineResults: RawExtracted[] = [];
         for (const line of inputLines) {
             const maskedLine = maskKeywordsForLlm(line);
-            const lineResult = await callOllama(systemPrompt, maskedLine, OLLAMA_MODEL_FAST);
+            const lineResult = await callLLM(systemPrompt, maskedLine, OLLAMA_MODEL_FAST, diag);
             if (lineResult && lineResult.length > 0) {
                 // rawInput 用 maskedLine 而非 line，post-process（含 stripCanonicalNumericNames）才一致
                 perLineResults.push(...lineResult.map(e => ({ ...e, rawInput: e.rawInput ?? maskedLine })));

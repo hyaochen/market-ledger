@@ -65,6 +65,9 @@ COPY package.json package-lock.json* tsconfig.json ./
 COPY prisma ./prisma
 COPY src ./src
 COPY bot ./bot
+# T-ML-030: scripts/backup-snapshot.ts runs in here (needs full node_modules incl. tsx,
+# same reason the T-ML-027/028/029 backfill scripts ran via this image, not runner)
+COPY scripts ./scripts
 
 RUN mkdir -p /app/data
 

@@ -5,6 +5,7 @@ import type { ParsedEntry, SessionData } from '../types';
 import { checkDuplicate } from '../matcher';
 import type { DbContext } from '../types';
 import { formatJinLiang, jinLiangToKg } from '../../src/lib/units';
+import { previewFixedExpenses, applyFixedExpenses, stallForLocation, realEntryDb } from '../../src/lib/fixedExpenseAutofill';
 
 // 判斷日期是否為今天（台北時區）
 function isToday(dateStr: string): boolean {
@@ -172,6 +173,40 @@ export async function saveEntry(entry: ParsedEntry, session: SessionData): Promi
         console.error('[saveEntry]', e);
         return { success: false, error: String(e) };
     }
+}
+
+// T-ML-027 範圍 A（bot 入口）：營業額記錄成功後自動帶固定支出（清潔費+洗攤）。
+// bot 沒有互動式 UI 做「可預覽/可改」，所以採「自動代入 + 訊息中明列 + 告知如何
+// 撤銷」的折衷：實際建立的每一筆都是普通 Entry，使用者本來就能到網頁進貨/支出
+// 紀錄頁刪除或修改（沿用既有 deleteEntry 能力），不是黑箱寫入。冪等由
+// applyFixedExpenses 內部保證（同日同攤同類型已存在就跳過，不會重複建立）。
+export async function autofillFixedExpensesForSaved(
+    saved: ParsedEntry[],
+    session: SessionData
+): Promise<string[]> {
+    const lines: string[] = [];
+    for (const entry of saved) {
+        if (entry.type !== 'REVENUE' || entry.isDayOff || !entry.locationId) continue;
+
+        const date = new Date(entry.date);
+        const stall = await stallForLocation(session.tenantId, entry.locationId);
+        if (!stall) continue;
+
+        const preview = await previewFixedExpenses(session.tenantId, date, entry.locationId);
+        if (!preview) continue;
+
+        const toApply = preview.items
+            .filter((it) => !it.alreadyExists)
+            .map((it) => ({ expenseType: it.expenseType, expenseLabel: it.expenseLabel, amount: it.amount }));
+        if (toApply.length === 0) continue;
+
+        const result = await applyFixedExpenses(realEntryDb, session.tenantId, date, stall, session.userId ?? null, toApply);
+        if (result.created.length > 0) {
+            const desc = result.created.map((c) => `${c.expenseLabel} $${c.amount}`).join('、');
+            lines.push(`🧾 已自動帶入固定支出：${desc}\n（如需修改/刪除請到網頁支出紀錄頁調整該筆）`);
+        }
+    }
+    return lines;
 }
 
 // 批量處理解析後的記錄，回傳結果摘要文字
