@@ -218,6 +218,45 @@ test("案例6 固定支出缺漏：7 月全月（含 7/31）現已零缺口", as
     assert.deepEqual(missing, [], `7 月全月應零缺口（含 7/31）：${JSON.stringify(missing)}`);
 });
 
+test("案例6 固定支出缺漏：2026-03~06（T-ML-029 第 2 層）補登後，status='missing' 的真缺口應為 0（06-18 已知例外除外）", async () => {
+    // T-ML-029（2026-08-09）依 owner「①照規則補」批准，把 2026-03-01~06-30 這段
+    // 91 筆「有營業額但缺清潔費/洗攤」的真缺口全部補齊。這裡驗證的是「真的缺
+    // （status='missing'，actualAmount=null）」這個子集合是否清零——不驗證
+    // status='amount_mismatch' 的筆數，因為那反映的是完全不同的另一件事：
+    //
+    // 🔴 重要發現（T-ML-029 過程中查證，超出本次補登範圍）：expectedWashFee()
+    // （fixedExpenseRules.ts）目前寫死屏東洗攤=300 不分日期，但唯讀查證真實歷史
+    // 資料後發現屏東洗攤的漲價過程**不是乾淨的 4/1 一刀切**——3 月全月穩定 250、
+    // 4/1~5/1 期間 250/300 混雜出現（推測是漲價公告後執行不一致），直到 5/2 起
+    // 才穩定變成 300。這代表 detectMissingFixedExpenses() 對 3~4 月甚至部分 5 月
+    // 初的「既有」（本次補登範圍之外的）屏東洗攤紀錄，本來就會回報大量
+    // amount_mismatch（不是本次任務造成，補登前就存在），把這個數字斷言成 0
+    // 會是假的（且會在漲價規則之後被誰改動時產生誤導性的綠燈）。真正該鎖住的
+    // 性質是「沒有真缺口」，僅此而已。詳見 vault 報告
+    // reports/2026-08-09_layer2-estimated-backfill.md「規則來源」段。
+    //
+    // 06-18 屏東清潔費是已知例外：Entry note="中"（單字，不在 stallInference.ts
+    // 的別名清單內）金額 110 恰好吻合當天星期規則，本次補登腳本已唯讀查證後刻意
+    // 不重複寫入（見 scripts/t-ml-029-backfill.ts 的 KNOWN_EXISTING_EXCEPTIONS 說明），
+    // 但這也代表 detectMissingFixedExpenses() 仍會誤報這天「缺清潔費」——這是
+    // inferStallFromNote() 別名清單的既有限制，不是本次任務造成、也不是本次任務
+    // 範圍要修的，如實記錄在這裡讓這個已知例外不會被誤判成回歸。
+    const months = [3, 4, 5, 6];
+    for (const month of months) {
+        const range = monthRangeUTC(2026, month);
+        const missing = await detectMissingFixedExpenses(REAL_TENANT_ID, range);
+        const trueGaps = missing.filter((m) => m.status === "missing");
+        if (month === 6) {
+            assert.equal(trueGaps.length, 1, `2026-06 應該只剩 1 個已知例外：${JSON.stringify(trueGaps)}`);
+            assert.equal(trueGaps[0].date, "2026-06-18");
+            assert.equal(trueGaps[0].stall, "pingtung");
+            assert.equal(trueGaps[0].expenseLabel, "清潔費");
+        } else {
+            assert.deepEqual(trueGaps, [], `2026-${month} 應該零真缺口（status='missing'）：${JSON.stringify(trueGaps)}`);
+        }
+    }
+});
+
 test("案例6 固定支出缺漏：demo 租戶沒有設清潔費/洗攤字典 → 回空陣列而非丟錯", async () => {
     const range = monthRangeUTC(2026, 3);
     const missing = await detectMissingFixedExpenses(DEMO_TENANT_ID, range);
