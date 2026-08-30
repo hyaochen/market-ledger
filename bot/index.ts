@@ -8,7 +8,7 @@ import {
     getSession, saveSession, clearSession,
     parseLoginInput, verifyLogin,
 } from './auth';
-import { parseEntries } from './parser';
+import { parseEntries, newParseDiagnostics } from './parser';
 import { loadDbContext, enrichEntry } from './matcher';
 import {
     preloadStates,
@@ -408,10 +408,11 @@ const INTENT_CLARIFY_KEYBOARD = {
 };
 
 // ── 日期查詢：把指定日期的記錄回給使用者 ────────────────────────
-async function runDateQuery(chatId: number, session: SessionData, text: string): Promise<void> {
+// preloaded：呼叫端已經載好 ctx 時直接沿用，避免同一則訊息重複打 DB
+async function runDateQuery(chatId: number, session: SessionData, text: string, preloaded?: DbContext): Promise<void> {
     const dateResult = detectQueryDate(text);
     logLine('QUERY', chatId, `date=${dateResult === 'recent' ? 'recent' : dateResult?.toLocaleDateString('zh-TW') ?? 'null'}`);
-    const ctx = await loadDbContext(session.tenantId);
+    const ctx = preloaded ?? await loadDbContext(session.tenantId);
     if (dateResult === 'recent') {
         await bot.sendMessage(chatId, await queryRecent(session, ctx));
     } else if (dateResult) {
@@ -423,12 +424,13 @@ async function runDateQuery(chatId: number, session: SessionData, text: string):
 }
 
 // ── 記帳解析：原本 message handler 的尾段，抽出來讓意圖釐清也能重用 ──
-async function runEntryParse(chatId: number, session: SessionData, text: string): Promise<void> {
+async function runEntryParse(chatId: number, session: SessionData, text: string, preloaded?: DbContext): Promise<void> {
     logLine('PARSE', chatId, text.slice(0, 120));
     await bot.sendMessage(chatId, '🔄 解析中，請稍候...');
 
-    const ctx = await loadDbContext(session.tenantId);
-    const rawEntries = await parseEntries(text, ctx);
+    const ctx = preloaded ?? await loadDbContext(session.tenantId);
+    const diag = newParseDiagnostics();
+    const rawEntries = await parseEntries(text, ctx, diag);
 
     if (rawEntries.length === 0) {
         await bot.sendMessage(chatId,
@@ -441,7 +443,22 @@ async function runEntryParse(chatId: number, session: SessionData, text: string)
     const enrichedRaw = await Promise.all(rawEntries.map(e => enrichEntry(e, ctx)));
 
     // 靜音模式：品項已知則強制 confident，跳過廠商選擇與二次確認
-    const enriched = getState(chatId).muteMode ? applyMuteMode(enrichedRaw) : enrichedRaw;
+    let enriched = getState(chatId).muteMode ? applyMuteMode(enrichedRaw) : enrichedRaw;
+
+    // 2026-08-30：主要模型（claude-bridge）失敗退回 ollama 時，一律強制二次確認。
+    // ollama 實測正確率 4/10，且 8/29 曾憑空生出一筆不存在的營收；它的輸出不能
+    // 跟 claude 一樣直接存進去。靜音模式也蓋掉 —— 這是正確性問題，不是吵不吵的問題。
+    if (diag.usedFallback) {
+        logLine('FALLBACK', chatId, `ollama fallback: ${diag.fallbackReason}`);
+        enriched = enriched.map(e => ({
+            ...e,
+            confident: false,
+            uncertainReason: e.uncertainReason
+                ? `${e.uncertainReason}；⚠️ 備援模型解析，請確認`
+                : '⚠️ 主要模型逾時，改用備援模型解析，請確認內容正確',
+        }));
+        await bot.sendMessage(chatId, '⚠️ 主要解析模型逾時，這批改用備援模型，請逐筆確認再存。');
+    }
 
     const { confident, uncertain } = startConfirmation(chatId, enriched);
 
@@ -537,8 +554,19 @@ bot.on('message', async (msg) => {
     if (!session) {
         const credentials = parseLoginInput(text);
         if (!credentials) {
-            await bot.sendMessage(chatId, '請先登入。\n格式：`帳號 密碼`\n例如：`mom mom123`', { parse_mode: 'Markdown' });
-            setState(chatId, { phase: 'awaiting_auth' });
+            // 2026-08-30：session 過期時這則訊息原本被直接丟掉，使用者登入後必須重打
+            // （log 分析：33 次重新登入造成 41 則訊息被迫重打）。改成暫存下來，
+            // 登入成功後自動重播。指令不暫存（重播 /help 沒有意義）。
+            const worthReplaying = !text.startsWith('/');
+            if (worthReplaying) {
+                setState(chatId, { phase: 'awaiting_auth', pendingReplayText: text });
+                await bot.sendMessage(chatId,
+                    '🔑 登入已過期，請先登入。\n格式：`帳號 密碼`\n例如：`mom mom123`\n\n_登入後我會自動幫你送出剛才那則，不用重打。_',
+                    { parse_mode: 'Markdown' });
+            } else {
+                setState(chatId, { phase: 'awaiting_auth' });
+                await bot.sendMessage(chatId, '請先登入。\n格式：`帳號 密碼`\n例如：`mom mom123`', { parse_mode: 'Markdown' });
+            }
             return;
         }
 
@@ -559,8 +587,21 @@ bot.on('message', async (msg) => {
         setSession(chatId, newSession);
         session = newSession;
 
+        const replayText = getState(chatId).pendingReplayText;
+        setState(chatId, { phase: 'idle', pendingReplayText: null });
+
         await bot.sendMessage(chatId,
-            `✅ 登入成功，歡迎 ${newSession.realName || newSession.username}！\n帳戶：${newSession.tenantName}（${newSession.roleCode === 'admin' ? '管理員' : '一般'}）\n登入有效期 7 天。\n\n直接輸入記帳內容開始記錄。`);
+            `✅ 登入成功，歡迎 ${newSession.realName || newSession.username}！\n帳戶：${newSession.tenantName}（${newSession.roleCode === 'admin' ? '管理員' : '一般'}）\n登入有效期 90 天。\n\n直接輸入記帳內容開始記錄。`);
+
+        // 把 session 過期時被擋下的那則訊息補送回自己，使用者不用重打。
+        // 用 re-emit 而不是遞迴呼叫：這時 session 已存在，不會再走進上面這個分支，
+        // 不會無限迴圈，而且完整重跑一次正常流程（查詢/記帳判斷都照舊）。
+        if (replayText) {
+            logLine('REPLAY', chatId, replayText.slice(0, 120));
+            await bot.sendMessage(chatId, `↩️ 幫你送出剛才那則：「${replayText}」`);
+            // node-telegram-bot-api 的型別把 emit 收斂成唯讀事件集合，明確轉型後重新派送
+            (bot as unknown as NodeJS.EventEmitter).emit('message', { ...msg, text: replayText });
+        }
         return;
     }
 
@@ -750,22 +791,24 @@ bot.on('message', async (msg) => {
         return;
     }
 
+    // 查詢類 detector 共用同一份 ctx（原本每個分支各自 loadDbContext，重複打 DB；
+    // 且 detectVendorMonthQuery 現在需要真實廠商清單才能判斷，必須先載好）
+    const queryCtx = await loadDbContext(session.tenantId);
+
     // ── 日期範圍查詢（例如「3月1號到3月31號屏東攤位的總營收」）──
     const dateRange = detectDateRangeQuery(text);
     if (dateRange) {
         logLine('QUERY', chatId, `range=${dateRange.from.toLocaleDateString()}~${dateRange.to.toLocaleDateString()} loc=${dateRange.locationName || 'all'} type=${dateRange.type || 'all'}`);
-        const ctx = await loadDbContext(session.tenantId);
-        const result = await queryByDateRange(dateRange.from, dateRange.to, dateRange.locationName, dateRange.type, session, ctx);
+        const result = await queryByDateRange(dateRange.from, dateRange.to, dateRange.locationName, dateRange.type, session, queryCtx);
         await bot.sendMessage(chatId, result);
         return;
     }
 
     // ── 廠商月份查詢（例如「4月 阿明」「查阿明4月進了什麼」）──
-    const vendorMonth = detectVendorMonthQuery(text);
+    const vendorMonth = detectVendorMonthQuery(text, queryCtx.vendors);
     if (vendorMonth) {
         logLine('QUERY', chatId, `vendor=${vendorMonth.vendorName} month=${vendorMonth.month}`);
-        const ctx = await loadDbContext(session.tenantId);
-        const result = await queryByVendorMonth(vendorMonth.vendorName, vendorMonth.month, vendorMonth.year, session, ctx);
+        const result = await queryByVendorMonth(vendorMonth.vendorName, vendorMonth.month, vendorMonth.year, session, queryCtx);
         await bot.sendMessage(chatId, result);
         return;
     }
@@ -774,8 +817,7 @@ bot.on('message', async (msg) => {
     const comparison = detectComparisonQuery(text);
     if (comparison) {
         logLine('QUERY', chatId, `compare ${comparison.p1.label} vs ${comparison.p2.label}`);
-        const ctx = await loadDbContext(session.tenantId);
-        const result = await queryComparison(comparison.p1, comparison.p2, session, ctx);
+        const result = await queryComparison(comparison.p1, comparison.p2, session, queryCtx);
         await bot.sendMessage(chatId, result);
         return;
     }
@@ -784,15 +826,14 @@ bot.on('message', async (msg) => {
     const ranking = detectRankingQuery(text);
     if (ranking) {
         logLine('QUERY', chatId, `ranking ${ranking.target} top${ranking.topN} ${ranking.period.label}`);
-        const ctx = await loadDbContext(session.tenantId);
-        const result = await queryRanking(ranking.period, ranking.target, ranking.topN, session, ctx);
+        const result = await queryRanking(ranking.period, ranking.target, ranking.topN, session, queryCtx);
         await bot.sendMessage(chatId, result);
         return;
     }
 
     // ── 品項月份 / 支出類型月份查詢 ──
     {
-        const ctxForLookup = await loadDbContext(session.tenantId);
+        const ctxForLookup = queryCtx;
 
         // 先試備註查詢（備註關鍵字優先，避免被普通支出類型攔截）
         const noteQ = detectNoteQuery(text, ctxForLookup.expenseTypes);
@@ -826,8 +867,7 @@ bot.on('message', async (msg) => {
     const monthYear = detectMonthYearQuery(text);
     if (monthYear) {
         logLine('QUERY', chatId, `monthYear ${monthYear.period.label} type=${monthYear.type || 'all'}`);
-        const ctx = await loadDbContext(session.tenantId);
-        const result = await queryByMonthYear(monthYear.period, monthYear.type, session, ctx);
+        const result = await queryByMonthYear(monthYear.period, monthYear.type, session, queryCtx);
         await bot.sendMessage(chatId, result);
         return;
     }
@@ -836,7 +876,7 @@ bot.on('message', async (msg) => {
     const intent = classifyQueryIntent(text);
 
     if (intent === 'query') {
-        await runDateQuery(chatId, session, text);
+        await runDateQuery(chatId, session, text, queryCtx);
         return;
     }
 
@@ -851,7 +891,7 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    await runEntryParse(chatId, session, text);
+    await runEntryParse(chatId, session, text, queryCtx);
     // ── handler body end ────────────────────────────────
     } catch (err) {
         console.error('[MessageHandler Error]', err);

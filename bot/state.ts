@@ -20,6 +20,7 @@ function getDefault(): ChatState {
         newItemPending: null,
         muteMode: false,
         pendingClarifyText: null,
+        pendingReplayText: null,
     };
 }
 

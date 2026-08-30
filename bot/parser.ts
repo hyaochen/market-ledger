@@ -261,13 +261,35 @@ async function callClaudeBridge(systemPrompt: string, userText: string): Promise
 }
 
 /**
+ * 一次解析的診斷資訊。用明確的 out-param 傳遞，而不是模組級變數 ——
+ * 多個使用者的訊息會在 await 之間交錯，全域旗標會互相污染。
+ */
+export type ParseDiagnostics = {
+    usedFallback: boolean;
+    fallbackReason: string | null;
+};
+
+export function newParseDiagnostics(): ParseDiagnostics {
+    return { usedFallback: false, fallbackReason: null };
+}
+
+/**
  * 統一的 LLM 呼叫入口（T-ML-024）。取代原本直接呼叫 callOllama 的地方。
  * LLM_PROVIDER=claude（預設）：先打 host 上的 claude bridge，任何失敗（見
- *   callClaudeBridge 內 5 種 fallback 條件）都會記 log 並無感退回 ollama —
- *   使用者只會看到正常回覆，不會感覺到 provider 切換過。
+ *   callClaudeBridge 內 5 種 fallback 條件）都會記 log 並退回 ollama。
  * LLM_PROVIDER=ollama：略過 claude，直接走原本的 ollama 呼叫（行為與 T-ML-024 前完全一致）。
+ *
+ * 2026-08-30：退回 ollama 原本是刻意「無感」的（使用者看不出 provider 換過）。
+ * 那正是 8/29 那句查詢被 ollama 憑空編出一筆營收卻沒人察覺的原因 —— ollama 實測
+ * 正確率 4/10、claude 10/10，兩者的輸出不該被當成同一等級。改成回報給呼叫端，
+ * 由 bot 端提示使用者並強制二次確認。
  */
-export async function callLLM(systemPrompt: string, userText: string, model: string): Promise<RawExtracted[] | null> {
+export async function callLLM(
+    systemPrompt: string,
+    userText: string,
+    model: string,
+    diag?: ParseDiagnostics,
+): Promise<RawExtracted[] | null> {
     if (getLlmProvider() === 'ollama') {
         return callOllama(systemPrompt, userText, model);
     }
@@ -277,6 +299,10 @@ export async function callLLM(systemPrompt: string, userText: string, model: str
         return claudeResult.data;
     }
     console.warn(`[Parser] claude-bridge fallback → ollama:${model}. reason=${claudeResult.reason}`);
+    if (diag) {
+        diag.usedFallback = true;
+        diag.fallbackReason = claudeResult.reason ?? 'unknown';
+    }
     return callOllama(systemPrompt, userText, model);
 }
 
@@ -589,7 +615,7 @@ function fixMisclassifiedExpense(entry: RawExtracted): RawExtracted {
 }
 
 // 主要解析函式：只用快速模型，不再 fallback 到 32b
-export async function parseEntries(userText: string, ctx: DbContext): Promise<ParsedEntry[]> {
+export async function parseEntries(userText: string, ctx: DbContext, diag?: ParseDiagnostics): Promise<ParsedEntry[]> {
     const today = new Date().toLocaleDateString('zh-TW', {
         timeZone: 'Asia/Taipei',
         year: 'numeric',
@@ -624,7 +650,7 @@ export async function parseEntries(userText: string, ctx: DbContext): Promise<Pa
     // T-ML-018：對 LLM 輸入做關鍵字 mask（味精→味鮮A、1600→大骨高湯1600 等），
     // 數字 keyword 不 mask 會被 LLM 當成 price。rawInput 後續 post-process 也用 mask 版本。
     const maskedText = maskKeywordsForLlm(normalizedText);
-    let result = await callLLM(systemPrompt, maskedText, OLLAMA_MODEL_FAST);
+    let result = await callLLM(systemPrompt, maskedText, OLLAMA_MODEL_FAST, diag);
 
     if (!result || result.length === 0) {
         console.log('[Parser] Fast model failed or empty, no result');
@@ -637,7 +663,7 @@ export async function parseEntries(userText: string, ctx: DbContext): Promise<Pa
         const perLineResults: RawExtracted[] = [];
         for (const line of inputLines) {
             const maskedLine = maskKeywordsForLlm(line);
-            const lineResult = await callLLM(systemPrompt, maskedLine, OLLAMA_MODEL_FAST);
+            const lineResult = await callLLM(systemPrompt, maskedLine, OLLAMA_MODEL_FAST, diag);
             if (lineResult && lineResult.length > 0) {
                 // rawInput 用 maskedLine 而非 line，post-process（含 stripCanonicalNumericNames）才一致
                 perLineResults.push(...lineResult.map(e => ({ ...e, rawInput: e.rawInput ?? maskedLine })));

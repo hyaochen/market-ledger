@@ -5,6 +5,11 @@ import type { ParsedEntry, DbContext } from './types';
 import { loadAliases } from './aliases';
 import { detectItemKeyword, isCanonicalItemKeywordName } from './itemKeywords';
 
+// 廠商自動帶入門檻（見 enrichEntry 內的說明）。
+// 近 20 筆有廠商的紀錄裡，至少要有這麼多筆樣本、且第一名要佔到這個比例。
+const VENDOR_AUTOFILL_MIN_SAMPLES = 8;
+const VENDOR_AUTOFILL_MIN_SHARE = 0.9;
+
 // 載入租戶的完整 DB 上下文（品項、廠商、支出類型、單位、地點）
 export async function loadDbContext(tenantId: string): Promise<DbContext> {
     const [categories, items, vendors, expenseTypes, unitDicts, locations] = await Promise.all([
@@ -363,17 +368,43 @@ export async function enrichEntry(entry: ParsedEntry, ctx: DbContext): Promise<P
                 if (e.vendorId) vendorFreq.set(e.vendorId, (vendorFreq.get(e.vendorId) ?? 0) + 1);
             });
 
-            const historyIds = [...vendorFreq.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id);
+            const ranked = [...vendorFreq.entries()].sort((a, b) => b[1] - a[1]);
+            const historyIds = ranked.map(([id]) => id);
 
-            // 未填廠商 → 一律顯示廠商選擇鍵盤，不自動帶入（避免靜默帶錯廠商）
-            // 排序：有歷史的廠商優先（依頻率），其餘依名稱
-            const historyVendors = historyIds
-                .map(id => ctx.vendors.find(v => v.id === id))
-                .filter((v): v is { id: string; name: string } => v != null);
-            const otherVendors = ctx.vendors.filter(v => !vendorFreq.has(v.id));
-            enriched._vendorCandidates = [...historyVendors, ...otherVendors];
-            enriched.confident = false;
-            enriched.uncertainReason = `「${enriched.itemName}」請選擇廠商`;
+            // 2026-08-30：歷史夠一面倒就自動帶入，不再每筆都問。
+            //
+            // 舊行為是「一律顯示廠商選擇鍵盤，不自動帶入（避免靜默帶錯廠商）」，方向對，
+            // 但代價被低估了：log 分析顯示最常記的 4 個品項（舌頭/肝蓮/頭皮/粉腸，170 筆）
+            // 有 93-98% 都是同一家，等於每天為了確認一件早就確定的事按十幾次按鈕。
+            //
+            // 門檻刻意訂得保守 —— 近 20 筆裡至少 8 筆有廠商、且第一名佔 ≥90% 才自動帶。
+            // 這不是猜測，是把一面倒的歷史事實填上去；帶入的結果會出現在儲存摘要裡讓使用者
+            // 看到（「頭皮 3個 $360（海豐）」），不對可以在網頁端改。
+            // 實測會被排除的：五花肉（64%）、尾巴（60%）—— 這些仍然照舊詢問。
+            const totalWithVendor = recentEntries.length;
+            const top = ranked[0];
+            const topShare = top && totalWithVendor > 0 ? top[1] / totalWithVendor : 0;
+
+            if (top && totalWithVendor >= VENDOR_AUTOFILL_MIN_SAMPLES && topShare >= VENDOR_AUTOFILL_MIN_SHARE) {
+                const autoVendor = ctx.vendors.find(v => v.id === top[0]);
+                if (autoVendor) {
+                    enriched.vendorId = autoVendor.id;
+                    enriched.vendorName = autoVendor.name;
+                    console.log(`[Matcher] vendor auto-filled "${autoVendor.name}" for "${enriched.itemName}" (${top[1]}/${totalWithVendor} = ${(topShare * 100).toFixed(0)}%)`);
+                }
+            }
+
+            if (!enriched.vendorId) {
+                // 沒到門檻 → 維持原本行為，顯示選擇鍵盤
+                // 排序：有歷史的廠商優先（依頻率），其餘依名稱
+                const historyVendors = historyIds
+                    .map(id => ctx.vendors.find(v => v.id === id))
+                    .filter((v): v is { id: string; name: string } => v != null);
+                const otherVendors = ctx.vendors.filter(v => !vendorFreq.has(v.id));
+                enriched._vendorCandidates = [...historyVendors, ...otherVendors];
+                enriched.confident = false;
+                enriched.uncertainReason = `「${enriched.itemName}」請選擇廠商`;
+            }
         }
 
         // 重複偵測（提前告知，讓使用者決定是否再記）

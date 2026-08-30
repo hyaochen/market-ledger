@@ -3,7 +3,10 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { detectQueryDate, isQueryIntent, classifyQueryIntent } from "./query";
+import {
+    detectQueryDate, isQueryIntent, classifyQueryIntent,
+    detectVendorMonthQuery, detectExpenseTypeMonthQuery,
+} from "./query";
 
 // ── detectQueryDate ─────────────────────────────────────────────
 test("detectQueryDate: 今天 → today", () => {
@@ -123,4 +126,61 @@ test("classifyQueryIntent: 意圖不明 → ambiguous", () => {
 test("isQueryIntent 只在 query 時為 true（ambiguous 不算查詢）", () => {
     assert.equal(isQueryIntent("8/29 頭皮"), false);
     assert.equal(isQueryIntent("8/29 營收跟支出情況?"), true);
+});
+
+// ── detectVendorMonthQuery：必須對得上真實廠商（2026-08-30 修復）──────
+const VENDORS = [
+    { id: "v1", name: "海豐" },
+    { id: "v2", name: "俊偉" },
+    { id: "v3", name: "秀花" },
+    { id: "v4", name: "建國滷蛋" },
+    { id: "v5", name: "和生市場" },
+];
+const EXPENSE_TYPES = [
+    { id: "e1", value: "薪資", label: "薪資" },
+    { id: "e2", value: "清潔費", label: "清潔費" },
+    { id: "e3", value: "EXP001", label: "租金" },
+    { id: "e4", value: "gas", label: "瓦斯" },
+];
+
+test("detectVendorMonthQuery: 真實廠商 → 命中", () => {
+    const r = detectVendorMonthQuery("8月海豐進了什麼", VENDORS);
+    assert.ok(r, "「8月海豐進了什麼」應命中廠商查詢");
+    assert.equal(r!.vendorName, "海豐");
+    assert.equal(r!.month, 8);
+});
+
+// 回歸案例：這些以前全被誤判成廠商查詢，使用者只看到「找不到廠商「薪資」」
+test("detectVendorMonthQuery: 非廠商字串 → null（讓後面的 detector 接手）", () => {
+    for (const t of [
+        "8月薪資", "8月薪水", "8月清潔費多少", "8月頭皮買了多少",
+        "8月的薪水支出全部有多少", "8月肝連進了多少", "8月總共花多少",
+    ]) {
+        assert.equal(detectVendorMonthQuery(t, VENDORS), null, `「${t}」不該被判成廠商查詢`);
+    }
+});
+
+test("detectVendorMonthQuery: 空廠商清單 → 一律 null，不再瞎猜", () => {
+    assert.equal(detectVendorMonthQuery("8月海豐", []), null);
+});
+
+// ── detectExpenseTypeMonthQuery：白話同義詞（2026-08-30 新增）─────────
+test("detectExpenseTypeMonthQuery: 薪水/工資 → 薪資", () => {
+    for (const t of ["8月薪水", "8月的薪水支出全部有多少", "8月工資多少"]) {
+        const r = detectExpenseTypeMonthQuery(t, EXPENSE_TYPES);
+        assert.ok(r, `「${t}」應對到支出類型`);
+        assert.equal(r!.expenseTypeLabel, "薪資", `「${t}」應對到薪資`);
+    }
+});
+
+test("detectExpenseTypeMonthQuery: 房租 → 租金", () => {
+    const r = detectExpenseTypeMonthQuery("8月房租多少", EXPENSE_TYPES);
+    assert.ok(r);
+    assert.equal(r!.expenseTypeLabel, "租金");
+});
+
+test("detectExpenseTypeMonthQuery: 原本就正確的用詞不受影響", () => {
+    const r = detectExpenseTypeMonthQuery("8月薪資", EXPENSE_TYPES);
+    assert.ok(r);
+    assert.equal(r!.expenseTypeLabel, "薪資");
 });
