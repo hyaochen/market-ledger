@@ -19,6 +19,7 @@ function getDefault(): ChatState {
         session: null,
         newItemPending: null,
         muteMode: false,
+        pendingClarifyText: null,
     };
 }
 

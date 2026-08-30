@@ -22,7 +22,7 @@ import {
     processEntries, formatSummary, formatEntry, autofillFixedExpensesForSaved,
 } from './handlers/entry';
 import {
-    detectQueryDate, isQueryIntent, queryByDate, queryRecent,
+    detectQueryDate, classifyQueryIntent, queryByDate, queryRecent,
     detectVendorMonthQuery, queryByVendorMonth,
     detectDateRangeQuery, queryByDateRange,
     detectMonthYearQuery, queryByMonthYear,
@@ -399,6 +399,73 @@ function applyMuteMode(entries: ParsedEntry[]): ParsedEntry[] {
     });
 }
 
+// ── 意圖釐清鍵盤（有日期但看不出是查詢還是記帳時使用）────────────
+const INTENT_CLARIFY_KEYBOARD = {
+    inline_keyboard: [[
+        { text: '🔍 查詢', callback_data: 'intent_query' },
+        { text: '📝 記帳', callback_data: 'intent_entry' },
+    ]],
+};
+
+// ── 日期查詢：把指定日期的記錄回給使用者 ────────────────────────
+async function runDateQuery(chatId: number, session: SessionData, text: string): Promise<void> {
+    const dateResult = detectQueryDate(text);
+    logLine('QUERY', chatId, `date=${dateResult === 'recent' ? 'recent' : dateResult?.toLocaleDateString('zh-TW') ?? 'null'}`);
+    const ctx = await loadDbContext(session.tenantId);
+    if (dateResult === 'recent') {
+        await bot.sendMessage(chatId, await queryRecent(session, ctx));
+    } else if (dateResult) {
+        await bot.sendMessage(chatId, await queryByDate(dateResult, session, ctx));
+    } else {
+        // classifyQueryIntent 判為查詢但這裡拿不到日期（理論上不會發生）
+        await bot.sendMessage(chatId, '❓ 看不出你要查哪一天，可以說「今天」「昨天」或「8/29」。');
+    }
+}
+
+// ── 記帳解析：原本 message handler 的尾段，抽出來讓意圖釐清也能重用 ──
+async function runEntryParse(chatId: number, session: SessionData, text: string): Promise<void> {
+    logLine('PARSE', chatId, text.slice(0, 120));
+    await bot.sendMessage(chatId, '🔄 解析中，請稍候...');
+
+    const ctx = await loadDbContext(session.tenantId);
+    const rawEntries = await parseEntries(text, ctx);
+
+    if (rawEntries.length === 0) {
+        await bot.sendMessage(chatId,
+            '❓ 無法解析輸入內容。\n\n請確認格式，例如：\n`肝連2.6台斤218`\n\n或傳 /help 查看說明',
+            { parse_mode: 'Markdown' });
+        return;
+    }
+
+    // 逐筆 enrichment
+    const enrichedRaw = await Promise.all(rawEntries.map(e => enrichEntry(e, ctx)));
+
+    // 靜音模式：品項已知則強制 confident，跳過廠商選擇與二次確認
+    const enriched = getState(chatId).muteMode ? applyMuteMode(enrichedRaw) : enrichedRaw;
+
+    const { confident, uncertain } = startConfirmation(chatId, enriched);
+
+    if (uncertain.length === 0) {
+        const { saved, failed } = await processEntries(confident, session, ctx);
+        const summary = formatSummary(saved, failed, ctx);
+        resetToIdle(chatId);
+        await bot.sendMessage(chatId, summary);
+        const fixedExpenseNotes = await autofillFixedExpensesForSaved(saved, session);
+        for (const note of fixedExpenseNotes) {
+            await bot.sendMessage(chatId, note);
+        }
+    } else {
+        if (confident.length > 0) {
+            const preview = confident.map(e => `  • ${formatEntry(e, ctx)}`).join('\n');
+            await bot.sendMessage(chatId, `以下 ${confident.length} 筆確認無誤，稍後儲存：\n${preview}`);
+        }
+        const first = getState(chatId).currentUncertain;
+        if (first) {
+            await sendUncertainPrompt(chatId, first, 0, ctx);
+        }
+    }
+}
+
 // ── 主要訊息處理 ──────────────────────────────────────────────
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
@@ -495,6 +562,11 @@ bot.on('message', async (msg) => {
         await bot.sendMessage(chatId,
             `✅ 登入成功，歡迎 ${newSession.realName || newSession.username}！\n帳戶：${newSession.tenantName}（${newSession.roleCode === 'admin' ? '管理員' : '一般'}）\n登入有效期 7 天。\n\n直接輸入記帳內容開始記錄。`);
         return;
+    }
+
+    // ── 等待意圖釐清中又收到新訊息 → 放掉舊的，照新訊息重新判斷（避免卡死）──
+    if (state.phase === 'awaiting_intent_clarify') {
+        setState(chatId, { phase: 'idle', pendingClarifyText: null });
     }
 
     // ── 等待支出項目確認（awaiting_new_expense，僅有按鈕互動）──
@@ -760,62 +832,26 @@ bot.on('message', async (msg) => {
         return;
     }
 
-    // ── 查詢意圖 ──────────────────────────────────────────
-    if (isQueryIntent(text)) {
-        const dateResult = detectQueryDate(text);
-        logLine('QUERY', chatId, `date=${dateResult === 'recent' ? 'recent' : dateResult?.toLocaleDateString('zh-TW') ?? 'null'}`);
-        const ctx = await loadDbContext(session.tenantId);
-        if (dateResult === 'recent') {
-            const result = await queryRecent(session, ctx);
-            await bot.sendMessage(chatId, result);
-        } else if (dateResult) {
-            const result = await queryByDate(dateResult, session, ctx);
-            await bot.sendMessage(chatId, result);
-        }
+    // ── 意圖判斷：查詢 / 意圖不明 / 記帳 ───────────────────
+    const intent = classifyQueryIntent(text);
+
+    if (intent === 'query') {
+        await runDateQuery(chatId, session, text);
         return;
     }
 
-    // ── 解析記帳輸入 ──────────────────────────────────────
-    logLine('PARSE', chatId, text.slice(0, 120));
-    await bot.sendMessage(chatId, '🔄 解析中，請稍候...');
-
-    const ctx = await loadDbContext(session.tenantId);
-    const rawEntries = await parseEntries(text, ctx);
-
-    if (rawEntries.length === 0) {
+    // 有日期但看不出是查詢還是記帳 → 回頭問，絕不擅自走記帳路徑。
+    // （2026-08-30：靜默降級曾讓 LLM 對查詢句「提取」出一筆不存在的營收）
+    if (intent === 'ambiguous') {
+        logLine('CLARIFY', chatId, text.slice(0, 120));
+        setState(chatId, { phase: 'awaiting_intent_clarify', pendingClarifyText: text });
         await bot.sendMessage(chatId,
-            '❓ 無法解析輸入內容。\n\n請確認格式，例如：\n`肝連2.6台斤218`\n\n或傳 /help 查看說明',
-            { parse_mode: 'Markdown' });
+            `🤔 「${text}」我不確定你是要查詢還是要記帳，請選一個：`,
+            { reply_markup: INTENT_CLARIFY_KEYBOARD });
         return;
     }
 
-    // 逐筆 enrichment
-    const enrichedRaw = await Promise.all(rawEntries.map(e => enrichEntry(e, ctx)));
-
-    // 靜音模式：品項已知則強制 confident，跳過廠商選擇與二次確認
-    const enriched = getState(chatId).muteMode ? applyMuteMode(enrichedRaw) : enrichedRaw;
-
-    const { confident, uncertain } = startConfirmation(chatId, enriched);
-
-    if (uncertain.length === 0) {
-        const { saved, failed } = await processEntries(confident, session, ctx);
-        const summary = formatSummary(saved, failed, ctx);
-        resetToIdle(chatId);
-        await bot.sendMessage(chatId, summary);
-        const fixedExpenseNotes = await autofillFixedExpensesForSaved(saved, session);
-        for (const note of fixedExpenseNotes) {
-            await bot.sendMessage(chatId, note);
-        }
-    } else {
-        if (confident.length > 0) {
-            const preview = confident.map(e => `  • ${formatEntry(e, ctx)}`).join('\n');
-            await bot.sendMessage(chatId, `以下 ${confident.length} 筆確認無誤，稍後儲存：\n${preview}`);
-        }
-        const first = getState(chatId).currentUncertain;
-        if (first) {
-            await sendUncertainPrompt(chatId, first, 0, ctx);
-        }
-    }
+    await runEntryParse(chatId, session, text);
     // ── handler body end ────────────────────────────────
     } catch (err) {
         console.error('[MessageHandler Error]', err);
@@ -844,6 +880,22 @@ bot.on('callback_query', async (query) => {
 
     const ctx = await loadDbContext(session.tenantId);
     const state = getState(chatId);
+
+    // ── 意圖釐清：使用者選「查詢」還是「記帳」──────────────────
+    if (data === 'intent_query' || data === 'intent_entry') {
+        const pendingText = state.pendingClarifyText;
+        setState(chatId, { phase: 'idle', pendingClarifyText: null });
+        if (!pendingText) {
+            await bot.sendMessage(chatId, '這則訊息已經過期了，請重新輸入一次。');
+            return;
+        }
+        if (data === 'intent_query') {
+            await runDateQuery(chatId, session, pendingText);
+        } else {
+            await runEntryParse(chatId, session, pendingText);
+        }
+        return;
+    }
 
     // ── 廠商：新增 ──────────────────────────────────────────
     if (data === 'vendor_create') {

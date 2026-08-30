@@ -59,7 +59,8 @@ export type ChatPhase =
     | 'awaiting_category_select'    // 等待使用者選擇品項分類（建立新品項中）
     | 'awaiting_vendor_decision'    // 等待廠商確認/選擇/新增
     | 'awaiting_new_vendor_input'   // 使用者輸入新廠商名稱（新增品項後）
-    | 'awaiting_item_select';       // 等待使用者從相似品項中選擇
+    | 'awaiting_item_select'        // 等待使用者從相似品項中選擇
+    | 'awaiting_intent_clarify';    // 有日期但意圖不明，等使用者選「查詢」還是「記帳」
 
 export type NewItemPending = {
     entry: ParsedEntry;               // 需要新增的那筆
@@ -77,6 +78,7 @@ export type ChatState = {
     session: SessionData | null;
     newItemPending: NewItemPending | null;
     muteMode: boolean;               // 靜音模式：品項已知則直接記錄，不再詢問廠商/確認
+    pendingClarifyText: string | null; // 意圖待釐清時暫存的原始輸入
 };
 
 export type DbContext = {

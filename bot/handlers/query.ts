@@ -66,13 +66,46 @@ export function detectQueryDate(text: string): Date | 'recent' | null {
     return null;
 }
 
-// 是否為查詢指令
-export function isQueryIntent(text: string): boolean {
+// 查詢關鍵字白名單。
+// 2026-08-30：原本只有「記/紀錄/查/什麼/多少」，漏掉 owner 最常用的「營收/支出/營業額」，
+// 導致「8/29 營收跟支出情況?」判為非查詢、靜默降級走記帳解析（見 bugs-log 2026-08-30）。
+const QUERY_KEYWORD_RE =
+    /記|記錄|記了|紀錄|查|什麼|多少|營收|營業額|收入|業績|賣了|賣多少|支出|花費|開銷|進貨|買了|情況|狀況|明細|統計|報表/;
+
+// 移除日期本身後，是否還有其他數字。
+// 記帳一定帶數量或金額（「8/13 頭皮2個240」），查詢通常不帶（「8/29 營收情況」）。
+function hasNonDateDigits(normalized: string): boolean {
+    const stripped = normalized
+        .replace(/(\d{1,2})[/月](\d{1,2})[日號]?/g, ' ')
+        .replace(/\d{4}\s*年/g, ' ');
+    return /\d/.test(stripped);
+}
+
+/**
+ * 三態意圖判斷。
+ * - 'query'     ：確定是查詢
+ * - 'ambiguous' ：有日期、無查詢關鍵字、且日期以外沒有任何數字 → 必須回頭問使用者
+ * - 'entry'     ：其餘一律照原本記帳流程
+ *
+ * 為什麼需要 'ambiguous'：關鍵字白名單永遠補不完，但**誤判方向可以固定成安全的那邊**。
+ * 「查詢誤判成記帳」會把查詢句丟給 LLM 去「提取」不存在的數字——2026-08-30 ollama 就
+ * 這樣憑空生出一筆營收，只差網路剛好斷線才沒寫進 DB。「記帳誤判成查詢」最多只是沒反應。
+ *
+ * 用 hasNonDateDigits 收斂範圍，是為了不干擾 owner 補登舊帳這個主要流程——
+ * 「8/13 頭皮2個240」帶了數字，仍然直接走記帳，不會多問一句。
+ */
+export function classifyQueryIntent(text: string): 'query' | 'ambiguous' | 'entry' {
     const t = normalizeChineseDate(text.trim());
     // 純日期詞直接觸發查詢（不需要額外關鍵字）
-    if (/^(今天|今日|昨天|昨日|前天|最近|近期)$/.test(t)) return true;
-    return detectQueryDate(text) !== null &&
-        /記|記錄|記了|記了什麼|紀錄|查|什麼|多少/.test(text);
+    if (/^(今天|今日|昨天|昨日|前天|最近|近期)$/.test(t)) return 'query';
+    if (detectQueryDate(text) === null) return 'entry';
+    if (QUERY_KEYWORD_RE.test(text)) return 'query';
+    return hasNonDateDigits(t) ? 'entry' : 'ambiguous';
+}
+
+// 是否為查詢指令
+export function isQueryIntent(text: string): boolean {
+    return classifyQueryIntent(text) === 'query';
 }
 
 // 格式化日期為 M/D

@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { detectQueryDate, isQueryIntent } from "./query";
+import { detectQueryDate, isQueryIntent, classifyQueryIntent } from "./query";
 
 // ── detectQueryDate ─────────────────────────────────────────────
 test("detectQueryDate: 今天 → today", () => {
@@ -82,4 +82,45 @@ test("isQueryIntent: 最近 → true", () => {
 test("isQueryIntent: general text → false", () => {
     assert.equal(isQueryIntent("肝連2.6台斤218"), false);
     assert.equal(isQueryIntent("潮州5000"), false);
+});
+
+// ── classifyQueryIntent（2026-08-30 修復）──────────────────────────
+// 回歸案例：owner 問「8/29 營收跟支出情況?」被判成記帳，ollama 憑空生出一筆營收。
+test("classifyQueryIntent: 8/29 營收跟支出情況? → query（回歸案例）", () => {
+    assert.equal(classifyQueryIntent("8/29 營收跟支出情況?"), "query");
+});
+
+test("classifyQueryIntent: 新補的營收/支出關鍵字 → query", () => {
+    for (const t of ["8/29 營業額", "8/29 支出", "昨天收入", "8/29 進貨明細", "前天花費", "8/29業績"]) {
+        assert.equal(classifyQueryIntent(t), "query", `「${t}」應判為查詢`);
+    }
+});
+
+test("classifyQueryIntent: 原有關鍵字仍為 query", () => {
+    assert.equal(classifyQueryIntent("8/29 記了什麼"), "query");
+    assert.equal(classifyQueryIntent("昨天營收多少"), "query");
+    assert.equal(classifyQueryIntent("前天"), "query");
+});
+
+// 關鍵回歸：補登舊帳是 owner 的主要流程，帶日期的記帳絕不能被攔下來多問一句
+test("classifyQueryIntent: 帶日期的記帳（有數量/金額）→ entry，不得變成 ambiguous", () => {
+    for (const t of ["8/13 頭皮2個240", "8/29 肝蓮2.6台斤218", "7/15 蠔油1箱1260", "8/6 潮州5000"]) {
+        assert.equal(classifyQueryIntent(t), "entry", `「${t}」應直接走記帳`);
+    }
+});
+
+test("classifyQueryIntent: 無日期的記帳 → entry", () => {
+    assert.equal(classifyQueryIntent("肝連2.6台斤218"), "entry");
+    assert.equal(classifyQueryIntent("頭皮一斤$120"), "entry");
+});
+
+// 有日期、沒關鍵字、日期以外沒有任何數字 → 問使用者，不猜
+test("classifyQueryIntent: 意圖不明 → ambiguous", () => {
+    assert.equal(classifyQueryIntent("8/29 頭皮"), "ambiguous");
+    assert.equal(classifyQueryIntent("8/29 怎麼樣"), "ambiguous");
+});
+
+test("isQueryIntent 只在 query 時為 true（ambiguous 不算查詢）", () => {
+    assert.equal(isQueryIntent("8/29 頭皮"), false);
+    assert.equal(isQueryIntent("8/29 營收跟支出情況?"), true);
 });
