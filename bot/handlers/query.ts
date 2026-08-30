@@ -152,8 +152,15 @@ export async function queryByDate(date: Date, session: SessionData, ctx: DbConte
     }
 
     // 進貨 & 支出
-    for (const e of entries) {
-        if (e.type === 'PURCHASE') {
+    // 2026-08-30：原本兩者共用一個 for 迴圈且完全沒有 section header，
+    // 視覺上整批被歸到上面的「💰 營業額：」底下（合計那行是對的，只有列表誤導）。
+    // 這裡拆成兩段並補上標題，與 queryByDateRange / queryByMonthYear 的格式一致。
+    const purchases = entries.filter(e => e.type === 'PURCHASE');
+    const expenses = entries.filter(e => e.type !== 'PURCHASE');
+
+    if (purchases.length > 0) {
+        lines.push('🛒 進貨：');
+        for (const e of purchases) {
             purchaseTotal += e.totalPrice;
             const qty = e.inputQuantity != null
                 ? (e.inputUnit === 'jl'
@@ -163,7 +170,12 @@ export async function queryByDate(date: Date, session: SessionData, ctx: DbConte
             const vendor = e.vendor ? `（${e.vendor.name}）` : '';
             const note = e.note ? ` 備註：${e.note}` : '';
             lines.push(`  • ${e.item?.name ?? '?'} ${qty}$${e.totalPrice}${vendor}${note}`);
-        } else {
+        }
+    }
+
+    if (expenses.length > 0) {
+        lines.push('💸 支出：');
+        for (const e of expenses) {
             expenseTotal += e.totalPrice;
             const et = ctx.expenseTypes.find(t => t.value === e.expenseType);
             const note = e.note ? ` 備註：${e.note}` : '';
