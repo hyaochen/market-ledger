@@ -57,3 +57,10 @@ tunnel.log
 .claude/
 
 docker-data/
+
+# 一次性 backfill 的內部資料 —— 含家業真實逐筆支出紀錄。
+# 這個 repo 是公開的，內部資料一律另外備份不進版控。
+# 本地備份：C:/db-backups/t_web/internal-data/
+scripts/data/
+scripts/t-ml-028-backfill.ts
+scripts/t-ml-029-backfill.ts
