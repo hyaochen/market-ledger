@@ -686,7 +686,7 @@ export async function queryByMonthYear(
         if (ents.length) {
             const byVendor = new Map<string, number>();
             for (const e of ents) {
-                const n = e.vendor?.name ?? '?';
+                const n = e.vendor?.name ?? '（無廠商）';
                 byVendor.set(n, (byVendor.get(n) || 0) + e.totalPrice);
                 grandPur += e.totalPrice;
             }

@@ -33,6 +33,11 @@ import {
     detectRankingQuery, queryRanking,
     detectComparisonQuery, queryComparison,
 } from './handlers/query';
+import {
+    runQuery, expenseGroups, periodFromOffset, periodForDay, periodFromCode,
+    METRIC_LABEL, GROUPBY_LABEL, GROUPBYS_FOR,
+    type QuerySpec, type Metric, type GroupBy,
+} from './handlers/querySpec';
 import { saveAlias } from './aliases';
 import type { SessionData, DbContext, ParsedEntry } from './types';
 
@@ -404,123 +409,186 @@ function applyMuteMode(entries: ParsedEntry[]): ParsedEntry[] {
 }
 
 
-// ── 查詢選單（按鈕式）────────────────────────────────────────
-// owner 2026-08-30：「把常用的幾個功能變成按鈕式的查詢，這樣我才知道有哪些功能」。
-// 文字查詢全部保留，選單只是把最常用的幾條做成看得見、點得到的入口。
+// ── 查詢選單 v2（按鈕式）────────────────────────────────────────
+// 設計：vault projects/market-ledger/design/2026-09-03-query-system-v2
 //
-// callback_data 上限 64 bytes，所以一律用短前綴 + id/value，不放中文標籤：
-//   m:<node>              切換選單頁
-//   r:<action>[:<args>]   執行查詢
-// 月份用「往回幾個月」的 offset 表示（0=本月、1=上月），不寫死年月。
+// 兩層：捷徑列（依 log 真實頻率）+ 進階查詢三步組合器（指標 → 期間 → 切法）。
+// 三步全部走同一個 QuerySpec 引擎（handlers/querySpec.ts），不用一顆按鈕寫一個 handler。
+//
+// owner 2026-09-03 的核心要求：「得出答案後，按鈕選單還是要在下面，不用往上滑」。
+// 做法：**每則結果訊息本身就掛著按鈕**（換切法／換期間／換指標／回選單），
+// 而不是另發一則選單。最新那則永遠有按鈕。導覽（換頁）才用原地編輯。
+//
+// callback_data 上限 64 bytes，且 ChatState 不存草稿 —— 每顆按鈕自帶完整參數：
+//   q:root                         首頁
+//   q:s1                           步驟1：選指標
+//   q:m:<metric>                   → 步驟2：選期間
+//   q:p:<metric>:<pcode>           → 步驟3：選切法
+//   q:r:<metric>:<pcode>:<groupBy> 執行（結果掛切法鍵盤）
+//   q:c:<metric>:<pcode>           與上一期比較
+//   q:pd / q:pm:<metric>           挑日期（近7天）/ 挑月份（近6個月）
+//   q:x:<pcode>:<values>           支出某類型逐筆（下鑽）
+//   q:n:<pcode>:<note>             支出某備註（人）逐筆（下鑽）
+//   q:sal:<pcode>                  薪資依人（捷徑）
+//   q:sn:<pcode>:<note>            某人薪資逐筆（下鑽）
+// pcode：d0 今天 d1 昨天 d2 前天 w0 本週 w1 上週 m0 本月 m1 上月 … y0 今年 y1 去年
 
-function periodFromOffset(off: number): { from: Date; to: Date; label: string } {
-    const now = new Date();
-    const from = new Date(now.getFullYear(), now.getMonth() - off, 1);
-    const to = new Date(now.getFullYear(), now.getMonth() - off + 1, 1);
-    return { from, to, label: `${from.getFullYear()}年${from.getMonth() + 1}月` };
-}
+type Btn = { text: string; callback_data: string };
+const CB_LIMIT = 64;
+function cbOk(cb: string): boolean { return Buffer.byteLength(cb, 'utf8') <= CB_LIMIT; }
 
-const MENU_ROOT_TEXT = '📊 *想查什麼？*\n\n_也可以直接打字問，例如「8月薪水」「8月每天營業額」_';
+const MENU_ROOT_TEXT = '📊 *想查什麼？*\n_也可以直接打字，例如「8月薪水」「8月每天營業額」_';
 
 function buildRootMenu() {
     return {
         inline_keyboard: [
             [
-                { text: '📅 今天', callback_data: 'r:day:0' },
-                { text: '📅 昨天', callback_data: 'r:day:1' },
-                { text: '📆 最近7天', callback_data: 'r:recent' },
+                { text: '📅 今天記了什麼', callback_data: 'q:r:entries:d0:none' },
+                { text: '📅 昨天記了什麼', callback_data: 'q:r:entries:d1:none' },
+            ],
+            [{ text: '📆 挑日期…', callback_data: 'q:pd' }],
+            [
+                { text: '💵 本月薪資·依人', callback_data: 'q:sal:m0' },
+                { text: '💸 本月支出', callback_data: 'q:r:expense:m0:expenseType' },
             ],
             [
-                { text: '💰 營業額', callback_data: 'm:rev' },
-                { text: '💸 支出', callback_data: 'm:exp' },
+                { text: '💰 本月每日營業額', callback_data: 'q:r:revenue:m0:day' },
+                { text: '🛒 本月進貨', callback_data: 'q:r:purchase:m0:vendor' },
             ],
-            [
-                { text: '🛒 進貨', callback_data: 'm:pur' },
-                { text: '📈 分析比較', callback_data: 'm:ana' },
-            ],
+            [{ text: '🔧 進階查詢（自己組合）', callback_data: 'q:s1' }],
         ],
     };
 }
 
-function buildRevenueMenu(ctx: DbContext) {
-    const rows: { text: string; callback_data: string }[][] = [];
-    rows.push([{ text: '📋 本月每日明細（全部）', callback_data: 'r:revd:0:_' }]);
-    for (const l of ctx.locations) {
-        rows.push([{ text: `📋 本月每日 · ${l.name}`, callback_data: `r:revd:0:${l.id}` }]);
-    }
-    rows.push([{ text: '📋 上月每日明細（全部）', callback_data: 'r:revd:1:_' }]);
-    rows.push([
-        { text: '📊 本月總計', callback_data: 'r:revt:0' },
-        { text: '📊 上月總計', callback_data: 'r:revt:1' },
-    ]);
-    rows.push([{ text: '⬅️ 返回', callback_data: 'm:root' }]);
-    return { inline_keyboard: rows };
+const METRIC_BTNS: Btn[] = [
+    { text: '💰 營業額', callback_data: 'q:m:revenue' },
+    { text: '🛒 進貨', callback_data: 'q:m:purchase' },
+    { text: '💸 支出', callback_data: 'q:m:expense' },
+    { text: '📈 淨利', callback_data: 'q:m:profit' },
+    { text: '📋 全部記錄', callback_data: 'q:m:entries' },
+];
+
+function buildMetricMenu() {
+    return {
+        inline_keyboard: [
+            [METRIC_BTNS[0], METRIC_BTNS[1]],
+            [METRIC_BTNS[2], METRIC_BTNS[3]],
+            [METRIC_BTNS[4]],
+            [{ text: '🏠 選單', callback_data: 'q:root' }],
+        ],
+    };
 }
 
-// 支出選單只列「這個月真的有記到的類型」，並附上金額 ——
-// 字典裡有 21 個類型但常用的就那幾個，全列出來反而找不到。
-async function buildExpenseMenu(session: SessionData, ctx: DbContext, off: number) {
-    const period = periodFromOffset(off);
-    const ents = await prisma.entry.findMany({
-        where: { tenantId: session.tenantId, type: 'EXPENSE', date: { gte: period.from, lt: period.to } },
-        select: { expenseType: true, totalPrice: true },
-    });
+const PERIOD_BTNS: [string, string][] = [
+    ['今天', 'd0'], ['昨天', 'd1'], ['本週', 'w0'], ['上週', 'w1'],
+    ['本月', 'm0'], ['上月', 'm1'], ['今年', 'y0'], ['去年', 'y1'],
+];
 
-    // 依 label 合併：同一個 label 可能對應多個 value（租金＝rent/EXP001）
-    const byLabel = new Map<string, { values: Set<string>; sum: number }>();
-    for (const e of ents) {
-        const raw = e.expenseType ?? '其他';
-        const label = ctx.expenseTypes.find(x => x.value === raw)?.label ?? raw;
-        const g = byLabel.get(label) ?? { values: new Set<string>(), sum: 0 };
-        g.values.add(raw);
-        g.sum += e.totalPrice;
-        byLabel.set(label, g);
+function buildPeriodMenu(metric: Metric) {
+    const rows: Btn[][] = [];
+    for (let i = 0; i < PERIOD_BTNS.length; i += 4) {
+        rows.push(PERIOD_BTNS.slice(i, i + 4).map(([t, c]) => ({ text: t, callback_data: `q:p:${metric}:${c}` })));
     }
-
-    const rows: { text: string; callback_data: string }[][] = [];
-    const sorted = [...byLabel.entries()].sort((a, b) => b[1].sum - a[1].sum);
-    for (const [label, g] of sorted) {
-        const values = [...g.values].join(',');
-        const cb = `r:expt:${off}:${values}`;
-        // callback_data 超過 64 bytes 就退回只用第一個 value（極少見，但不能讓按鈕壞掉）
-        const safe = Buffer.byteLength(cb, 'utf8') <= 64 ? cb : `r:expt:${off}:${[...g.values][0]}`;
-        rows.push([{ text: `${label}  $${g.sum.toLocaleString()}`, callback_data: safe }]);
-    }
-    if (rows.length === 0) rows.push([{ text: `（${period.label} 沒有支出記錄）`, callback_data: 'm:exp' }]);
-
-    rows.push([{ text: '📊 全部支出彙總', callback_data: `r:expa:${off}` }]);
+    rows.push([{ text: '📅 挑月份…', callback_data: `q:pm:${metric}` }]);
     rows.push([
-        { text: off === 0 ? '📅 看上月' : '📅 看本月', callback_data: `m:exp:${off === 0 ? 1 : 0}` },
-        { text: '⬅️ 返回', callback_data: 'm:root' },
+        { text: '⬅️ 換指標', callback_data: 'q:s1' },
+        { text: '🏠 選單', callback_data: 'q:root' },
     ]);
     return { inline_keyboard: rows };
 }
 
-function buildPurchaseMenu() {
+function buildPickMonthMenu(metric: Metric) {
+    const rows: Btn[][] = [];
+    const btns: Btn[] = [];
+    for (let off = 0; off < 6; off++) {
+        btns.push({ text: periodFromOffset(off).label.replace(/^\d{4}年/, ''), callback_data: `q:p:${metric}:m${off}` });
+    }
+    rows.push(btns.slice(0, 3), btns.slice(3, 6));
+    rows.push([{ text: '⬅️ 返回', callback_data: `q:m:${metric}` }, { text: '🏠 選單', callback_data: 'q:root' }]);
+    return { inline_keyboard: rows };
+}
+
+function buildPickDateMenu() {
+    const rows: Btn[][] = [];
+    const btns: Btn[] = [];
+    for (let off = 0; off < 7; off++) {
+        const p = periodForDay(off);
+        const label = off < 3 ? p.label.replace(/（.*）/, '') : `${p.from.getMonth() + 1}/${p.from.getDate()} ${['日','一','二','三','四','五','六'][p.from.getDay()]}`;
+        btns.push({ text: label, callback_data: `q:r:entries:d${off}:none` });
+    }
+    rows.push(btns.slice(0, 3), btns.slice(3, 7));
+    rows.push([{ text: '🏠 選單', callback_data: 'q:root' }]);
+    return { inline_keyboard: rows };
+}
+
+/** 步驟3：切法（依指標動態）。同時也是「結果訊息下方」的鍵盤，active 那顆標 ● */
+function buildGroupByKeyboard(metric: Metric, pcode: string, active?: string) {
+    const rows: Btn[][] = [];
+    const opts = GROUPBYS_FOR[metric];
+    const btns: Btn[] = opts.map(g => ({
+        text: `${active === g ? '● ' : ''}${GROUPBY_LABEL[g]}`,
+        callback_data: `q:r:${metric}:${pcode}:${g}`,
+    }));
+    if (metric !== 'entries') {
+        btns.push({ text: `${active === 'compare' ? '● ' : ''}vs 上期`, callback_data: `q:c:${metric}:${pcode}` });
+    }
+    if (metric !== 'entries' && metric !== 'profit') {
+        btns.push({ text: `${active === 'list' ? '● ' : ''}逐筆明細`, callback_data: `q:r:${metric}:${pcode}:list` });
+    }
+    for (let i = 0; i < btns.length; i += 3) rows.push(btns.slice(i, i + 3));
+    rows.push([
+        { text: '⬅️ 換期間', callback_data: `q:m:${metric}` },
+        { text: '🔧 換指標', callback_data: 'q:s1' },
+        { text: '🏠 選單', callback_data: 'q:root' },
+    ]);
+    return { inline_keyboard: rows };
+}
+
+/** 單日「記了什麼」結果的鍵盤：直接換天，不用回選單 */
+function buildDayResultKeyboard(activeOff: number) {
+    const mk = (off: number, t: string): Btn => ({ text: `${activeOff === off ? '● ' : ''}${t}`, callback_data: `q:r:entries:d${off}:none` });
     return {
         inline_keyboard: [
-            [
-                { text: '📦 本月進貨', callback_data: 'r:pura:0' },
-                { text: '📦 上月進貨', callback_data: 'r:pura:1' },
-            ],
-            [{ text: '🏆 本月廠商 TOP5', callback_data: 'r:rank:vendor:0' }],
-            [{ text: '🏆 本月熱門品項 TOP5', callback_data: 'r:rank:item:0' }],
-            [{ text: '⬅️ 返回', callback_data: 'm:root' }],
+            [mk(0, '今天'), mk(1, '昨天'), mk(2, '前天')],
+            [{ text: '📆 挑日期…', callback_data: 'q:pd' }, { text: '🏠 選單', callback_data: 'q:root' }],
         ],
     };
 }
 
-function buildAnalysisMenu() {
-    return {
-        inline_keyboard: [
-            [{ text: '🔄 本月 vs 上月', callback_data: 'r:cmp:0:1' }],
-            [{ text: '🔄 上月 vs 前月', callback_data: 'r:cmp:1:2' }],
-            [{ text: '🏆 本月攤位排行', callback_data: 'r:rank:location:0' }],
-            [{ text: '📊 本月全部（營收/進貨/支出/淨利）', callback_data: 'r:all:0' }],
-            [{ text: '⬅️ 返回', callback_data: 'm:root' }],
-        ],
-    };
+/**
+ * 支出結果的下鑽鍵盤：依類型 → 每個類型一顆按鈕點進逐筆；依人 → 每個人一顆。
+ * 這是媽媽第三高頻的問題（「薪資備註小惠累積多少」），做成一鍵。
+ */
+function buildExpenseDrillKeyboard(
+    metric: Metric, pcode: string, active: string,
+    groups: { key: string; sum: number; values: string[] }[],
+    kind: 'type' | 'note' | 'salary',
+) {
+    const base = buildGroupByKeyboard(metric, pcode, active);
+    const drill: Btn[] = [];
+    for (const g of groups.slice(0, 12)) {
+        let cb = '';
+        if (kind === 'type') cb = `q:x:${pcode}:${g.values.join(',')}`;
+        else if (kind === 'note') cb = `q:n:${pcode}:${g.key}`;
+        else cb = `q:sn:${pcode}:${g.key}`;
+        if (!cbOk(cb) || g.key.startsWith('（')) continue;   // 太長或「（無備註）」不做按鈕
+        drill.push({ text: `${g.key} $${Math.round(Math.abs(g.sum)).toLocaleString()}`, callback_data: cb });
+    }
+    const rows: Btn[][] = [];
+    for (let i = 0; i < drill.length; i += 2) rows.push(drill.slice(i, i + 2));
+    return { inline_keyboard: [...rows, ...base.inline_keyboard] };
 }
+
+/** 從 pcode 算「上一期」：m0→m1、d1→d2、w0→w1、y0→y1 */
+function previousPeriodCode(pcode: string): string {
+    const m = pcode.match(/^([dwmy])(\d+)$/);
+    return m ? `${m[1]}${Number(m[2]) + 1}` : pcode;
+}
+
+function salaryValues(ctx: DbContext): string[] {
+    return ctx.expenseTypes.filter(x => /薪資|薪水/.test(x.label)).map(x => x.value);
+}
+
 // ── 意圖釐清鍵盤（有日期但看不出是查詢還是記帳時使用）────────────
 const INTENT_CLARIFY_KEYBOARD = {
     inline_keyboard: [[
@@ -1067,87 +1135,104 @@ bot.on('callback_query', async (query) => {
     const ctx = await loadDbContext(session.tenantId);
     const state = getState(chatId);
 
-    // ── 查詢選單：切換頁面 ────────────────────────────────────
-    if (data === 'm:root') {
-        await bot.editMessageText(MENU_ROOT_TEXT, {
-            chat_id: chatId, message_id: query.message?.message_id,
-            parse_mode: 'Markdown', reply_markup: buildRootMenu(),
-        }).catch(async () => {
-            await bot.sendMessage(chatId, MENU_ROOT_TEXT, { parse_mode: 'Markdown', reply_markup: buildRootMenu() });
-        });
-        return;
-    }
-    if (data === 'm:rev' || data === 'm:pur' || data === 'm:ana' || data.startsWith('m:exp')) {
-        let title = '';
-        let markup;
-        if (data === 'm:rev') { title = '💰 *營業額*'; markup = buildRevenueMenu(ctx); }
-        else if (data === 'm:pur') { title = '🛒 *進貨*'; markup = buildPurchaseMenu(); }
-        else if (data === 'm:ana') { title = '📈 *分析比較*'; markup = buildAnalysisMenu(); }
-        else {
-            const off = Number(data.split(':')[2] ?? 0) || 0;
-            title = `💸 *支出* — ${periodFromOffset(off).label}\n_點類型看逐筆明細_`;
-            markup = await buildExpenseMenu(session, ctx, off);
-        }
-        await bot.editMessageText(title, {
-            chat_id: chatId, message_id: query.message?.message_id,
-            parse_mode: 'Markdown', reply_markup: markup,
-        }).catch(async () => {
-            await bot.sendMessage(chatId, title, { parse_mode: 'Markdown', reply_markup: markup });
-        });
-        return;
-    }
-
-    // ── 查詢選單：執行查詢 ────────────────────────────────────
-    if (data.startsWith('r:')) {
+    // ── 查詢選單 v2 ────────────────────────────────────────────
+    if (data.startsWith('q:')) {
         const parts = data.split(':');
-        const action = parts[1];
-        let result = '';
+        const kind = parts[1];
+        const msgId = query.message?.message_id;
 
+        // 導覽：原地換頁（失敗就發新訊息）
+        const nav = async (text: string, markup: unknown) => {
+            try {
+                await bot.editMessageText(text, { chat_id: chatId, message_id: msgId, parse_mode: 'Markdown', reply_markup: markup as never });
+            } catch {
+                await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: markup as never });
+            }
+        };
+
+        if (kind === 'root') { await nav(MENU_ROOT_TEXT, buildRootMenu()); return; }
+        if (kind === 's1') { await nav('🔧 *進階查詢* — 第 1 步：查什麼？', buildMetricMenu()); return; }
+        if (kind === 'm') {
+            const metric = parts[2] as Metric;
+            await nav(`🔧 *${METRIC_LABEL[metric]}* — 第 2 步：哪段時間？`, buildPeriodMenu(metric));
+            return;
+        }
+        if (kind === 'pm') { await nav('📅 挑月份', buildPickMonthMenu(parts[2] as Metric)); return; }
+        if (kind === 'pd') { await nav('📆 挑日期（近 7 天）', buildPickDateMenu()); return; }
+        if (kind === 'p') {
+            const metric = parts[2] as Metric;
+            const pcode = parts[3];
+            const period = periodFromCode(pcode);
+            if (!period) { await bot.sendMessage(chatId, '期間代碼不對，請重開 /menu。'); return; }
+            await nav(`🔧 *${period.label} · ${METRIC_LABEL[metric]}* — 第 3 步：怎麼看？`, buildGroupByKeyboard(metric, pcode));
+            return;
+        }
+
+        // 執行類：結果一律「新訊息 + 掛鍵盤」
+        let result = '';
+        let markup: unknown = buildRootMenu();
         try {
-            if (action === 'day') {
-                const d = new Date();
-                d.setDate(d.getDate() - (Number(parts[2]) || 0));
-                d.setHours(0, 0, 0, 0);
-                result = await queryByDate(d, session, ctx);
-            } else if (action === 'recent') {
-                result = await queryRecent(session, ctx);
-            } else if (action === 'revd') {
-                const off = Number(parts[2]) || 0;
-                const locId = parts[3] === '_' ? undefined : parts[3];
-                const locName = locId ? ctx.locations.find(l => l.id === locId)?.name : undefined;
-                result = await queryDailyRevenue(periodFromOffset(off), locId, locName, session, ctx);
-            } else if (action === 'revt') {
-                result = await queryByMonthYear(periodFromOffset(Number(parts[2]) || 0), 'revenue', session, ctx);
-            } else if (action === 'expa') {
-                result = await queryByMonthYear(periodFromOffset(Number(parts[2]) || 0), 'expense', session, ctx);
-            } else if (action === 'expt') {
-                const off = Number(parts[2]) || 0;
-                const values = (parts[3] ?? '').split(',').filter(Boolean);
-                const label = ctx.expenseTypes.find(x => values.includes(x.value))?.label ?? values[0] ?? '支出';
-                result = await queryByExpenseTypeMonth(values.length > 1 ? values : values[0], label, periodFromOffset(off), session, ctx);
-            } else if (action === 'pura') {
-                result = await queryByMonthYear(periodFromOffset(Number(parts[2]) || 0), 'purchase', session, ctx);
-            } else if (action === 'all') {
-                result = await queryByMonthYear(periodFromOffset(Number(parts[2]) || 0), undefined, session, ctx);
-            } else if (action === 'rank') {
-                const target = parts[2] as 'vendor' | 'item' | 'location';
-                result = await queryRanking(periodFromOffset(Number(parts[3]) || 0), target, 5, session, ctx);
-            } else if (action === 'cmp') {
-                result = await queryComparison(
-                    periodFromOffset(Number(parts[2]) || 0),
-                    periodFromOffset(Number(parts[3]) || 1),
-                    session, ctx);
+            if (kind === 'r' || kind === 'c') {
+                const metric = parts[2] as Metric;
+                const pcode = parts[3];
+                const period = periodFromCode(pcode);
+                if (!period) throw new Error(`bad pcode ${pcode}`);
+
+                if (kind === 'c') {
+                    const prev = periodFromCode(previousPeriodCode(pcode))!;
+                    result = await runQuery({ metric, period, compareTo: prev }, session, ctx);
+                    markup = buildGroupByKeyboard(metric, pcode, 'compare');
+                } else {
+                    const g = parts[4];
+                    const spec: QuerySpec = g === 'list'
+                        ? { metric, period, agg: 'list' }
+                        : { metric, period, groupBy: g as GroupBy };
+                    result = await runQuery(spec, session, ctx);
+
+                    if (metric === 'entries') {
+                        const off = Number(pcode.replace(/^d/, ''));
+                        markup = /^d\d+$/.test(pcode) ? buildDayResultKeyboard(off) : buildGroupByKeyboard(metric, pcode, g);
+                    } else if (metric === 'expense' && (g === 'expenseType' || g === 'note')) {
+                        const groups = await expenseGroups(spec, g, session, ctx);
+                        markup = buildExpenseDrillKeyboard(metric, pcode, g, groups, g === 'expenseType' ? 'type' : 'note');
+                    } else {
+                        markup = buildGroupByKeyboard(metric, pcode, g);
+                    }
+                }
+            } else if (kind === 'sal') {
+                // 捷徑：薪資依人
+                const pcode = parts[2];
+                const period = periodFromCode(pcode)!;
+                const spec: QuerySpec = { metric: 'expense', period, groupBy: 'note', filters: { expenseTypeValues: salaryValues(ctx) } };
+                result = await runQuery(spec, session, ctx);
+                const groups = await expenseGroups(spec, 'note', session, ctx);
+                markup = buildExpenseDrillKeyboard('expense', pcode, 'note', groups, 'salary');
+            } else if (kind === 'x') {
+                // 下鑽：某支出類型逐筆
+                const pcode = parts[2];
+                const values = (parts.slice(3).join(':')).split(',').filter(Boolean);
+                const period = periodFromCode(pcode)!;
+                result = await runQuery({ metric: 'expense', period, agg: 'list', filters: { expenseTypeValues: values } }, session, ctx);
+                markup = buildGroupByKeyboard('expense', pcode, 'expenseType');
+            } else if (kind === 'n' || kind === 'sn') {
+                // 下鑽：某人（備註）逐筆；sn = 限薪資
+                const pcode = parts[2];
+                const note = parts.slice(3).join(':');
+                const period = periodFromCode(pcode)!;
+                const filters: QuerySpec['filters'] = { notePattern: note };
+                if (kind === 'sn') filters.expenseTypeValues = salaryValues(ctx);
+                result = await runQuery({ metric: 'expense', period, agg: 'list', filters }, session, ctx);
+                markup = buildGroupByKeyboard('expense', pcode, 'note');
             } else {
-                result = '這個選項我還不認得，請重新開 /menu。';
+                result = '這個按鈕我不認得，請重開 /menu。';
             }
         } catch (e) {
-            console.error('[Menu query error]', data, e);
+            console.error('[Menu v2 error]', data, e);
             result = '⚠️ 查詢時發生錯誤，請再試一次或改用打字查詢。';
         }
 
         logLine('MENU', chatId, data);
-        // 查詢結果另發一則，選單訊息保持在原地讓使用者可以連續點
-        await bot.sendMessage(chatId, result);
+        await bot.sendMessage(chatId, result, { reply_markup: markup as never });
         return;
     }
 
