@@ -319,10 +319,13 @@ function formatGrouped(spec: QuerySpec, rows: Row[], ctx: DbContext): string {
         return lines.join('\n');
     }
 
-    // topN：只留前 N，其餘併成「其他」
+    // topN：只留前 N，其餘併成「其他」。day/month 也適用（「哪天賺最多」= 依金額排序取前 N），
+    // 但這時不併「其他」，因為問的是名次不是分布。
     let shown = groups;
     let others: Group | null = null;
-    if (spec.topN && groups.length > spec.topN && by !== 'day' && by !== 'month') {
+    if (spec.topN && (by === 'day' || by === 'month')) {
+        shown = [...groups].filter(g => g.sum !== 0).sort((a, b) => Math.abs(b.sum) - Math.abs(a.sum)).slice(0, spec.topN);
+    } else if (spec.topN && groups.length > spec.topN) {
         shown = groups.slice(0, spec.topN);
         const rest = groups.slice(spec.topN);
         others = { key: `其他 ${rest.length} 項`, sum: rest.reduce((s, g) => s + g.sum, 0),
@@ -416,7 +419,7 @@ export async function runQuery(spec: QuerySpec, session: SessionData, ctx: DbCon
         && spec.period.to.getTime() - spec.period.from.getTime() <= 8 * 86400000) {
         return queryRecent(session, ctx);
     }
-    if (spec.metric === 'revenue' && by === 'day') {
+    if (spec.metric === 'revenue' && by === 'day' && !spec.topN) {
         const locName = f.locationId ? ctx.locations.find(l => l.id === f.locationId)?.name : undefined;
         return queryDailyRevenue(spec.period, f.locationId, locName, session, ctx);
     }

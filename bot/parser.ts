@@ -306,6 +306,78 @@ export async function callLLM(
     return callOllama(systemPrompt, userText, model);
 }
 
+// ── 原始文字 LLM 呼叫（Phase 4 自然語言查詢用）────────────────────────────
+// 跟 callLLM 走同一套 bridge → ollama 的連線/逾時/fallback 規則，差別是回傳「原始內容字串」，
+// 不套 parseModelContent（那是記帳專用：預期 entries 陣列）。查詢翻譯的 JSON 形狀由呼叫端自己驗證。
+export type RawLlmResult = { content: string; provider: 'claude' | 'ollama' } | null;
+
+async function fetchBridgeContent(systemPrompt: string, userText: string): Promise<{ ok: true; content: string } | { ok: false; reason: string }> {
+    const bridgeUrl = getClaudeBridgeUrl();
+    const timeoutMs = getClaudeBridgeTimeoutMs();
+    const t0 = Date.now();
+    let response: Response;
+    try {
+        response = await fetch(`${bridgeUrl}/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ system: systemPrompt, user: userText }),
+            signal: AbortSignal.timeout(timeoutMs),
+        });
+    } catch (e) {
+        const err = e as { name?: string; cause?: { code?: string }; message?: string };
+        const isTimeout = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+        return { ok: false, reason: isTimeout ? `timeout>${timeoutMs}ms` : `connect-error: ${err?.cause?.code ?? err?.message ?? String(e)}` };
+    }
+    console.log(`[NLQ] claude-bridge responded in ${Date.now() - t0}ms, status=${response.status}`);
+    if (!response.ok) {
+        let bodyText = '';
+        try { bodyText = (await response.text()).slice(0, 300); } catch { /* ignore */ }
+        return { ok: false, reason: `http ${response.status}: ${bodyText}` };
+    }
+    let payload: unknown;
+    try { payload = await response.json(); } catch (e) { return { ok: false, reason: `bad json body: ${e}` }; }
+    const content = (payload as { content?: unknown })?.content;
+    if (typeof content !== 'string' || !content) return { ok: false, reason: 'empty content' };
+    return { ok: true, content };
+}
+
+async function fetchOllamaContent(systemPrompt: string, userText: string): Promise<string | null> {
+    const t0 = Date.now();
+    try {
+        const response = await fetch(`${getOllamaBaseUrl()}/api/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: OLLAMA_MODEL_FAST,
+                messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userText }],
+                format: 'json', stream: false, keep_alive: '30m',
+                options: { temperature: 0.1, num_predict: 512 },
+            }),
+            signal: AbortSignal.timeout(120000),
+        });
+        console.log(`[NLQ] ollama responded in ${Date.now() - t0}ms, status=${response.status}`);
+        if (!response.ok) return null;
+        const data = await response.json() as { message?: { content?: string } };
+        return data?.message?.content ?? null;
+    } catch (e) {
+        console.error(`[NLQ] ollama failed after ${Date.now() - t0}ms:`, e);
+        return null;
+    }
+}
+
+export async function callLLMRaw(systemPrompt: string, userText: string, diag?: ParseDiagnostics): Promise<RawLlmResult> {
+    if (getLlmProvider() === 'ollama') {
+        const c = await fetchOllamaContent(systemPrompt, userText);
+        return c ? { content: c, provider: 'ollama' } : null;
+    }
+    const r = await fetchBridgeContent(systemPrompt, userText);
+    if (r.ok) return { content: r.content, provider: 'claude' };
+    console.warn(`[NLQ] claude-bridge fallback → ollama. reason=${r.reason}`);
+    if (diag) { diag.usedFallback = true; diag.fallbackReason = r.reason; }
+    const c = await fetchOllamaContent(systemPrompt, userText);
+    return c ? { content: c, provider: 'ollama' } : null;
+}
+
 // 量詞單位（重量/數量）— 不含貨幣詞
 const QTY_UNITS = ['臺斤', '台斤', '公斤', '斤', 'kg', 'KG', 'g', 'G', '個', '包', '條', '份', '箱', '罐', '瓶', '桶', '組', '片', '顆', '克', '袋'];
 const QTY_UNIT_RE = new RegExp(`(\\d+(?:\\.\\d+)?)\\s*(${QTY_UNITS.join('|')})`, 'g');

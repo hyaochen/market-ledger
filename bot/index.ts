@@ -38,6 +38,7 @@ import {
     METRIC_LABEL, GROUPBY_LABEL, GROUPBYS_FOR,
     type QuerySpec, type Metric, type GroupBy,
 } from './handlers/querySpec';
+import { isQueryLike, translateQuestion } from './handlers/nlQuery';
 import { saveAlias } from './aliases';
 import type { SessionData, DbContext, ParsedEntry } from './types';
 
@@ -613,6 +614,42 @@ async function runDateQuery(chatId: number, session: SessionData, text: string, 
     }
 }
 
+// ── 自然語言查詢（Phase 4）───────────────────────────────────────
+// 只有通過 isQueryLike 閘門的句子才會到這裡（記帳不會）。LLM 只產 QuerySpec 草稿，
+// 驗證/實體解析在 handlers/nlQuery，執行在 handlers/querySpec —— 跟按鈕同一個引擎。
+async function runNlQuery(chatId: number, session: SessionData, text: string, ctx: DbContext): Promise<void> {
+    logLine('NLQ', chatId, text.slice(0, 120));
+    await bot.sendMessage(chatId, '🧠 理解中…');
+    const diag = newParseDiagnostics();
+    const t = await translateQuestion(text, ctx, diag);
+
+    if (t.kind === 'unavailable') {
+        logLine('NLQ', chatId, `unavailable: ${t.reason}`);
+        await bot.sendMessage(chatId,
+            '這句我翻不出來。可以換個說法，或用按鈕選：',
+            { reply_markup: buildRootMenu() });
+        return;
+    }
+    const fallbackNote = t.provider === 'ollama' ? '\n⚠️ 備援模型解讀，請核對' : '';
+    if (t.kind === 'clarify') {
+        logLine('NLQ', chatId, `clarify: ${t.question}`);
+        await bot.sendMessage(chatId, `🤔 ${t.question}${fallbackNote}`, { reply_markup: buildRootMenu() });
+        return;
+    }
+    logLine('NLQ', chatId, `spec: ${JSON.stringify({ ...t.spec, period: t.spec.period.label, compareTo: t.spec.compareTo?.label })}`);
+    let result: string;
+    try {
+        result = await runQuery(t.spec, session, ctx);
+    } catch (e) {
+        console.error('[NLQ] runQuery error', e);
+        await bot.sendMessage(chatId, '⚠️ 查詢時發生錯誤，請再試一次。', { reply_markup: buildRootMenu() });
+        return;
+    }
+    await bot.sendMessage(chatId, `🧠 我理解成：${t.restate}${fallbackNote}\n\n${result}`, {
+        reply_markup: { inline_keyboard: [[{ text: '🏠 選單', callback_data: 'q:root' }]] },
+    });
+}
+
 // ── 記帳解析：原本 message handler 的尾段，抽出來讓意圖釐清也能重用 ──
 async function runEntryParse(chatId: number, session: SessionData, text: string, preloaded?: DbContext): Promise<void> {
     logLine('PARSE', chatId, text.slice(0, 120));
@@ -1091,6 +1128,12 @@ bot.on('message', async (msg) => {
 
     if (intent === 'query') {
         await runDateQuery(chatId, session, text, queryCtx);
+        return;
+    }
+
+    // ── 自然語言查詢：regex 全沒接到、但看起來是在問問題 → 交給 LLM 翻成 QuerySpec ──
+    if (isQueryLike(text)) {
+        await runNlQuery(chatId, session, text, queryCtx);
         return;
     }
 

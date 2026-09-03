@@ -14,6 +14,7 @@ const tests = [
     "bot/heartbeat.test.ts",
     "bot/handlers/query.test.ts",
     "bot/handlers/querySpec.test.ts",
+    "bot/handlers/nlQuery.test.ts",
     "bot/itemKeywords.test.ts",
     "src/lib/password.test.ts",
     "src/lib/session.test.ts",
