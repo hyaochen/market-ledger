@@ -40,6 +40,7 @@ import {
 } from './handlers/querySpec';
 import { isQueryLike, translateQuestion } from './handlers/nlQuery';
 import { saveAlias } from './aliases';
+import { logIncoming, logOutcome, logCallback } from './messageLog';
 import type { SessionData, DbContext, ParsedEntry } from './types';
 
 // ── 持久化 Log（寫入 /app/data/bot.log，方便事後查閱）──────────
@@ -166,6 +167,9 @@ _🔄 同比 / 環比（新）_：
 • /help — 說明
 
 _不確定的品項會詢問確認，找不到時可選擇新增_`;
+
+// T-ML-033：純指令類文字（無需解析），bot.on('message') 進來時一律 route='command'
+const COMMAND_TEXTS = new Set(['/start', '/help', '/logout', '/menu', '/查詢', '選單', '/mute', '/today']);
 
 // ── 確認鍵盤 ────────────────────────────────────────────────────
 const CONFIRM_KEYBOARD = (_action: 'yes' | 'no', idx: number) => ({
@@ -313,6 +317,11 @@ async function handleAcceptedEntry(
     ctx: DbContext,
     session: SessionData,
 ): Promise<boolean> {
+    // T-ML-033：這 5 個分支是「新增品項/廠商/支出類型」子流程唯一的進入點，用同一個
+    // pendingLogId 標記 outcome='new_item_flow'——之後不管走哪個分支收尾都會在
+    // finalizeEntries 用真正的終局 outcome 覆寫掉，這裡只是「卡在新增流程中」的中繼點。
+    const logId = getState(chatId).pendingLogId;
+
     // EXPENSE 找不到支出類型 → 顯示所有支出類型讓使用者選
     if (accepted.type === 'EXPENSE' && !accepted.expenseType) {
         removeLastConfirmed(chatId);
@@ -320,6 +329,7 @@ async function handleAcceptedEntry(
         enterNewItemFlow(chatId, { entry: accepted, suggestedName, nextUncertain: next });
         const hint = suggestedName ? `「${suggestedName}」屬於哪種支出？` : '請選擇支出類型：';
         await bot.sendMessage(chatId, hint, { reply_markup: buildExpenseTypeKeyboard(ctx.expenseTypes) });
+        void logOutcome(logId, 'new_item_flow');
         return true;
     }
 
@@ -334,6 +344,7 @@ async function handleAcceptedEntry(
             `「${accepted.itemName}」有以下相似品項，請選擇：`,
             { reply_markup: buildItemKeyboard(accepted._itemCandidates) },
         );
+        void logOutcome(logId, 'new_item_flow');
         return true;
     }
 
@@ -346,6 +357,7 @@ async function handleAcceptedEntry(
             `找不到「${accepted.itemName}」，請選擇：\n（也可直接輸入正確名稱搜尋）`,
             { reply_markup: UNKNOWN_ITEM_KEYBOARD },
         );
+        void logOutcome(logId, 'new_item_flow');
         return true;
     }
 
@@ -365,6 +377,7 @@ async function handleAcceptedEntry(
                 ]] },
             },
         );
+        void logOutcome(logId, 'new_item_flow');
         return true;
     }
 
@@ -382,6 +395,7 @@ async function handleAcceptedEntry(
             `「${accepted.itemName}」請選擇廠商${historyHint}：`,
             { reply_markup: buildVendorKeyboard(accepted._vendorCandidates!) },
         );
+        void logOutcome(logId, 'new_item_flow');
         return true;
     }
 
@@ -590,6 +604,28 @@ function salaryValues(ctx: DbContext): string[] {
     return ctx.expenseTypes.filter(x => /薪資|薪水/.test(x.label)).map(x => x.value);
 }
 
+// T-ML-033：訊息處理裡一大串 regex 查詢 detector（dateRange/dailyRev/vendorMonth/...）
+// 各自 inline 判斷、各自 sendMessage，沒有像 runDateQuery/runNlQuery 那樣被抽成獨立
+// 函式。與其把它們全部重構，這裡開一個共用 logger，各 detector 命中時呼叫一行即可，
+// 不改變原本的控制流程。route 固定 'query'——這些 detector 本身就是「查詢」分支，
+// 差別只在用 regex 而非 LLM；有沒有查到東西看 result 是否為空字串。
+function logQueryBranch(
+    chatId: number,
+    messageId: number | undefined,
+    telegramUserId: number | undefined,
+    tenantId: string,
+    text: string,
+    detector: string,
+    result: string,
+): void {
+    void logIncoming({
+        chatId, messageId, telegramUserId, tenantId, text, route: 'query',
+        parsed: { detector },
+        outcome: result ? 'query_ok' : 'query_fail',
+        final: { resultPreview: result.slice(0, 300) },
+    });
+}
+
 // ── 意圖釐清鍵盤（有日期但看不出是查詢還是記帳時使用）────────────
 const INTENT_CLARIFY_KEYBOARD = {
     inline_keyboard: [[
@@ -600,40 +636,55 @@ const INTENT_CLARIFY_KEYBOARD = {
 
 // ── 日期查詢：把指定日期的記錄回給使用者 ────────────────────────
 // preloaded：呼叫端已經載好 ctx 時直接沿用，避免同一則訊息重複打 DB
-async function runDateQuery(chatId: number, session: SessionData, text: string, preloaded?: DbContext): Promise<void> {
+async function runDateQuery(
+    chatId: number, session: SessionData, text: string, preloaded?: DbContext,
+    messageId?: number, telegramUserId?: number,
+): Promise<void> {
     const dateResult = detectQueryDate(text);
     logLine('QUERY', chatId, `date=${dateResult === 'recent' ? 'recent' : dateResult?.toLocaleDateString('zh-TW') ?? 'null'}`);
     const ctx = preloaded ?? await loadDbContext(session.tenantId);
+    let result: string;
     if (dateResult === 'recent') {
-        await bot.sendMessage(chatId, await queryRecent(session, ctx));
+        result = await queryRecent(session, ctx);
     } else if (dateResult) {
-        await bot.sendMessage(chatId, await queryByDate(dateResult, session, ctx));
+        result = await queryByDate(dateResult, session, ctx);
     } else {
         // classifyQueryIntent 判為查詢但這裡拿不到日期（理論上不會發生）
-        await bot.sendMessage(chatId, '❓ 看不出你要查哪一天，可以說「今天」「昨天」或「8/29」。');
+        result = '❓ 看不出你要查哪一天，可以說「今天」「昨天」或「8/29」。';
     }
+    await bot.sendMessage(chatId, result);
+    logQueryBranch(chatId, messageId, telegramUserId, session.tenantId, text, 'dateQuery', dateResult ? result : '');
 }
 
 // ── 自然語言查詢（Phase 4）───────────────────────────────────────
 // 只有通過 isQueryLike 閘門的句子才會到這裡（記帳不會）。LLM 只產 QuerySpec 草稿，
 // 驗證/實體解析在 handlers/nlQuery，執行在 handlers/querySpec —— 跟按鈕同一個引擎。
-async function runNlQuery(chatId: number, session: SessionData, text: string, ctx: DbContext): Promise<void> {
+async function runNlQuery(
+    chatId: number, session: SessionData, text: string, ctx: DbContext,
+    messageId?: number, telegramUserId?: number,
+): Promise<void> {
     logLine('NLQ', chatId, text.slice(0, 120));
     await bot.sendMessage(chatId, '🧠 理解中…');
     const diag = newParseDiagnostics();
     const t = await translateQuestion(text, ctx, diag);
+
+    // T-ML-033：route='query'，跟規則式 query detector 共用同一個 route 值，用
+    // outcome 區分成功/失敗；parsedJson 依 spec 要求放 translate 的 restate。
+    const logBase = { chatId, messageId, telegramUserId, tenantId: session.tenantId, text, route: 'query' as const };
 
     if (t.kind === 'unavailable') {
         logLine('NLQ', chatId, `unavailable: ${t.reason}`);
         await bot.sendMessage(chatId,
             '這句我翻不出來。可以換個說法，或用按鈕選：',
             { reply_markup: buildRootMenu() });
+        void logIncoming({ ...logBase, outcome: 'query_fail', parsed: { reason: t.reason } });
         return;
     }
     const fallbackNote = t.provider === 'ollama' ? '\n⚠️ 備援模型解讀，請核對' : '';
     if (t.kind === 'clarify') {
         logLine('NLQ', chatId, `clarify: ${t.question}`);
         await bot.sendMessage(chatId, `🤔 ${t.question}${fallbackNote}`, { reply_markup: buildRootMenu() });
+        void logIncoming({ ...logBase, llmProvider: t.provider, outcome: 'query_fail', parsed: { clarifyQuestion: t.question } });
         return;
     }
     logLine('NLQ', chatId, `spec: ${JSON.stringify({ ...t.spec, period: t.spec.period.label, compareTo: t.spec.compareTo?.label })}`);
@@ -643,15 +694,45 @@ async function runNlQuery(chatId: number, session: SessionData, text: string, ct
     } catch (e) {
         console.error('[NLQ] runQuery error', e);
         await bot.sendMessage(chatId, '⚠️ 查詢時發生錯誤，請再試一次。', { reply_markup: buildRootMenu() });
+        void logIncoming({
+            ...logBase, llmProvider: t.provider, outcome: 'query_fail',
+            parsed: { spec: t.spec, restate: t.restate }, final: { error: String(e) },
+        });
         return;
     }
     await bot.sendMessage(chatId, `🧠 我理解成：${t.restate}${fallbackNote}\n\n${result}`, {
         reply_markup: { inline_keyboard: [[{ text: '🏠 選單', callback_data: 'q:root' }]] },
     });
+    void logIncoming({
+        ...logBase, llmProvider: t.provider, outcome: 'query_ok',
+        parsed: { spec: t.spec, restate: t.restate }, final: { resultPreview: result.slice(0, 300) },
+    });
+}
+
+// T-ML-033：把儲存結果轉成 finalJson 要記錄的精簡形狀（不含 _itemCandidates 等只在
+// bot 對話中暫存的欄位），runEntryParse 的 auto_saved 分支與 finalizeEntries 共用。
+function toLoggedEntry(e: ParsedEntry & { entryId?: string }) {
+    return {
+        type: e.type, itemId: e.itemId, itemName: e.itemName, expenseType: e.expenseType,
+        locationName: e.locationName, price: e.price, quantity: e.quantity, unit: e.unit,
+        entryId: e.entryId ?? null,
+    };
+}
+function buildFinalPayload(
+    saved: (ParsedEntry & { entryId?: string })[],
+    failed: { entry: ParsedEntry; error: string }[],
+) {
+    return {
+        saved: saved.map(toLoggedEntry),
+        failed: failed.map(f => ({ ...toLoggedEntry(f.entry), error: f.error })),
+    };
 }
 
 // ── 記帳解析：原本 message handler 的尾段，抽出來讓意圖釐清也能重用 ──
-async function runEntryParse(chatId: number, session: SessionData, text: string, preloaded?: DbContext): Promise<void> {
+async function runEntryParse(
+    chatId: number, session: SessionData, text: string, preloaded?: DbContext,
+    messageId?: number, telegramUserId?: number,
+): Promise<void> {
     logLine('PARSE', chatId, text.slice(0, 120));
     await bot.sendMessage(chatId, '🔄 解析中，請稍候...');
 
@@ -660,11 +741,32 @@ async function runEntryParse(chatId: number, session: SessionData, text: string,
     const rawEntries = await parseEntries(text, ctx, diag);
 
     if (rawEntries.length === 0) {
+        // T-ML-033：解析嘗試了但什麼都沒抽出來 → route='unparsed'（跟「有抽到東西」
+        // 的 entry/dayoff 分開，方便離線評測抓 parser 漏抓的案例）。
+        void logIncoming({
+            chatId, messageId, telegramUserId, tenantId: session.tenantId, text,
+            route: 'unparsed', llmProvider: diag.usedFallback ? 'ollama' : 'claude', outcome: 'ignored',
+        });
         await bot.sendMessage(chatId,
             '❓ 無法解析輸入內容。\n\n請確認格式，例如：\n`肝連2.6台斤218`\n\n或傳 /help 查看說明',
             { parse_mode: 'Markdown' });
         return;
     }
+
+    // T-ML-033：休假意圖是 parser.ts 的 pre-LLM 快速路徑（見 detectDayOffEntries），
+    // 命中時整批都是 isDayOff，且完全沒呼叫 LLM → 用獨立的 route='dayoff' 標記，
+    // llmProvider 留 null（沒有 LLM 參與）。parsedJson 記解析出來的核心欄位，供之後
+    // 離線比對「這句話本來應該解析成什麼」。
+    const isDayOffBatch = rawEntries.every(e => e.isDayOff);
+    const llmProvider = isDayOffBatch ? null : (diag.usedFallback ? 'ollama' : 'claude');
+    const parsedForLog = rawEntries.map(e => ({
+        type: e.type, itemName: e.itemName, quantity: e.quantity, unit: e.unit,
+        price: e.price, vendor: e.vendorName, note: e.note, date: e.date,
+    }));
+    const logId = await logIncoming({
+        chatId, messageId, telegramUserId, tenantId: session.tenantId, text,
+        route: isDayOffBatch ? 'dayoff' : 'entry', llmProvider, parsed: parsedForLog,
+    });
 
     // 逐筆 enrichment
     const enrichedRaw = await Promise.all(rawEntries.map(e => enrichEntry(e, ctx)));
@@ -688,17 +790,22 @@ async function runEntryParse(chatId: number, session: SessionData, text: string,
     }
 
     const { confident, uncertain } = startConfirmation(chatId, enriched);
+    // T-ML-033：這批的 logId 存進 pendingLogId，讓 confirm_yes_/confirm_no_ callback
+    // 與新增品項流程（handleAcceptedEntry/finalizeEntries）之後能回填 outcome。
+    setState(chatId, { pendingLogId: logId ?? undefined });
 
     if (uncertain.length === 0) {
         const { saved, failed } = await processEntries(confident, session, ctx);
         const summary = formatSummary(saved, failed, ctx);
         resetToIdle(chatId);
+        void logOutcome(logId, saved.length > 0 ? 'auto_saved' : 'error', buildFinalPayload(saved, failed));
         await bot.sendMessage(chatId, summary);
         const fixedExpenseNotes = await autofillFixedExpensesForSaved(saved, session);
         for (const note of fixedExpenseNotes) {
             await bot.sendMessage(chatId, note);
         }
     } else {
+        void logOutcome(logId, 'awaiting_confirmation');
         if (confident.length > 0) {
             const preview = confident.map(e => `  • ${formatEntry(e, ctx)}`).join('\n');
             await bot.sendMessage(chatId, `以下 ${confident.length} 筆確認無誤，稍後儲存：\n${preview}`);
@@ -719,6 +826,11 @@ bot.on('message', async (msg) => {
     if (!telegramId || !text) return;
 
     logLine('IN', chatId, `[${msg.from?.username ?? telegramId}] ${text.slice(0, 120)}`);
+
+    // T-ML-033：指令類文字一律 route='command'（fire-and-forget，不影響後續分派）
+    if (COMMAND_TEXTS.has(text)) {
+        void logIncoming({ chatId, messageId: msg.message_id, telegramUserId: telegramId, text, route: 'command' });
+    }
 
     try {
     // ── handler body start ──────────────────────────────
@@ -794,6 +906,13 @@ bot.on('message', async (msg) => {
     // 若在 awaiting_auth 狀態 or 無 session → 嘗試登入
     if (!session) {
         const credentials = parseLoginInput(text);
+        // T-ML-033：route='auth'。絕對不存原始文字——這裡的 text 可能是「帳號 密碼」
+        // 明文，只存使用者名稱（沒解析出來就存一個固定佔位字串），密碼永遠不落地。
+        void logIncoming({
+            chatId, messageId: msg.message_id, telegramUserId: telegramId,
+            text: credentials ? `${credentials.username} [password redacted]` : '[unrecognized login format]',
+            route: 'auth',
+        });
         if (!credentials) {
             // 2026-08-30：session 過期時這則訊息原本被直接丟掉，使用者登入後必須重打
             // （log 分析：33 次重新登入造成 41 則訊息被迫重打）。改成暫存下來，
@@ -853,6 +972,7 @@ bot.on('message', async (msg) => {
 
     // ── 等待支出項目確認（awaiting_new_expense，僅有按鈕互動）──
     if (state.phase === 'awaiting_new_expense') {
+        void logIncoming({ chatId, messageId: msg.message_id, telegramUserId: telegramId, tenantId: session.tenantId, text, route: 'state_reply', parsed: { phase: state.phase } });
         if (/^(略過|skip|跳過|取消|cancel)$/i.test(text)) {
             const next = exitNewItemFlow(chatId);
             if (next) {
@@ -869,6 +989,7 @@ bot.on('message', async (msg) => {
 
     // ── 等待輸入新廠商名稱（awaiting_new_vendor_input）────────
     if (state.phase === 'awaiting_new_vendor_input' && state.newItemPending) {
+        void logIncoming({ chatId, messageId: msg.message_id, telegramUserId: telegramId, tenantId: session.tenantId, text, route: 'state_reply', parsed: { phase: state.phase } });
         const pending = state.newItemPending;
         if (/^(略過|skip|跳過|取消|cancel)$/i.test(text)) {
             addToConfirmed(chatId, { ...pending.entry, vendorId: null, vendorName: null });
@@ -912,6 +1033,7 @@ bot.on('message', async (msg) => {
 
     // ── 等待品項選擇（awaiting_item_select，僅有按鈕互動）────────
     if (state.phase === 'awaiting_item_select') {
+        void logIncoming({ chatId, messageId: msg.message_id, telegramUserId: telegramId, tenantId: session.tenantId, text, route: 'state_reply', parsed: { phase: state.phase } });
         if (/^(略過|skip|跳過|取消|cancel)$/i.test(text)) {
             const next = exitNewItemFlow(chatId);
             if (next) {
@@ -928,6 +1050,7 @@ bot.on('message', async (msg) => {
 
     // ── 等待新增品項名稱輸入（awaiting_new_purchase）──────────
     if (state.phase === 'awaiting_new_purchase' && state.newItemPending) {
+        void logIncoming({ chatId, messageId: msg.message_id, telegramUserId: telegramId, tenantId: session.tenantId, text, route: 'state_reply', parsed: { phase: state.phase } });
         const ctx = await loadDbContext(session.tenantId);
         const pending = state.newItemPending;
 
@@ -969,6 +1092,7 @@ bot.on('message', async (msg) => {
 
     // ── 等待廠商決定（awaiting_vendor_decision，文字回應）──────
     if (state.phase === 'awaiting_vendor_decision') {
+        void logIncoming({ chatId, messageId: msg.message_id, telegramUserId: telegramId, tenantId: session.tenantId, text, route: 'state_reply', parsed: { phase: state.phase } });
         if (/^(略過|skip|跳過|取消|cancel)$/i.test(text)) {
             const pending = state.newItemPending;
             if (pending) addToConfirmed(chatId, pending.entry);
@@ -987,6 +1111,7 @@ bot.on('message', async (msg) => {
 
     // ── 等待分類選擇（awaiting_category_select，文字回應）──────
     if (state.phase === 'awaiting_category_select') {
+        void logIncoming({ chatId, messageId: msg.message_id, telegramUserId: telegramId, tenantId: session.tenantId, text, route: 'state_reply', parsed: { phase: state.phase } });
         if (/^(略過|skip|跳過|取消|cancel)$/i.test(text)) {
             const next = exitNewItemFlow(chatId);
             if (next) {
@@ -1004,6 +1129,7 @@ bot.on('message', async (msg) => {
 
     // ── 處於確認流程中的回覆 ──────────────────────────────
     if (state.phase === 'awaiting_confirmation' && state.currentUncertain) {
+        void logIncoming({ chatId, messageId: msg.message_id, telegramUserId: telegramId, tenantId: session.tenantId, text, route: 'state_reply', parsed: { phase: state.phase } });
         const yes = /^(y|是|yes|對|好|確定|correct)$/i.test(text);
         const no = /^(n|否|no|不|跳過|skip)$/i.test(text);
 
@@ -1042,6 +1168,7 @@ bot.on('message', async (msg) => {
         logLine('QUERY', chatId, `range=${dateRange.from.toLocaleDateString()}~${dateRange.to.toLocaleDateString()} loc=${dateRange.locationName || 'all'} type=${dateRange.type || 'all'}`);
         const result = await queryByDateRange(dateRange.from, dateRange.to, dateRange.locationName, dateRange.type, session, queryCtx);
         await bot.sendMessage(chatId, result);
+        logQueryBranch(chatId, msg.message_id, telegramId, session.tenantId, text, 'dateRange', result);
         return;
     }
 
@@ -1052,6 +1179,7 @@ bot.on('message', async (msg) => {
         logLine('QUERY', chatId, `dailyRevenue ${dailyRev.period.label} loc=${dailyRev.locationName ?? 'all'}`);
         const result = await queryDailyRevenue(dailyRev.period, dailyRev.locationId, dailyRev.locationName, session, queryCtx);
         await bot.sendMessage(chatId, result);
+        logQueryBranch(chatId, msg.message_id, telegramId, session.tenantId, text, 'dailyRevenue', result);
         return;
     }
 
@@ -1061,6 +1189,7 @@ bot.on('message', async (msg) => {
         logLine('QUERY', chatId, `vendor=${vendorMonth.vendorName} month=${vendorMonth.month}`);
         const result = await queryByVendorMonth(vendorMonth.vendorName, vendorMonth.month, vendorMonth.year, session, queryCtx);
         await bot.sendMessage(chatId, result);
+        logQueryBranch(chatId, msg.message_id, telegramId, session.tenantId, text, 'vendorMonth', result);
         return;
     }
 
@@ -1070,6 +1199,7 @@ bot.on('message', async (msg) => {
         logLine('QUERY', chatId, `compare ${comparison.p1.label} vs ${comparison.p2.label}`);
         const result = await queryComparison(comparison.p1, comparison.p2, session, queryCtx);
         await bot.sendMessage(chatId, result);
+        logQueryBranch(chatId, msg.message_id, telegramId, session.tenantId, text, 'comparison', result);
         return;
     }
 
@@ -1079,6 +1209,7 @@ bot.on('message', async (msg) => {
         logLine('QUERY', chatId, `ranking ${ranking.target} top${ranking.topN} ${ranking.period.label}`);
         const result = await queryRanking(ranking.period, ranking.target, ranking.topN, session, queryCtx);
         await bot.sendMessage(chatId, result);
+        logQueryBranch(chatId, msg.message_id, telegramId, session.tenantId, text, 'ranking', result);
         return;
     }
 
@@ -1092,6 +1223,7 @@ bot.on('message', async (msg) => {
             logLine('QUERY', chatId, `expenseType=${noteQ.expenseTypeLabel} note=${noteQ.notePattern} period=${noteQ.period.label}`);
             const result = await queryByNote(noteQ.expenseTypeValue, noteQ.expenseTypeLabel, noteQ.notePattern, noteQ.period, session, ctxForLookup);
             await bot.sendMessage(chatId, result);
+            logQueryBranch(chatId, msg.message_id, telegramId, session.tenantId, text, 'noteQuery', result);
             return;
         }
 
@@ -1101,6 +1233,7 @@ bot.on('message', async (msg) => {
             logLine('QUERY', chatId, `expenseType=${expType.expenseTypeLabel} period=${expType.period.label}`);
             const result = await queryByExpenseTypeMonth(expType.expenseTypeValue, expType.expenseTypeLabel, expType.period, session, ctxForLookup);
             await bot.sendMessage(chatId, result);
+            logQueryBranch(chatId, msg.message_id, telegramId, session.tenantId, text, 'expenseTypeMonth', result);
             return;
         }
 
@@ -1110,6 +1243,7 @@ bot.on('message', async (msg) => {
             logLine('QUERY', chatId, `item=${itemMonth.itemName} period=${itemMonth.period.label}`);
             const result = await queryByItemMonth(itemMonth.itemId, itemMonth.itemName, itemMonth.period, session, ctxForLookup);
             await bot.sendMessage(chatId, result);
+            logQueryBranch(chatId, msg.message_id, telegramId, session.tenantId, text, 'itemMonth', result);
             return;
         }
     }
@@ -1120,6 +1254,7 @@ bot.on('message', async (msg) => {
         logLine('QUERY', chatId, `monthYear ${monthYear.period.label} type=${monthYear.type || 'all'}`);
         const result = await queryByMonthYear(monthYear.period, monthYear.type, session, queryCtx);
         await bot.sendMessage(chatId, result);
+        logQueryBranch(chatId, msg.message_id, telegramId, session.tenantId, text, 'monthYear', result);
         return;
     }
 
@@ -1127,13 +1262,13 @@ bot.on('message', async (msg) => {
     const intent = classifyQueryIntent(text);
 
     if (intent === 'query') {
-        await runDateQuery(chatId, session, text, queryCtx);
+        await runDateQuery(chatId, session, text, queryCtx, msg.message_id, telegramId);
         return;
     }
 
     // ── 自然語言查詢：regex 全沒接到、但看起來是在問問題 → 交給 LLM 翻成 QuerySpec ──
     if (isQueryLike(text)) {
-        await runNlQuery(chatId, session, text, queryCtx);
+        await runNlQuery(chatId, session, text, queryCtx, msg.message_id, telegramId);
         return;
     }
 
@@ -1141,14 +1276,21 @@ bot.on('message', async (msg) => {
     // （2026-08-30：靜默降級曾讓 LLM 對查詢句「提取」出一筆不存在的營收）
     if (intent === 'ambiguous') {
         logLine('CLARIFY', chatId, text.slice(0, 120));
-        setState(chatId, { phase: 'awaiting_intent_clarify', pendingClarifyText: text });
+        // T-ML-033：route='other'（規則判不出查詢或記帳）、outcome='clarify_intent'。
+        // logId 存進 pendingLogId，等使用者點了 intent_query/intent_entry callback
+        // 後回填「使用者實際選了哪個」，供之後評估 Jev 意圖閘門用。
+        const clarifyLogId = await logIncoming({
+            chatId, messageId: msg.message_id, telegramUserId: telegramId, tenantId: session.tenantId,
+            text, route: 'other', outcome: 'clarify_intent',
+        });
+        setState(chatId, { phase: 'awaiting_intent_clarify', pendingClarifyText: text, pendingLogId: clarifyLogId ?? undefined });
         await bot.sendMessage(chatId,
             `🤔 「${text}」我不確定你是要查詢還是要記帳，請選一個：`,
             { reply_markup: INTENT_CLARIFY_KEYBOARD });
         return;
     }
 
-    await runEntryParse(chatId, session, text, queryCtx);
+    await runEntryParse(chatId, session, text, queryCtx, msg.message_id, telegramId);
     // ── handler body end ────────────────────────────────
     } catch (err) {
         console.error('[MessageHandler Error]', err);
@@ -1282,15 +1424,21 @@ bot.on('callback_query', async (query) => {
     // ── 意圖釐清：使用者選「查詢」還是「記帳」──────────────────
     if (data === 'intent_query' || data === 'intent_entry') {
         const pendingText = state.pendingClarifyText;
-        setState(chatId, { phase: 'idle', pendingClarifyText: null });
+        // T-ML-033：回填當初 ambiguous 那一列的 outcome（維持 clarify_intent，只補
+        // finalJson 記使用者實際選了哪個），再清掉 pendingLogId——後面 runDateQuery
+        // 不會動這個欄位、runEntryParse 會建自己新的一筆，不清乾淨會留舊值。
+        const clarifyLogId = state.pendingLogId;
+        setState(chatId, { phase: 'idle', pendingClarifyText: null, pendingLogId: undefined });
+        void logOutcome(clarifyLogId, 'clarify_intent', { resolvedAs: data === 'intent_query' ? 'query' : 'entry' });
         if (!pendingText) {
             await bot.sendMessage(chatId, '這則訊息已經過期了，請重新輸入一次。');
             return;
         }
+        const msgId = query.message?.message_id;
         if (data === 'intent_query') {
-            await runDateQuery(chatId, session, pendingText);
+            await runDateQuery(chatId, session, pendingText, undefined, msgId, telegramId);
         } else {
-            await runEntryParse(chatId, session, pendingText);
+            await runEntryParse(chatId, session, pendingText, undefined, msgId, telegramId);
         }
         return;
     }
@@ -1587,6 +1735,16 @@ bot.on('callback_query', async (query) => {
     }
 
     // ── 一般確認流程 ────────────────────────────────────────
+    // T-ML-033：正常情況下 outcome 是 handleAcceptedEntry/finalizeEntries 透過
+    // pendingLogId 回填；只有 pendingLogId 已經遺失（例如當初 logIncoming 寫入失敗，
+    // 或 bot 重啟弄丟 in-memory 狀態）才會走到這裡，用 logCallback 補一筆 fallback
+    // log（route 固定 'callback'），記原始 callback_data + refMessageId 供人工回溯。
+    if ((data.startsWith('confirm_yes_') || data.startsWith('confirm_no_')) && state.pendingLogId == null) {
+        void logCallback({
+            chatId, telegramUserId: telegramId, tenantId: session.tenantId, text: data,
+            refMessageId: query.message?.message_id ?? null,
+        });
+    }
     if (data.startsWith('confirm_yes_')) {
         // Guard: if state was lost (bot restart), inform user
         if (state.phase === 'idle' && !state.currentUncertain) {
@@ -1626,9 +1784,13 @@ async function finalizeEntries(
     _ctx?: DbContext, // 不使用傳入的 ctx，重新載入以確保包含新建的品項/費用類型
 ) {
     const confirmed = getAllConfirmed(chatId);
+    // T-ML-033：這是一整批（可能經過新增品項子流程）最終真正 commit 的地方，也是
+    // pendingLogId 這批 log 的終點——resetToIdle 之後這個值就沒了，要先讀出來。
+    const logId = getState(chatId).pendingLogId;
     resetToIdle(chatId);
 
     if (confirmed.length === 0) {
+        void logOutcome(logId, 'rejected');
         await bot.sendMessage(chatId, '⚠️ 沒有任何記錄被儲存。\n（可能是機器人重新啟動導致暫存資料遺失，請重新輸入一次）');
         return;
     }
@@ -1636,6 +1798,7 @@ async function finalizeEntries(
     // 重新載入最新 ctx，確保新建品項/支出類型能正確顯示名稱
     const freshCtx = await loadDbContext(session.tenantId);
     const { saved, failed } = await processEntries(confirmed, session, freshCtx);
+    void logOutcome(logId, saved.length > 0 ? 'confirmed' : 'error', buildFinalPayload(saved, failed));
     const summary = formatSummary(saved, failed, freshCtx);
     await bot.sendMessage(chatId, summary);
     const fixedExpenseNotes = await autofillFixedExpensesForSaved(saved, session);

@@ -16,6 +16,8 @@ const tests = [
     "bot/handlers/querySpec.test.ts",
     "bot/handlers/nlQuery.test.ts",
     "bot/itemKeywords.test.ts",
+    // T-ML-033：bot 訊息 log（供離線評測解析器與 Jev 意圖閘門）
+    "bot/messageLog.test.ts",
     "src/lib/password.test.ts",
     "src/lib/session.test.ts",
     // T-ML-025 批 1：分析・搜尋・分類核心邏輯層

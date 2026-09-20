@@ -80,6 +80,10 @@ export type ChatState = {
     muteMode: boolean;               // 靜音模式：品項已知則直接記錄，不再詢問廠商/確認
     pendingClarifyText: string | null; // 意圖待釐清時暫存的原始輸入
     pendingReplayText: string | null;  // session 過期時被擋下的訊息，登入成功後自動重播
+    // T-ML-033：目前這批 ParsedEntry 對應的 BotMessageLog.id，讓 confirm_yes_/
+    // confirm_no_ callback 與新增品項流程結束時能回填 outcome/finalJson。
+    // 跟著既有 ChatState 一起 write-through 到 SystemConfig，撐過 bot 重啟。
+    pendingLogId?: number;
 };
 
 export type DbContext = {

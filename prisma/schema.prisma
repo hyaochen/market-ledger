@@ -490,3 +490,27 @@ model EntryTemplate {
   @@index([userId])
   @@index([tenantId])
 }
+
+// T-ML-033：Telegram bot 訊息 log（原始文字 + 路由判定 + LLM 解析結果 + 最終寫入結果），
+// 供之後離線評測解析器與 Jev 意圖閘門用。資料只留本機 DB，不外傳。
+// 刻意不建 tenantId 外鍵 —— 這是 best-effort 稽核記錄，任何情況都不該因為關聯查詢
+// 失敗（例如登入流程還沒有 session、tenantId 還是 null）而讓寫入被擋下。
+model BotMessageLog {
+  id             Int      @id @default(autoincrement())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  tenantId       String?
+  chatId         String
+  messageId      Int?
+  telegramUserId String?
+  text           String
+  route          String // entry|query|dayoff|command|state_reply|callback|auth|unparsed|other
+  llmProvider    String? // claude|ollama|null
+  parsedJson     String? // 事後修正過的 RawExtracted 陣列（JSON 字串）
+  outcome        String? // auto_saved|awaiting_confirmation|confirmed|rejected|new_item_flow|clarify_intent|query_ok|query_fail|ignored|error
+  finalJson      String? // 實際寫進 Entry/Revenue 的內容（JSON 字串）
+  refMessageId   Int? // callback 找不到原 logId 時，記原始訊息 id 供人工回溯
+
+  @@index([chatId, createdAt])
+  @@index([chatId, messageId])
+}

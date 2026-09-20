@@ -61,7 +61,10 @@ export function formatEntry(e: ParsedEntry, ctx: DbContext): string {
 }
 
 // 寫入單筆記錄到 DB
-export async function saveEntry(entry: ParsedEntry, session: SessionData): Promise<{ success: boolean; error?: string }> {
+// T-ML-033：成功時多回傳 id（Entry 或 Revenue 的主鍵），供 bot/messageLog.ts 的
+// finalJson 記錄「實際寫進哪一筆」。只加欄位，不改變既有 { success, error } 語意，
+// 呼叫端原本只看 success/error 的地方不受影響。
+export async function saveEntry(entry: ParsedEntry, session: SessionData): Promise<{ success: boolean; error?: string; id?: string }> {
     try {
         const date = new Date(entry.date);
 
@@ -80,7 +83,7 @@ export async function saveEntry(entry: ParsedEntry, session: SessionData): Promi
                     const existingDesc = dup.isDayOff ? '休假' : `$${dup.amount}`;
                     return { success: false, error: `${locName} 該日已有紀錄（${existingDesc}），請先刪除或修改後再記休假` };
                 }
-                await prisma.revenue.create({
+                const created = await prisma.revenue.create({
                     data: {
                         date,
                         locationId: entry.locationId,
@@ -90,10 +93,10 @@ export async function saveEntry(entry: ParsedEntry, session: SessionData): Promi
                         tenantId: session.tenantId,
                     },
                 });
-                return { success: true };
+                return { success: true, id: created.id };
             }
 
-            await prisma.revenue.upsert({
+            const upserted = await prisma.revenue.upsert({
                 where: {
                     date_locationId_tenantId: {
                         date,
@@ -111,7 +114,7 @@ export async function saveEntry(entry: ParsedEntry, session: SessionData): Promi
                     tenantId: session.tenantId,
                 },
             });
-            return { success: true };
+            return { success: true, id: upserted.id };
         }
 
         const data: Record<string, unknown> = {
@@ -167,8 +170,8 @@ export async function saveEntry(entry: ParsedEntry, session: SessionData): Promi
             data.inputUnit = entry.unit ?? null;
         }
 
-        await prisma.entry.create({ data: data as Parameters<typeof prisma.entry.create>[0]['data'] });
-        return { success: true };
+        const created = await prisma.entry.create({ data: data as Parameters<typeof prisma.entry.create>[0]['data'] });
+        return { success: true, id: created.id };
     } catch (e) {
         console.error('[saveEntry]', e);
         return { success: false, error: String(e) };
@@ -210,21 +213,24 @@ export async function autofillFixedExpensesForSaved(
 }
 
 // 批量處理解析後的記錄，回傳結果摘要文字
+// T-ML-033：saved 裡每筆多帶 entryId（來自 saveEntry 的 id），供 messageLog 的
+// finalJson 使用；型別上是 ParsedEntry 的超集，既有呼叫端（formatSummary/
+// formatEntry/autofillFixedExpensesForSaved 都只讀 ParsedEntry 既有欄位）不受影響。
 export async function processEntries(
     entries: ParsedEntry[],
     session: SessionData,
     ctx: DbContext,
 ): Promise<{
-    saved: ParsedEntry[];
+    saved: (ParsedEntry & { entryId?: string })[];
     failed: { entry: ParsedEntry; error: string }[];
 }> {
-    const saved: ParsedEntry[] = [];
+    const saved: (ParsedEntry & { entryId?: string })[] = [];
     const failed: { entry: ParsedEntry; error: string }[] = [];
 
     for (const entry of entries) {
         const result = await saveEntry(entry, session);
         if (result.success) {
-            saved.push(entry);
+            saved.push({ ...entry, entryId: result.id });
         } else {
             failed.push({ entry, error: result.error ?? '未知錯誤' });
         }
