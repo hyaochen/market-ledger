@@ -2,7 +2,7 @@ import prisma from "@/lib/prisma";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { GitPullRequest, CheckCircle2, XCircle, Clock } from "lucide-react";
+import { GitPullRequest, CheckCircle2, XCircle, Clock, Lightbulb } from "lucide-react";
 import { updateEntryStatus } from "@/app/actions/workflow";
 import { getTenantId } from "@/lib/auth";
 
@@ -77,7 +77,7 @@ export default async function WorkflowPage() {
 
             <Card className="bg-muted/30">
                 <CardContent className="p-4 text-xs text-muted-foreground flex gap-2">
-                    <div className="mt-0.5">💡</div>
+                    <Lightbulb className="h-4 w-4 mt-0.5 shrink-0" aria-hidden="true" />
                     <div>系統預設進貨記錄為自動核准。如需啟用進階審核流程，請至系統設定中開啟「強制審核」功能。</div>
                 </CardContent>
             </Card>

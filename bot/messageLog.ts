@@ -6,7 +6,7 @@
 // 1. Fire-and-forget + try/catch：任何寫入失敗只 console.warn，絕不讓 bot 主流程因為
 //    記 log 而拋錯或卡住。呼叫端對 logOutcome/logCallback 一律用 `void logXxx(...)`
 //    不 await；logIncoming 則在少數需要拿 logId 存進 ChatState.pendingLogId 的呼叫點
-//    用 await —— 這些呼叫點都在「使用者已經收到第一個回覆（例如『🔄 解析中』）之後」
+//    用 await —— 這些呼叫點都在「使用者已經收到第一個回覆（例如『解析中』）之後」
 //    才發生，本地 SQLite 一次 insert 通常 <5ms，不會造成使用者能感知的延遲。
 // 2. 依賴注入（跟 src/lib/fixedExpenseAutofill.ts 的 EntryWriteDb 同一套慣例）：真正
 //    的 DB 操作透過 BotMessageLogDb 介面注入，預設是包著真正 prisma 的

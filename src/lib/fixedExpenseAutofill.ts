@@ -306,7 +306,7 @@ export async function upsertExpenseEntry(
         if (existing.totalPrice === params.amount) {
             return { action: 'skipped', entryId: existing.id };
         }
-        // 🔴 只更新金額，note 欄位絕對不動 —— 既有 Entry 的原始寫法（就算是錯字）
+        // [重要] 只更新金額，note 欄位絕對不動 —— 既有 Entry 的原始寫法（就算是錯字）
         // 是 owner 的原始輸入憑證，不因為正規化比對邏輯而被改寫。
         await db.entry.update({ where: { id: existing.id }, data: { totalPrice: params.amount, updatedAt: new Date() } });
         return { action: 'updated', entryId: existing.id };

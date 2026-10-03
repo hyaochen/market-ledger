@@ -6,7 +6,7 @@
 // 看不出來，靜默停擺 35 小時沒人發現。這支端點存在的唯一理由就是不能重演那件事，
 // 所以「輕量但真的查 DB」是硬性要求，回靜態 {ok:true} 等於沒做。
 //
-// 🔴 這支端點會經 Cloudflare tunnel 對外公開，且刻意不掛 requireTenant()/
+// [重要] 這支端點會經 Cloudflare tunnel 對外公開，且刻意不掛 requireTenant()/
 // getCurrentUser()（監控要能直接打，不能卡登入）：
 //   - 絕對不可回傳任何營業資料、筆數、金額、租戶資訊
 //   - 錯誤訊息不可含檔案路徑、DB 路徑或 stack trace —— 只回固定字串 "db"

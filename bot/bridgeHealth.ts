@@ -101,7 +101,7 @@ export async function findOwnerChatId(): Promise<number | null> {
 /** testPrefix e.g. "[T-ML-026 測試]" so manual verification runs are unmistakably not a real incident. */
 export function buildAlertMessage(reason: string, testPrefix: string = ''): string {
     const prefix = testPrefix ? `${testPrefix} ` : '';
-    return `${prefix}⚠️ claude-bridge 沒有在跑（${reason}）\n\n`
+    return `${prefix}【注意】claude-bridge 沒有在跑（${reason}）\n\n`
         + '已自動退回本地 ollama，記帳解析還能用，但正確率會下降（中文/複雜句型較容易判斷錯誤）。\n\n'
         + '請執行：npm run claude-bridge\n'
         + '（或確認開機自啟排程 market-ledger-claude-bridge 有正常啟動，見 scripts/claude-bridge/README.md）';

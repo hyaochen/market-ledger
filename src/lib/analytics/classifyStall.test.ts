@@ -18,14 +18,14 @@ test("需求10 攤位判斷：已知錯字「終身」→ pingtung 但 method �
     assert.ok(r.confidence < 1);
 });
 
-test("需求10 攤位判斷：🔴 誠實面對限制 —— 完全沒有備註、沒有廠商/品項可查時必須回 unknown，不准硬猜", async () => {
+test("需求10 攤位判斷：[重要] 誠實面對限制 —— 完全沒有備註、沒有廠商/品項可查時必須回 unknown，不准硬猜", async () => {
     const r = await classifyStall({ tenantId: REAL_TENANT_ID, note: null });
     assert.equal(r.stall, "unknown");
     assert.equal(r.confidence, 0);
     assert.equal(r.method, "insufficient-data");
 });
 
-test("需求10 攤位判斷：🔴 誠實面對限制 —— 進貨幾乎沒有攤位備註歷史，帶廠商但無備註時目前幾乎必然 insufficient-data", async () => {
+test("需求10 攤位判斷：[重要] 誠實面對限制 —— 進貨幾乎沒有攤位備註歷史，帶廠商但無備註時目前幾乎必然 insufficient-data", async () => {
     // 找一個真實有進貨紀錄的廠商，驗證目前資料現況下 vendor-history 這條路線量能不足
     const vendor = await prisma.vendor.findFirst({ where: { tenantId: REAL_TENANT_ID, name: "和生市場" } });
     assert.ok(vendor, "測試前提：和生市場這個廠商應該存在於真實租戶");

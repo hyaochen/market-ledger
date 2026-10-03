@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Archive, BarChart3, Calendar, CalendarDays, CalendarRange, History, type LucideIcon } from "lucide-react";
 import {
     LineChart,
     Line,
@@ -309,15 +310,15 @@ export default function ReportsClient({
     const yearStart = new Date(now.getFullYear(), 0, 1);
     const yearEnd = new Date(now.getFullYear(), 11, 31);
 
-    const presets: { label: string; from: string; to: string; icon: string }[] = [
-        { label: "今日", from: fmt(now), to: fmt(now), icon: "📅" },
-        { label: "本週", from: fmt(weekStart), to: fmt(now), icon: "📆" },
-        { label: "本月", from: fmt(monthStart), to: fmt(now), icon: "🗓" },
-        { label: "上月", from: fmt(lastMonthStart), to: fmt(lastMonthEnd), icon: "⏪" },
-        { label: "今年", from: fmt(yearStart), to: fmt(yearEnd), icon: "📊" },
+    const presets: { label: string; from: string; to: string; icon: LucideIcon }[] = [
+        { label: "今日", from: fmt(now), to: fmt(now), icon: Calendar },
+        { label: "本週", from: fmt(weekStart), to: fmt(now), icon: CalendarRange },
+        { label: "本月", from: fmt(monthStart), to: fmt(now), icon: CalendarDays },
+        { label: "上月", from: fmt(lastMonthStart), to: fmt(lastMonthEnd), icon: History },
+        { label: "今年", from: fmt(yearStart), to: fmt(yearEnd), icon: BarChart3 },
     ];
     if (earliestDate) {
-        presets.push({ label: "全部", from: earliestDate, to: fmt(now), icon: "🗃" });
+        presets.push({ label: "全部", from: earliestDate, to: fmt(now), icon: Archive });
     }
 
     const isActivePreset = (p: { from: string; to: string }) => p.from === range.from && p.to === range.to;
@@ -450,7 +451,7 @@ export default function ReportsClient({
                                         : "bg-accent/40 hover:bg-accent/70 text-foreground",
                                 ].join(" ")}
                             >
-                                <span className="text-lg leading-none">{p.icon}</span>
+                                <p.icon className="h-5 w-5" aria-hidden="true" />
                                 <span>{p.label}</span>
                             </button>
                         ))}

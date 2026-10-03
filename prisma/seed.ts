@@ -240,7 +240,7 @@ async function main() {
     if (adminRole) {
         const superAdminPassword = process.env.SUPER_ADMIN_PASSWORD || 'superadmin123'
         if (!process.env.SUPER_ADMIN_PASSWORD) {
-            console.warn('⚠️  WARNING: SUPER_ADMIN_PASSWORD not set in .env, using default "superadmin123".')
+            console.warn('WARNING: SUPER_ADMIN_PASSWORD not set in .env, using default "superadmin123".')
         }
         const hashedSuperPassword = hashPassword(superAdminPassword)
 
@@ -276,7 +276,7 @@ async function main() {
         // ─── 9. 建立預設企業管理員 ───
         const rawPassword = process.env.ADMIN_PASSWORD || 'admin123'
         if (!process.env.ADMIN_PASSWORD) {
-            console.warn('⚠️  WARNING: ADMIN_PASSWORD not set in .env, using default "admin123".')
+            console.warn('WARNING: ADMIN_PASSWORD not set in .env, using default "admin123".')
         }
         const adminPassword = hashPassword(rawPassword)
 
@@ -321,10 +321,10 @@ async function main() {
             const employeePassword = process.env.CASH_EMPLOYEE_PASSWORD || '1'
 
             if (!process.env.CASH_ADMIN_PASSWORD) {
-                console.warn('⚠️  WARNING: CASH_ADMIN_PASSWORD not set, using default "mom123".')
+                console.warn('WARNING: CASH_ADMIN_PASSWORD not set, using default "mom123".')
             }
             if (!process.env.CASH_EMPLOYEE_PASSWORD) {
-                console.warn('⚠️  WARNING: CASH_EMPLOYEE_PASSWORD not set, using default "1".')
+                console.warn('WARNING: CASH_EMPLOYEE_PASSWORD not set, using default "1".')
             }
 
             // admin: mom
@@ -404,11 +404,11 @@ async function main() {
                 }
             }
         } else {
-            console.warn('⚠️  CashCount seed skipped: missing write role or 屏東攤位 location.')
+            console.warn('WARNING: CashCount seed skipped: missing write role or 屏東攤位 location.')
         }
     }
 
-    console.log('✅ Seed data initialized (multi-tenant)')
+    console.log('Seed data initialized (multi-tenant)')
     console.log(`   Tenant: ${defaultTenant.name} (${defaultTenant.code})`)
     console.log(`   Super Admin: superadmin`)
     console.log(`   Tenant Admin: admin`)

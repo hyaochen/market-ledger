@@ -1,6 +1,6 @@
 // 共用日期範圍工具 — 分析模組專用
 //
-// 🔴 重要背景（T-ML-025 批 1 踩坑點，務必讀完再改這支檔案）：
+// [重要] 重要背景（T-ML-025 批 1 踩坑點，務必讀完再改這支檔案）：
 // Entry.date / Revenue.date 存進 SQLite 的值是「該筆記錄所屬營業日的 UTC 午夜」epoch ms。
 // 這不是巧合 —— 寫入路徑（web server actions、bot）在 Docker 容器內執行，容器沒有設定
 // TZ 環境變數，Node 預設走 UTC，所以 `new Date(year, month-1, day)`（local 建構子）

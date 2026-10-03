@@ -271,7 +271,7 @@ function header(spec: QuerySpec, ctx: DbContext): string {
     const by = spec.groupBy && spec.groupBy !== 'none' ? GROUPBY_LABEL[spec.groupBy] : null;
     if (spec.agg === 'list') parts.push('逐筆明細');
     else if (by) parts.push(by);
-    return `📊 ${parts.filter(Boolean).join(' · ')}`;
+    return parts.filter(Boolean).join(' · ');
 }
 
 function describeRow(r: Row): string {
@@ -308,11 +308,11 @@ function formatGrouped(spec: QuerySpec, rows: Row[], ctx: DbContext): string {
             const rev = rows.filter(r => r.kind === 'revenue').reduce((s, r) => s + r.amount, 0);
             const pur = -rows.filter(r => r.kind === 'purchase').reduce((s, r) => s + r.amount, 0);
             const exp = -rows.filter(r => r.kind === 'expense').reduce((s, r) => s + r.amount, 0);
-            lines.push(`💰 營業額 ${$(rev)}`);
-            lines.push(`🛒 進貨 ${$(pur)}`);
-            lines.push(`💸 支出 ${$(exp)}`);
+            lines.push(`營業額 ${$(rev)}`);
+            lines.push(`進貨 ${$(pur)}`);
+            lines.push(`支出 ${$(exp)}`);
             lines.push('─────────────');
-            lines.push(`${grand >= 0 ? '💵 淨利' : '🔻 虧損'} ${$(Math.abs(grand))}`);
+            lines.push(`${grand >= 0 ? '淨利' : '虧損'} ${$(Math.abs(grand))}`);
         } else {
             lines.push(`合計 ${$(Math.abs(grand))}（${rows.length} 筆）`);
         }
@@ -359,7 +359,7 @@ function formatGrouped(spec: QuerySpec, rows: Row[], ctx: DbContext): string {
 
     lines.push('─────────────');
     if (isProfit) {
-        lines.push(`${grand >= 0 ? '💵 淨利' : '🔻 虧損'} ${$(Math.abs(grand))}`);
+        lines.push(`${grand >= 0 ? '淨利' : '虧損'} ${$(Math.abs(grand))}`);
     } else {
         lines.push(`合計 ${$(Math.abs(grand))}（${rows.length} 筆）`);
     }
@@ -377,13 +377,13 @@ function formatCompare(spec: QuerySpec, a: Row[], b: Row[]): string {
     const p2 = spec.compareTo!;
     const sumOf = (rows: Row[], kind?: Row['kind']) =>
         rows.filter(r => !kind || r.kind === kind).reduce((s, r) => s + r.amount, 0);
-    const lines = [`📊 ${spec.period.label} vs ${p2.label} · ${METRIC_LABEL[spec.metric]}`, ''];
+    const lines = [`${spec.period.label} vs ${p2.label} · ${METRIC_LABEL[spec.metric]}`, ''];
     const pairs: [string, number, number][] = [];
     if (spec.metric === 'profit') {
-        pairs.push(['💰 營業額', sumOf(a, 'revenue'), sumOf(b, 'revenue')]);
-        pairs.push(['🛒 進貨', -sumOf(a, 'purchase'), -sumOf(b, 'purchase')]);
-        pairs.push(['💸 支出', -sumOf(a, 'expense'), -sumOf(b, 'expense')]);
-        pairs.push(['💵 淨利', sumOf(a), sumOf(b)]);
+        pairs.push(['營業額', sumOf(a, 'revenue'), sumOf(b, 'revenue')]);
+        pairs.push(['進貨', -sumOf(a, 'purchase'), -sumOf(b, 'purchase')]);
+        pairs.push(['支出', -sumOf(a, 'expense'), -sumOf(b, 'expense')]);
+        pairs.push(['淨利', sumOf(a), sumOf(b)]);
     } else {
         pairs.push([METRIC_LABEL[spec.metric], Math.abs(sumOf(a)), Math.abs(sumOf(b))]);
     }

@@ -169,7 +169,11 @@ export default function ChecklistAdminClient({ items }: { items: Item[] }) {
                                 className="text-xs underline"
                                 title={item.isActive ? "停用" : "啟用"}
                             >
-                                {item.isActive ? "🟢 啟用" : "⚪ 停用"}
+                                <span
+                                    className={`mr-1 inline-block h-2 w-2 rounded-full align-middle ${item.isActive ? "bg-green-500" : "bg-zinc-400"}`}
+                                    aria-hidden="true"
+                                />
+                                {item.isActive ? "啟用" : "停用"}
                             </button>
                             {item.isActive && (
                                 <button

@@ -134,17 +134,17 @@ export async function queryByDate(date: Date, session: SessionData, ctx: DbConte
 
     const totalCount = entries.length + revenues.length;
     if (totalCount === 0) {
-        return `📅 ${fmtDate(date)} 尚無記錄`;
+        return `${fmtDate(date)} 尚無記錄`;
     }
 
-    const lines: string[] = [`📅 ${fmtDate(date)} 記錄（${totalCount} 筆）`];
+    const lines: string[] = [`${fmtDate(date)} 記錄（${totalCount} 筆）`];
     let purchaseTotal = 0;
     let expenseTotal = 0;
     let revenueTotal = 0;
 
     // 營業額
     if (revenues.length > 0) {
-        lines.push('💰 營業額：');
+        lines.push('營業額：');
         for (const r of revenues) {
             const note = r.note ? ` 備註：${r.note}` : '';
             lines.push(`  • ${r.location?.name ?? '?'} $${r.amount.toLocaleString()}${note}`);
@@ -154,13 +154,13 @@ export async function queryByDate(date: Date, session: SessionData, ctx: DbConte
 
     // 進貨 & 支出
     // 2026-08-30：原本兩者共用一個 for 迴圈且完全沒有 section header，
-    // 視覺上整批被歸到上面的「💰 營業額：」底下（合計那行是對的，只有列表誤導）。
+    // 視覺上整批被歸到上面的「營業額：」底下（合計那行是對的，只有列表誤導）。
     // 這裡拆成兩段並補上標題，與 queryByDateRange / queryByMonthYear 的格式一致。
     const purchases = entries.filter(e => e.type === 'PURCHASE');
     const expenses = entries.filter(e => e.type !== 'PURCHASE');
 
     if (purchases.length > 0) {
-        lines.push('🛒 進貨：');
+        lines.push('進貨：');
         for (const e of purchases) {
             purchaseTotal += e.totalPrice;
             const qty = e.inputQuantity != null
@@ -175,7 +175,7 @@ export async function queryByDate(date: Date, session: SessionData, ctx: DbConte
     }
 
     if (expenses.length > 0) {
-        lines.push('💸 支出：');
+        lines.push('支出：');
         for (const e of expenses) {
             expenseTotal += e.totalPrice;
             const et = ctx.expenseTypes.find(t => t.value === e.expenseType);
@@ -250,9 +250,9 @@ export function detectVendorMonthQuery(
     //
     // 舊版靠上面那串「排除詞黑名單」反推剩下的字是不是廠商名 —— 黑名單永遠列不完，
     // 結果這個 detector 變成貪婪的 catch-all，把「N月＋任何詞」全吃掉：
-    //   「8月薪資」    → ❌ 找不到廠商「薪資」
-    //   「8月清潔費多少」→ ❌ 找不到廠商「清潔費多少」
-    //   「8月頭皮買了多少」→ ❌ 找不到廠商「頭皮買了多少」
+    //   「8月薪資」    → 找不到廠商「薪資」
+    //   「8月清潔費多少」→ 找不到廠商「清潔費多少」
+    //   「8月頭皮買了多少」→ 找不到廠商「頭皮買了多少」
     // 它排在 detectExpenseTypeMonthQuery / detectItemMonthQuery 前面，所以真正該接手
     // 的 detector 從來沒機會執行，白話文查詢等於整片失效。
     // 詳見 vault reports/2026-08-30_bot-usage-log-analysis。
@@ -282,7 +282,7 @@ export async function queryByVendorMonth(
     );
     if (!vendor) {
         const available = ctx.vendors.map(v => v.name).join('、');
-        return `❌ 找不到廠商「${vendorName}」\n\n目前有的廠商：${available || '（無）'}`;
+        return `找不到廠商「${vendorName}」\n\n目前有的廠商：${available || '（無）'}`;
     }
 
     const from = new Date(year, month - 1, 1);
@@ -300,10 +300,10 @@ export async function queryByVendorMonth(
     });
 
     if (entries.length === 0) {
-        return `📋 ${year}年${month}月 ${vendor.name}：無進貨記錄`;
+        return `${year}年${month}月 ${vendor.name}：無進貨記錄`;
     }
 
-    const lines: string[] = [`📋 ${year}年${month}月 — ${vendor.name}（${entries.length} 筆）\n`];
+    const lines: string[] = [`${year}年${month}月 — ${vendor.name}（${entries.length} 筆）\n`];
     let total = 0;
 
     // Group by item, accumulate weight (in kg) and amount for unit price calculation
@@ -357,13 +357,13 @@ export async function queryByVendorMonth(
         if (data.totalKg > 0 && data.amount > 0) {
             const pricePerKg = data.amount / data.totalKg;
             const pricePerTaiJin = pricePerKg * KG_PER_TAIJIN;
-            priceStr = `\n    💲 單價：$${Math.round(pricePerTaiJin)}/台斤 ｜ $${Math.round(pricePerKg)}/公斤`;
+            priceStr = `\n    單價：$${Math.round(pricePerTaiJin)}/台斤 ｜ $${Math.round(pricePerKg)}/公斤`;
         }
 
         lines.push(`  • ${name}${qtyStr} — $${data.amount.toLocaleString()}（${data.count}筆）${priceStr}`);
     }
 
-    lines.push(`\n💰 合計：$${total.toLocaleString()}`);
+    lines.push(`\n合計：$${total.toLocaleString()}`);
     return lines.join('\n');
 }
 
@@ -422,7 +422,7 @@ export async function queryByDateRange(
 
     const lines: string[] = [];
     const header = locationName ? `${locationName}` : '全部';
-    lines.push(`📊 ${fromStr} ~ ${toStr} ${header}\n`);
+    lines.push(`${fromStr} ~ ${toStr} ${header}\n`);
 
     // Revenue
     if (!type || type === 'revenue') {
@@ -445,13 +445,13 @@ export async function queryByDateRange(
                 byLoc.set(name, (byLoc.get(name) || 0) + r.amount);
                 total += r.amount;
             }
-            lines.push(`💰 營業額（${revenues.length} 筆）：`);
+            lines.push(`營業額（${revenues.length} 筆）：`);
             for (const [name, amount] of byLoc) {
                 lines.push(`  • ${name}：$${amount.toLocaleString()}`);
             }
-            lines.push(`  📍 小計：$${total.toLocaleString()}`);
+            lines.push(`  小計：$${total.toLocaleString()}`);
         } else if (type === 'revenue') {
-            lines.push('💰 此期間無營業額記錄');
+            lines.push('此期間無營業額記錄');
         }
     }
 
@@ -467,7 +467,7 @@ export async function queryByDateRange(
 
         if (entries.length > 0) {
             const total = entries.reduce((s, e) => s + e.totalPrice, 0);
-            lines.push(`\n🛒 進貨（${entries.length} 筆）：$${total.toLocaleString()}`);
+            lines.push(`\n進貨（${entries.length} 筆）：$${total.toLocaleString()}`);
         }
     }
 
@@ -483,7 +483,7 @@ export async function queryByDateRange(
 
         if (entries.length > 0) {
             const total = entries.reduce((s, e) => s + e.totalPrice, 0);
-            lines.push(`\n💸 支出（${entries.length} 筆）：$${total.toLocaleString()}`);
+            lines.push(`\n支出（${entries.length} 筆）：$${total.toLocaleString()}`);
         }
     }
 
@@ -511,7 +511,7 @@ export async function queryRecent(session: SessionData, ctx: DbContext): Promise
     ]);
 
     const totalCount = entries.length + revenues.length;
-    if (totalCount === 0) return '📊 最近 7 天尚無記錄';
+    if (totalCount === 0) return '最近 7 天尚無記錄';
 
     // 依日期分組
     type DayGroup = { entries: typeof entries; revenues: typeof revenues };
@@ -530,7 +530,7 @@ export async function queryRecent(session: SessionData, ctx: DbContext): Promise
         getOrCreate(key).revenues.push(r);
     });
 
-    const lines: string[] = [`📊 最近 7 天（${totalCount} 筆）`];
+    const lines: string[] = [`最近 7 天（${totalCount} 筆）`];
     let grandTotal = 0;
 
     byDate.forEach(({ entries: dayEntries, revenues: dayRevs }, dateKey) => {
@@ -655,7 +655,7 @@ export async function queryByMonthYear(
     session: SessionData,
     ctx: DbContext,
 ): Promise<string> {
-    const lines: string[] = [`📊 ${period.label} 統計`];
+    const lines: string[] = [`${period.label} 統計`];
     let grandRev = 0, grandPur = 0, grandExp = 0;
 
     if (!type || type === 'revenue') {
@@ -670,11 +670,11 @@ export async function queryByMonthYear(
                 byLoc.set(n, (byLoc.get(n) || 0) + r.amount);
                 grandRev += r.amount;
             }
-            lines.push(`💰 營業額（${revs.length} 筆）：`);
+            lines.push(`營業額（${revs.length} 筆）：`);
             for (const [n, a] of byLoc) lines.push(`  • ${n}：$${a.toLocaleString()}`);
-            lines.push(`  📍 小計：$${grandRev.toLocaleString()}`);
+            lines.push(`  小計：$${grandRev.toLocaleString()}`);
         } else if (type === 'revenue') {
-            lines.push('💰 此期間無營業額記錄');
+            lines.push('此期間無營業額記錄');
         }
     }
 
@@ -690,11 +690,11 @@ export async function queryByMonthYear(
                 byVendor.set(n, (byVendor.get(n) || 0) + e.totalPrice);
                 grandPur += e.totalPrice;
             }
-            lines.push(`📦 進貨（${ents.length} 筆）：`);
+            lines.push(`進貨（${ents.length} 筆）：`);
             for (const [n, a] of byVendor) lines.push(`  • ${n}：$${a.toLocaleString()}`);
-            lines.push(`  📍 小計：$${grandPur.toLocaleString()}`);
+            lines.push(`  小計：$${grandPur.toLocaleString()}`);
         } else if (type === 'purchase') {
-            lines.push('📦 此期間無進貨記錄');
+            lines.push('此期間無進貨記錄');
         }
     }
 
@@ -711,20 +711,20 @@ export async function queryByMonthYear(
                 byType.set(t2, (byType.get(t2) || 0) + e.totalPrice);
                 grandExp += e.totalPrice;
             }
-            lines.push(`💸 支出（${exps.length} 筆）：`);
+            lines.push(`支出（${exps.length} 筆）：`);
             for (const [t2, a] of byType) lines.push(`  • ${t2}：$${a.toLocaleString()}`);
-            lines.push(`  📍 小計：$${grandExp.toLocaleString()}`);
+            lines.push(`  小計：$${grandExp.toLocaleString()}`);
         } else if (type === 'expense') {
-            lines.push('💸 此期間無支出記錄');
+            lines.push('此期間無支出記錄');
         }
     }
 
     if (!type) {
         const profit = grandRev - grandPur - grandExp;
         lines.push('---');
-        lines.push(`📈 毛收入：$${grandRev.toLocaleString()}`);
-        lines.push(`📉 總成本：$${(grandPur + grandExp).toLocaleString()}`);
-        lines.push(`💵 ${profit >= 0 ? '淨利' : '虧損'}：$${profit.toLocaleString()}`);
+        lines.push(`毛收入：$${grandRev.toLocaleString()}`);
+        lines.push(`總成本：$${(grandPur + grandExp).toLocaleString()}`);
+        lines.push(`${profit >= 0 ? '淨利' : '虧損'}：$${profit.toLocaleString()}`);
     }
 
     return lines.join('\n');
@@ -786,8 +786,8 @@ export async function queryDailyRevenue(
     });
 
     const title = locationName
-        ? `💰 ${period.label} 每日營業額 — ${locationName}`
-        : `💰 ${period.label} 每日營業額（全部攤位）`;
+        ? `${period.label} 每日營業額 — ${locationName}`
+        : `${period.label} 每日營業額（全部攤位）`;
 
     if (revs.length === 0) return `${title}\n\n此期間無營業額記錄`;
 
@@ -851,7 +851,7 @@ export async function queryDailyRevenue(
     }
     if (multiLoc) {
         const parts = [...locTotals.entries()].map(([n, a]) => `${n} $${a.toLocaleString()}`);
-        lines.push(`📍 ${parts.join(' ｜ ')}`);
+        lines.push(parts.join(' ｜ '));
     }
 
     return lines.join('\n');
@@ -911,11 +911,11 @@ export async function queryByItemMonth(
     });
 
     if (ents.length === 0) {
-        return `📋 ${period.label} ${itemName}：無進貨記錄`;
+        return `${period.label} ${itemName}：無進貨記錄`;
     }
 
     const KG_PER_TAIJIN = 0.6;
-    const lines: string[] = [`📋 ${period.label} — ${itemName}（${ents.length} 筆）\n`];
+    const lines: string[] = [`${period.label} — ${itemName}（${ents.length} 筆）\n`];
 
     // 按廠商分組
     type V = { count: number; amount: number; totalKg: number; entries: { qty: number; unit: string }[] };
@@ -957,11 +957,11 @@ export async function queryByItemMonth(
     if (totalKg > 0) {
         const ppk = total / totalKg;
         const ppt = ppk * KG_PER_TAIJIN;
-        lines.push(`📦 總量：${totalKg.toFixed(2)}kg`);
-        lines.push(`💰 總額：$${total.toLocaleString()}`);
-        lines.push(`💲 平均單價：$${Math.round(ppt)}/台斤 ｜ $${Math.round(ppk)}/公斤`);
+        lines.push(`總量：${totalKg.toFixed(2)}kg`);
+        lines.push(`總額：$${total.toLocaleString()}`);
+        lines.push(`平均單價：$${Math.round(ppt)}/台斤 ｜ $${Math.round(ppk)}/公斤`);
     } else {
-        lines.push(`💰 總額：$${total.toLocaleString()}`);
+        lines.push(`總額：$${total.toLocaleString()}`);
     }
 
     return lines.join('\n');
@@ -1003,7 +1003,7 @@ export async function queryRanking(
     session: SessionData,
     _ctx: DbContext,
 ): Promise<string> {
-    const lines: string[] = [`🏆 ${period.label} ${target === 'vendor' ? '廠商' : target === 'item' ? '品項' : '地點'} TOP ${topN}\n`];
+    const lines: string[] = [`${period.label} ${target === 'vendor' ? '廠商' : target === 'item' ? '品項' : '地點'} TOP ${topN}\n`];
 
     if (target === 'location') {
         const revs = await prisma.revenue.findMany({
@@ -1018,7 +1018,7 @@ export async function queryRanking(
             byLoc.set(n, cur);
         }
         const sorted = Array.from(byLoc.entries()).sort((a, b) => b[1].amount - a[1].amount).slice(0, topN);
-        if (sorted.length === 0) return `🏆 ${period.label} 無營業額記錄`;
+        if (sorted.length === 0) return `${period.label} 無營業額記錄`;
         sorted.forEach(([n, d], i) => {
             lines.push(`  ${i + 1}. ${n} — $${d.amount.toLocaleString()}（${d.count} 筆）`);
         });
@@ -1035,7 +1035,7 @@ export async function queryRanking(
             byVendor.set(n, cur);
         }
         const sorted = Array.from(byVendor.entries()).sort((a, b) => b[1].amount - a[1].amount).slice(0, topN);
-        if (sorted.length === 0) return `🏆 ${period.label} 無進貨記錄`;
+        if (sorted.length === 0) return `${period.label} 無進貨記錄`;
         sorted.forEach(([n, d], i) => {
             lines.push(`  ${i + 1}. ${n} — $${d.amount.toLocaleString()}（${d.count} 筆）`);
         });
@@ -1053,7 +1053,7 @@ export async function queryRanking(
             byItem.set(n, cur);
         }
         const sorted = Array.from(byItem.entries()).sort((a, b) => b[1].amount - a[1].amount).slice(0, topN);
-        if (sorted.length === 0) return `🏆 ${period.label} 無進貨記錄`;
+        if (sorted.length === 0) return `${period.label} 無進貨記錄`;
         sorted.forEach(([n, d], i) => {
             const kgStr = d.kg > 0 ? `，${d.kg.toFixed(1)}kg` : '';
             lines.push(`  ${i + 1}. ${n} — $${d.amount.toLocaleString()}（${d.count} 筆${kgStr}）`);
@@ -1150,10 +1150,10 @@ export async function queryByExpenseTypeMonth(
     });
 
     if (ents.length === 0) {
-        return `💸 ${period.label} ${expenseTypeLabel}：無支出記錄`;
+        return `${period.label} ${expenseTypeLabel}：無支出記錄`;
     }
 
-    const lines: string[] = [`💸 ${period.label} — ${expenseTypeLabel}（${ents.length} 筆）\n`];
+    const lines: string[] = [`${period.label} — ${expenseTypeLabel}（${ents.length} 筆）\n`];
     let total = 0;
     for (const e of ents) {
         const d = e.date;
@@ -1163,7 +1163,7 @@ export async function queryByExpenseTypeMonth(
         total += e.totalPrice;
     }
     lines.push('---');
-    lines.push(`📍 總計：$${total.toLocaleString()}`);
+    lines.push(`總計：$${total.toLocaleString()}`);
     return lines.join('\n');
 }
 
@@ -1236,10 +1236,10 @@ export async function queryByNote(
     );
 
     if (filtered.length === 0) {
-        return `💸 ${period.label} ${expenseTypeLabel} 備註含「${notePattern}」：無記錄`;
+        return `${period.label} ${expenseTypeLabel} 備註含「${notePattern}」：無記錄`;
     }
 
-    const lines: string[] = [`💸 ${period.label} — ${expenseTypeLabel}（備註：${notePattern}）（${filtered.length} 筆）\n`];
+    const lines: string[] = [`${period.label} — ${expenseTypeLabel}（備註：${notePattern}）（${filtered.length} 筆）\n`];
     let total = 0;
     for (const e of filtered) {
         const d = e.date;
@@ -1248,7 +1248,7 @@ export async function queryByNote(
         total += e.totalPrice;
     }
     lines.push('---');
-    lines.push(`📍 總計：$${total.toLocaleString()}`);
+    lines.push(`總計：$${total.toLocaleString()}`);
     return lines.join('\n');
 }
 
@@ -1338,27 +1338,27 @@ export async function queryComparison(
         if (prev === 0) return cur === 0 ? '—' : `(新增)`;
         const diff = cur - prev;
         const pct = (diff / prev) * 100;
-        const arrow = diff > 0 ? '📈' : diff < 0 ? '📉' : '➡️';
+        const arrow = diff > 0 ? '↑' : diff < 0 ? '↓' : '→';
         return `${arrow} ${diff >= 0 ? '+' : ''}$${diff.toLocaleString()}（${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%）`;
     };
 
-    const lines: string[] = [`🔄 ${p1.label} vs ${p2.label}\n`];
-    lines.push(`💰 營業額`);
+    const lines: string[] = [`${p1.label} vs ${p2.label}\n`];
+    lines.push(`營業額`);
     lines.push(`  ${p1.label}：$${t1.rev.toLocaleString()}`);
     lines.push(`  ${p2.label}：$${t2.rev.toLocaleString()}`);
     lines.push(`  ${fmt(t1.rev, t2.rev)}`);
     lines.push('');
-    lines.push(`📦 進貨`);
+    lines.push(`進貨`);
     lines.push(`  ${p1.label}：$${t1.pur.toLocaleString()}`);
     lines.push(`  ${p2.label}：$${t2.pur.toLocaleString()}`);
     lines.push(`  ${fmt(t1.pur, t2.pur)}`);
     lines.push('');
-    lines.push(`💸 支出`);
+    lines.push(`支出`);
     lines.push(`  ${p1.label}：$${t1.exp.toLocaleString()}`);
     lines.push(`  ${p2.label}：$${t2.exp.toLocaleString()}`);
     lines.push(`  ${fmt(t1.exp, t2.exp)}`);
     lines.push('');
-    lines.push(`💵 淨利`);
+    lines.push(`淨利`);
     lines.push(`  ${p1.label}：$${t1.profit.toLocaleString()}`);
     lines.push(`  ${p2.label}：$${t2.profit.toLocaleString()}`);
     lines.push(`  ${fmt(t1.profit, t2.profit)}`);

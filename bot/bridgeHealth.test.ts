@@ -121,7 +121,7 @@ test("buildAlertMessage: testPrefix is prepended when provided", () => {
 
 test("buildAlertMessage: no prefix when omitted", () => {
     const msg = buildAlertMessage("timeout>3000ms");
-    assert.ok(msg.startsWith("⚠️"), `expected message to start with warning emoji, got: ${msg.slice(0, 40)}`);
+    assert.ok(msg.startsWith("【注意】"), `expected message to start with the warning marker, got: ${msg.slice(0, 40)}`);
 });
 
 // ── runStartupBridgeHealthCheck orchestration (fully mocked deps) ──────────────

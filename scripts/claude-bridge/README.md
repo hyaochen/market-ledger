@@ -122,7 +122,7 @@ process 層級的 `alreadyAlertedThisProcess` flag 防重複告警（純防禦�
 `User.isSuperAdmin === true` 的那一筆，用它的 key 尾碼（= Telegram 私聊時的 chat id）當收件人。
 **沒有寫死 chat id，也沒有讀 `.env`**——完全沿用 bot 既有的登入機制。
 
-🔴 **已知落地缺口（2026-08-07 實測發現）**：目前 DB 裡 `isSuperAdmin=true` 的帳號（`chen` /
+[重要] **已知落地缺口（2026-08-07 實測發現）**：目前 DB 裡 `isSuperAdmin=true` 的帳號（`chen` /
 `superadmin`）**從來沒有透過 Telegram 登入過這個 bot**——只有 `mom` 這個非 admin 帳號在用。
 也就是說現在告警機制程式碼正確、也真的跑過（見下方驗證記錄），但**目前沒有地方可以送**：
 `findOwnerChatId()` 會正確回傳 `null`，log 一行警告，bot 正常繼續 polling，不會壞掉，但 owner
@@ -141,7 +141,7 @@ process 層級的 `alreadyAlertedThisProcess` flag 防重複告警（純防禦�
 | `CLAUDE_BRIDGE_TIMEOUT_MS` | `25000` | 單一請求的總預算（排隊等待 + 執行時間）。刻意小於 `parser.ts` 呼叫端的 30s fetch timeout，讓 bridge 有機會先回一個乾淨的錯誤 JSON |
 | `CLAUDE_BRIDGE_BIN` | 自動偵測 | 手動指定 claude 執行檔路徑（遇到自動偵測失敗時用，見下方踩坑記錄）|
 
-🔴 **`CLAUDE_BRIDGE_BIND`（或任何形式的「讓它聽 0.0.0.0」）刻意沒有實作** —— bind 寫死在程式碼裡
+[重要] **`CLAUDE_BRIDGE_BIND`（或任何形式的「讓它聽 0.0.0.0」）刻意沒有實作** —— bind 寫死在程式碼裡
 是 `127.0.0.1`，不接受環境變數覆寫。見下方「為什麼一定要 127.0.0.1」。
 
 ---
@@ -217,7 +217,7 @@ work normally**」——它只清系統提示（CLAUDE.md/skills/plugins/hooks/a
 修法是雙層擋：既有的 `'--tools', ''`（空白名單，經驗證單獨就能完全擋住）+ 新加的
 `--disallowed-tools`（明確黑名單，防未來版本新增預設開的工具繞過空白名單）。
 
-🔴 **Windows 專屬踩坑**：一開始用通用 Unix 清單
+[重要] **Windows 專屬踩坑**：一開始用通用 Unix 清單
 `Read Grep Glob Bash Task WebFetch WebSearch Edit Write NotebookEdit` 測，**完全沒擋住**——
 用 `--output-format stream-json --verbose` 攤開實際呼叫的工具才發現，這台機器的 claude CLI 把
 **`PowerShell`** 列成跟 `Bash` 平行的獨立工具（不是同一個），claude 直接改用 `PowerShell`

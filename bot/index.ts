@@ -54,7 +54,7 @@ function logLine(tag: string, chatId: number | string, msg: string) {
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 if (!TOKEN) {
-    console.error('❌ TELEGRAM_BOT_TOKEN 未設定，請檢查 .env');
+    console.error('TELEGRAM_BOT_TOKEN 未設定，請檢查 .env');
     process.exit(1);
 }
 
@@ -72,7 +72,7 @@ const bot = new TelegramBot(TOKEN, {
     },
 });
 
-console.log('🤖 Bot 啟動中...');
+console.log('Bot 啟動中...');
 
 (async () => {
     await preloadStates();
@@ -84,82 +84,82 @@ console.log('🤖 Bot 啟動中...');
         sendAlert: async (chatId, text) => { await bot.sendMessage(chatId, text); },
     });
     await bot.startPolling();
-    console.log('🤖 Bot polling started');
+    console.log('Bot polling started');
 })().catch((err) => {
     console.error('[bot] startup failed:', err);
     process.exit(1);
 });
 
 // ── 幫助文字 ────────────────────────────────────────────────────
-const HELP_TEXT = `📖 *使用說明*
+const HELP_TEXT = `*使用說明*
 
-*🔑 登入*：
+*登入*：
 • \`mom mom123\`  或  \`mom/mom123\`
 
-*🛒 進貨記錄*（可多行一次輸入）：
+*進貨記錄*（可多行一次輸入）：
 • \`肝連2.6台斤218\`
 • \`全頭皮3個360廠商海豐\`
 • \`高麗菜180台斤1500\`
 • \`3/3 舌頭1.7台斤171\`
 
-*💸 支出記錄*：
+*支出記錄*：
 • \`薪資1300備註阿秀\`
 • \`清潔費220備註潮州\`
 
-*💰 營業額*：
+*營業額*：
 • \`潮州1萬\`  或  \`潮州攤位10000\`
 • \`屏東2萬 潮州1.5萬\`
 
-*💤 休假日*（金額自動記 0、不列入日均）：
+*休假日*（金額自動記 0、不列入日均）：
 • \`潮州休假\`  \`屏東今天休假\`
 • \`潮州 5/23 休假\`  \`屏東 3月17日 公休\`
 
-*📊 查詢*：
+*查詢*：
 
 _懶得打字就傳 /menu，常用查詢都做成按鈕了_
 
-_📅 指定日期 / 最近_：
+_指定日期 / 最近_：
 • \`今天\`  \`昨天\`  \`最近\`
 • \`今天記了什麼\`  \`3/3 記錄\`
 
-_🏪 廠商月份_：
+_廠商月份_：
 • \`4月 阿明\`  \`查阿明4月\`
 • \`阿明 4月叫了什麼\`
 
-_📅➡️📅 範圍 + 地點_：
+_範圍 + 地點_：
 • \`3月1號到3月31號屏東的總營收\`
 • \`4/1到4/8 萬丹進貨\`
 
-_📊 整月 / 年度（新）_：
+_整月 / 年度（新）_：
 • \`本月\`  \`上月\`  \`今年\`  \`去年\`
 • \`本月總營收\`  \`3月進貨\`
 • \`2026年總收入\`  \`上月支出\`
 
-_🍖 品項月份（新）_：
+_品項月份（新）_：
 • \`本月豬肉\`  \`3月豬腳肉\`
 • \`查 雞蛋 4月\`
 
-_💸 支出類型月份（新）_：
+_支出類型月份（新）_：
 • \`3月薪資\`  \`本月租金\`
 • \`3月份薪資支出了多少\`
 • \`上月瓦斯費用\`
 
-_📝 備註查詢（新）_：
+_備註查詢（新）_：
 • \`3月份薪資備註小惠多少\`
 • \`本月租金備註潮州\`
 • \`上月薪資備註阿秀累積總共多少\`
 
-_🏆 排行 TOP（新）_：
+_排行 TOP（新）_：
 • \`本月TOP5廠商\`  \`本月最大廠商\`
 • \`本月熱賣品項\`  \`3月攤位排行\`
 • \`4月最熱賣商品TOP3\`
 
-_🔄 同比 / 環比（新）_：
+_同比 / 環比（新）_：
 • \`本月跟上月比\`  \`環比\`
 • \`3月對比2月\`  \`4月跟3月比\`
 • \`同比\` — 本月 vs 去年同月
 
-*🔧 指令*：
+*指令*：
 • /menu — **按鈕選單**（不用記指令，點就好）
 • /today — 今天記錄
 • /mute — 切換靜音模式（品項已知直接記錄，不詢問廠商）
@@ -174,15 +174,15 @@ const COMMAND_TEXTS = new Set(['/start', '/help', '/logout', '/menu', '/查詢',
 // ── 確認鍵盤 ────────────────────────────────────────────────────
 const CONFIRM_KEYBOARD = (_action: 'yes' | 'no', idx: number) => ({
     inline_keyboard: [[
-        { text: '✅ 是，正確', callback_data: `confirm_yes_${idx}` },
-        { text: '❌ 不是，跳過', callback_data: `confirm_no_${idx}` },
+        { text: '是，正確', callback_data: `confirm_yes_${idx}` },
+        { text: '不是，跳過', callback_data: `confirm_no_${idx}` },
     ]],
 });
 
 const NEW_ITEM_KEYBOARD = {
     inline_keyboard: [[
-        { text: '✅ 是，新增', callback_data: 'new_item_yes' },
-        { text: '❌ 否，略過', callback_data: 'new_item_no' },
+        { text: '是，新增', callback_data: 'new_item_yes' },
+        { text: '否，略過', callback_data: 'new_item_no' },
     ]],
 };
 
@@ -195,8 +195,8 @@ function buildExpenseTypeKeyboard(expenseTypes: { value: string; label: string }
             callback_data: `expense_type_select_${et.value}`,
         })));
     }
-    rows.push([{ text: '➕ 新增支出類型', callback_data: 'new_expense_create' }]);
-    rows.push([{ text: '❌ 略過', callback_data: 'new_item_no' }]);
+    rows.push([{ text: '新增支出類型', callback_data: 'new_expense_create' }]);
+    rows.push([{ text: '略過', callback_data: 'new_item_no' }]);
     return { inline_keyboard: rows };
 }
 
@@ -204,10 +204,10 @@ function buildExpenseTypeKeyboard(expenseTypes: { value: string; label: string }
 const UNKNOWN_ITEM_KEYBOARD = {
     inline_keyboard: [
         [
-            { text: '🛒 新增為進貨品項', callback_data: 'new_purchase_create' },
-            { text: '💸 新增為支出費用', callback_data: 'new_expense_create' },
+            { text: '新增為進貨品項', callback_data: 'new_purchase_create' },
+            { text: '新增為支出費用', callback_data: 'new_expense_create' },
         ],
-        [{ text: '❌ 略過', callback_data: 'new_item_no' }],
+        [{ text: '略過', callback_data: 'new_item_no' }],
     ],
 };
 
@@ -217,7 +217,7 @@ async function sendUncertainPrompt(chatId: number, entry: ParsedEntry, idx: numb
     const reason = entry.uncertainReason ? `\n（${entry.uncertainReason}）` : '';
     await bot.sendMessage(
         chatId,
-        `⚠️ 請確認：\n「${entry.rawInput}」\n→ *${displayText}*${reason}\n\n這樣記錄正確嗎？`,
+        `【注意】請確認：\n「${entry.rawInput}」\n→ *${displayText}*${reason}\n\n這樣記錄正確嗎？`,
         {
             parse_mode: 'Markdown',
             reply_markup: CONFIRM_KEYBOARD('yes', idx),
@@ -226,7 +226,7 @@ async function sendUncertainPrompt(chatId: number, entry: ParsedEntry, idx: numb
 }
 
 // ── 建立廠商選擇鍵盤 ─────────────────────────────────────────
-// allowCreate=true：加入「➕ 新增廠商」按鈕（新建品項後使用）
+// allowCreate=true：加入「新增廠商」按鈕（新建品項後使用）
 function buildVendorKeyboard(vendors: { id: string; name: string }[], allowCreate = false) {
     const rows: { text: string; callback_data: string }[][] = [];
     for (let i = 0; i < vendors.length; i += 2) {
@@ -236,9 +236,9 @@ function buildVendorKeyboard(vendors: { id: string; name: string }[], allowCreat
         })));
     }
     if (allowCreate) {
-        rows.push([{ text: '➕ 新增廠商', callback_data: 'vendor_create_prompt' }]);
+        rows.push([{ text: '新增廠商', callback_data: 'vendor_create_prompt' }]);
     }
-    rows.push([{ text: '⬜ 不填廠商', callback_data: 'vendor_skip' }]);
+    rows.push([{ text: '不填廠商', callback_data: 'vendor_skip' }]);
     return { inline_keyboard: rows };
 }
 
@@ -251,8 +251,8 @@ function buildItemKeyboard(items: { id: string; name: string }[]) {
             callback_data: `item_select_${item.id}`,
         })));
     }
-    rows.push([{ text: '➕ 新增品項', callback_data: 'new_purchase_create' }]);
-    rows.push([{ text: '❌ 略過', callback_data: 'new_item_no' }]);
+    rows.push([{ text: '新增品項', callback_data: 'new_purchase_create' }]);
+    rows.push([{ text: '略過', callback_data: 'new_item_no' }]);
     return { inline_keyboard: rows };
 }
 
@@ -266,7 +266,7 @@ function buildCategoryKeyboard(categories: { id: string; name: string }[]) {
             callback_data: `cat_select_${c.id}`,
         })));
     }
-    rows.push([{ text: '❌ 取消', callback_data: 'new_item_no' }]);
+    rows.push([{ text: '取消', callback_data: 'new_item_no' }]);
     return { inline_keyboard: rows };
 }
 
@@ -372,8 +372,8 @@ async function handleAcceptedEntry(
             `「${accepted.vendorName}」不在廠商清單中，要新增嗎？`,
             {
                 reply_markup: { inline_keyboard: [[
-                    { text: '✅ 新增廠商', callback_data: 'vendor_create' },
-                    { text: '⬜ 不填廠商', callback_data: 'vendor_skip' },
+                    { text: '新增廠商', callback_data: 'vendor_create' },
+                    { text: '不填廠商', callback_data: 'vendor_skip' },
                 ]] },
             },
         );
@@ -452,35 +452,35 @@ type Btn = { text: string; callback_data: string };
 const CB_LIMIT = 64;
 function cbOk(cb: string): boolean { return Buffer.byteLength(cb, 'utf8') <= CB_LIMIT; }
 
-const MENU_ROOT_TEXT = '📊 *想查什麼？*\n_也可以直接打字，例如「8月薪水」「8月每天營業額」_';
+const MENU_ROOT_TEXT = '*想查什麼？*\n_也可以直接打字，例如「8月薪水」「8月每天營業額」_';
 
 function buildRootMenu() {
     return {
         inline_keyboard: [
             [
-                { text: '📅 今天記了什麼', callback_data: 'q:r:entries:d0:none' },
-                { text: '📅 昨天記了什麼', callback_data: 'q:r:entries:d1:none' },
+                { text: '今天記了什麼', callback_data: 'q:r:entries:d0:none' },
+                { text: '昨天記了什麼', callback_data: 'q:r:entries:d1:none' },
             ],
-            [{ text: '📆 挑日期…', callback_data: 'q:pd' }],
+            [{ text: '挑日期…', callback_data: 'q:pd' }],
             [
-                { text: '💵 本月薪資·依人', callback_data: 'q:sal:m0' },
-                { text: '💸 本月支出', callback_data: 'q:r:expense:m0:expenseType' },
+                { text: '本月薪資·依人', callback_data: 'q:sal:m0' },
+                { text: '本月支出', callback_data: 'q:r:expense:m0:expenseType' },
             ],
             [
-                { text: '💰 本月每日營業額', callback_data: 'q:r:revenue:m0:day' },
-                { text: '🛒 本月進貨', callback_data: 'q:r:purchase:m0:vendor' },
+                { text: '本月每日營業額', callback_data: 'q:r:revenue:m0:day' },
+                { text: '本月進貨', callback_data: 'q:r:purchase:m0:vendor' },
             ],
-            [{ text: '🔧 進階查詢（自己組合）', callback_data: 'q:s1' }],
+            [{ text: '進階查詢（自己組合）', callback_data: 'q:s1' }],
         ],
     };
 }
 
 const METRIC_BTNS: Btn[] = [
-    { text: '💰 營業額', callback_data: 'q:m:revenue' },
-    { text: '🛒 進貨', callback_data: 'q:m:purchase' },
-    { text: '💸 支出', callback_data: 'q:m:expense' },
-    { text: '📈 淨利', callback_data: 'q:m:profit' },
-    { text: '📋 全部記錄', callback_data: 'q:m:entries' },
+    { text: '營業額', callback_data: 'q:m:revenue' },
+    { text: '進貨', callback_data: 'q:m:purchase' },
+    { text: '支出', callback_data: 'q:m:expense' },
+    { text: '淨利', callback_data: 'q:m:profit' },
+    { text: '全部記錄', callback_data: 'q:m:entries' },
 ];
 
 function buildMetricMenu() {
@@ -489,7 +489,7 @@ function buildMetricMenu() {
             [METRIC_BTNS[0], METRIC_BTNS[1]],
             [METRIC_BTNS[2], METRIC_BTNS[3]],
             [METRIC_BTNS[4]],
-            [{ text: '🏠 選單', callback_data: 'q:root' }],
+            [{ text: '選單', callback_data: 'q:root' }],
         ],
     };
 }
@@ -504,10 +504,10 @@ function buildPeriodMenu(metric: Metric) {
     for (let i = 0; i < PERIOD_BTNS.length; i += 4) {
         rows.push(PERIOD_BTNS.slice(i, i + 4).map(([t, c]) => ({ text: t, callback_data: `q:p:${metric}:${c}` })));
     }
-    rows.push([{ text: '📅 挑月份…', callback_data: `q:pm:${metric}` }]);
+    rows.push([{ text: '挑月份…', callback_data: `q:pm:${metric}` }]);
     rows.push([
-        { text: '⬅️ 換指標', callback_data: 'q:s1' },
-        { text: '🏠 選單', callback_data: 'q:root' },
+        { text: '換指標', callback_data: 'q:s1' },
+        { text: '選單', callback_data: 'q:root' },
     ]);
     return { inline_keyboard: rows };
 }
@@ -519,7 +519,7 @@ function buildPickMonthMenu(metric: Metric) {
         btns.push({ text: periodFromOffset(off).label.replace(/^\d{4}年/, ''), callback_data: `q:p:${metric}:m${off}` });
     }
     rows.push(btns.slice(0, 3), btns.slice(3, 6));
-    rows.push([{ text: '⬅️ 返回', callback_data: `q:m:${metric}` }, { text: '🏠 選單', callback_data: 'q:root' }]);
+    rows.push([{ text: '返回', callback_data: `q:m:${metric}` }, { text: '選單', callback_data: 'q:root' }]);
     return { inline_keyboard: rows };
 }
 
@@ -532,7 +532,7 @@ function buildPickDateMenu() {
         btns.push({ text: label, callback_data: `q:r:entries:d${off}:none` });
     }
     rows.push(btns.slice(0, 3), btns.slice(3, 7));
-    rows.push([{ text: '🏠 選單', callback_data: 'q:root' }]);
+    rows.push([{ text: '選單', callback_data: 'q:root' }]);
     return { inline_keyboard: rows };
 }
 
@@ -552,9 +552,9 @@ function buildGroupByKeyboard(metric: Metric, pcode: string, active?: string) {
     }
     for (let i = 0; i < btns.length; i += 3) rows.push(btns.slice(i, i + 3));
     rows.push([
-        { text: '⬅️ 換期間', callback_data: `q:m:${metric}` },
-        { text: '🔧 換指標', callback_data: 'q:s1' },
-        { text: '🏠 選單', callback_data: 'q:root' },
+        { text: '換期間', callback_data: `q:m:${metric}` },
+        { text: '換指標', callback_data: 'q:s1' },
+        { text: '選單', callback_data: 'q:root' },
     ]);
     return { inline_keyboard: rows };
 }
@@ -565,7 +565,7 @@ function buildDayResultKeyboard(activeOff: number) {
     return {
         inline_keyboard: [
             [mk(0, '今天'), mk(1, '昨天'), mk(2, '前天')],
-            [{ text: '📆 挑日期…', callback_data: 'q:pd' }, { text: '🏠 選單', callback_data: 'q:root' }],
+            [{ text: '挑日期…', callback_data: 'q:pd' }, { text: '選單', callback_data: 'q:root' }],
         ],
     };
 }
@@ -629,8 +629,8 @@ function logQueryBranch(
 // ── 意圖釐清鍵盤（有日期但看不出是查詢還是記帳時使用）────────────
 const INTENT_CLARIFY_KEYBOARD = {
     inline_keyboard: [[
-        { text: '🔍 查詢', callback_data: 'intent_query' },
-        { text: '📝 記帳', callback_data: 'intent_entry' },
+        { text: '查詢', callback_data: 'intent_query' },
+        { text: '記帳', callback_data: 'intent_entry' },
     ]],
 };
 
@@ -650,7 +650,7 @@ async function runDateQuery(
         result = await queryByDate(dateResult, session, ctx);
     } else {
         // classifyQueryIntent 判為查詢但這裡拿不到日期（理論上不會發生）
-        result = '❓ 看不出你要查哪一天，可以說「今天」「昨天」或「8/29」。';
+        result = '看不出你要查哪一天，可以說「今天」「昨天」或「8/29」。';
     }
     await bot.sendMessage(chatId, result);
     logQueryBranch(chatId, messageId, telegramUserId, session.tenantId, text, 'dateQuery', dateResult ? result : '');
@@ -664,7 +664,7 @@ async function runNlQuery(
     messageId?: number, telegramUserId?: number,
 ): Promise<void> {
     logLine('NLQ', chatId, text.slice(0, 120));
-    await bot.sendMessage(chatId, '🧠 理解中…');
+    await bot.sendMessage(chatId, '理解中…');
     const diag = newParseDiagnostics();
     const t = await translateQuestion(text, ctx, diag);
 
@@ -680,10 +680,10 @@ async function runNlQuery(
         void logIncoming({ ...logBase, outcome: 'query_fail', parsed: { reason: t.reason } });
         return;
     }
-    const fallbackNote = t.provider === 'ollama' ? '\n⚠️ 備援模型解讀，請核對' : '';
+    const fallbackNote = t.provider === 'ollama' ? '\n【注意】備援模型解讀，請核對' : '';
     if (t.kind === 'clarify') {
         logLine('NLQ', chatId, `clarify: ${t.question}`);
-        await bot.sendMessage(chatId, `🤔 ${t.question}${fallbackNote}`, { reply_markup: buildRootMenu() });
+        await bot.sendMessage(chatId, `${t.question}${fallbackNote}`, { reply_markup: buildRootMenu() });
         void logIncoming({ ...logBase, llmProvider: t.provider, outcome: 'query_fail', parsed: { clarifyQuestion: t.question } });
         return;
     }
@@ -693,15 +693,15 @@ async function runNlQuery(
         result = await runQuery(t.spec, session, ctx);
     } catch (e) {
         console.error('[NLQ] runQuery error', e);
-        await bot.sendMessage(chatId, '⚠️ 查詢時發生錯誤，請再試一次。', { reply_markup: buildRootMenu() });
+        await bot.sendMessage(chatId, '【注意】查詢時發生錯誤，請再試一次。', { reply_markup: buildRootMenu() });
         void logIncoming({
             ...logBase, llmProvider: t.provider, outcome: 'query_fail',
             parsed: { spec: t.spec, restate: t.restate }, final: { error: String(e) },
         });
         return;
     }
-    await bot.sendMessage(chatId, `🧠 我理解成：${t.restate}${fallbackNote}\n\n${result}`, {
-        reply_markup: { inline_keyboard: [[{ text: '🏠 選單', callback_data: 'q:root' }]] },
+    await bot.sendMessage(chatId, `我理解成：${t.restate}${fallbackNote}\n\n${result}`, {
+        reply_markup: { inline_keyboard: [[{ text: '選單', callback_data: 'q:root' }]] },
     });
     void logIncoming({
         ...logBase, llmProvider: t.provider, outcome: 'query_ok',
@@ -734,7 +734,7 @@ async function runEntryParse(
     messageId?: number, telegramUserId?: number,
 ): Promise<void> {
     logLine('PARSE', chatId, text.slice(0, 120));
-    await bot.sendMessage(chatId, '🔄 解析中，請稍候...');
+    await bot.sendMessage(chatId, '解析中，請稍候...');
 
     const ctx = preloaded ?? await loadDbContext(session.tenantId);
     const diag = newParseDiagnostics();
@@ -748,7 +748,7 @@ async function runEntryParse(
             route: 'unparsed', llmProvider: diag.usedFallback ? 'ollama' : 'claude', outcome: 'ignored',
         });
         await bot.sendMessage(chatId,
-            '❓ 無法解析輸入內容。\n\n請確認格式，例如：\n`肝連2.6台斤218`\n\n或傳 /help 查看說明',
+            '無法解析輸入內容。\n\n請確認格式，例如：\n`肝連2.6台斤218`\n\n或傳 /help 查看說明',
             { parse_mode: 'Markdown' });
         return;
     }
@@ -783,10 +783,10 @@ async function runEntryParse(
             ...e,
             confident: false,
             uncertainReason: e.uncertainReason
-                ? `${e.uncertainReason}；⚠️ 備援模型解析，請確認`
-                : '⚠️ 主要模型逾時，改用備援模型解析，請確認內容正確',
+                ? `${e.uncertainReason}；【注意】備援模型解析，請確認`
+                : '【注意】主要模型逾時，改用備援模型解析，請確認內容正確',
         }));
-        await bot.sendMessage(chatId, '⚠️ 主要解析模型逾時，這批改用備援模型，請逐筆確認再存。');
+        await bot.sendMessage(chatId, '【注意】主要解析模型逾時，這批改用備援模型，請逐筆確認再存。');
     }
 
     const { confident, uncertain } = startConfirmation(chatId, enriched);
@@ -840,9 +840,9 @@ bot.on('message', async (msg) => {
         const session = await getSession(telegramId);
         if (session) {
             await bot.sendMessage(chatId,
-                `👋 你好，${session.realName || session.username}！已登入（${session.tenantName}）\n\n直接輸入記帳內容開始記錄。\n查資料就傳 /menu（按鈕選單），或 /help 看完整說明。`);
+                `你好，${session.realName || session.username}！已登入（${session.tenantName}）\n\n直接輸入記帳內容開始記錄。\n查資料就傳 /menu（按鈕選單），或 /help 看完整說明。`);
         } else {
-            await bot.sendMessage(chatId, '👋 歡迎！請先登入。\n格式：`帳號 密碼`\n例如：`mom mom123`', { parse_mode: 'Markdown' });
+            await bot.sendMessage(chatId, '歡迎！請先登入。\n格式：`帳號 密碼`\n例如：`mom mom123`', { parse_mode: 'Markdown' });
             setState(chatId, { phase: 'awaiting_auth', session: null });
         }
         return;
@@ -857,7 +857,7 @@ bot.on('message', async (msg) => {
         await clearSession(telegramId);
         setSession(chatId, null);
         resetToIdle(chatId);
-        await bot.sendMessage(chatId, '👋 已登出。');
+        await bot.sendMessage(chatId, '已登出。');
         return;
     }
 
@@ -880,8 +880,8 @@ bot.on('message', async (msg) => {
         setState(chatId, { muteMode: !current });
         await bot.sendMessage(chatId,
             !current
-                ? '🔇 靜音模式已開啟\n品項已知時直接記錄，不再詢問廠商或二次確認。\n再傳 /mute 可關閉。'
-                : '🔔 靜音模式已關閉\n恢復正常確認流程。',
+                ? '靜音模式已開啟\n品項已知時直接記錄，不再詢問廠商或二次確認。\n再傳 /mute 可關閉。'
+                : '靜音模式已關閉\n恢復正常確認流程。',
         );
         return;
     }
@@ -921,7 +921,7 @@ bot.on('message', async (msg) => {
             if (worthReplaying) {
                 setState(chatId, { phase: 'awaiting_auth', pendingReplayText: text });
                 await bot.sendMessage(chatId,
-                    '🔑 登入已過期，請先登入。\n格式：`帳號 密碼`\n例如：`mom mom123`\n\n_登入後我會自動幫你送出剛才那則，不用重打。_',
+                    '登入已過期，請先登入。\n格式：`帳號 密碼`\n例如：`mom mom123`\n\n_登入後我會自動幫你送出剛才那則，不用重打。_',
                     { parse_mode: 'Markdown' });
             } else {
                 setState(chatId, { phase: 'awaiting_auth' });
@@ -930,16 +930,16 @@ bot.on('message', async (msg) => {
             return;
         }
 
-        await bot.sendMessage(chatId, '🔄 驗證中...');
+        await bot.sendMessage(chatId, '驗證中...');
         const newSession = await verifyLogin(credentials.username, credentials.password);
 
         if (!newSession) {
-            await bot.sendMessage(chatId, '❌ 帳號或密碼錯誤，請再試一次。');
+            await bot.sendMessage(chatId, '帳號或密碼錯誤，請再試一次。');
             return;
         }
 
         if (newSession.roleCode === 'read') {
-            await bot.sendMessage(chatId, '❌ 此帳號為唯讀權限，無法新增記錄。');
+            await bot.sendMessage(chatId, '此帳號為唯讀權限，無法新增記錄。');
             return;
         }
 
@@ -951,14 +951,14 @@ bot.on('message', async (msg) => {
         setState(chatId, { phase: 'idle', pendingReplayText: null });
 
         await bot.sendMessage(chatId,
-            `✅ 登入成功，歡迎 ${newSession.realName || newSession.username}！\n帳戶：${newSession.tenantName}（${newSession.roleCode === 'admin' ? '管理員' : '一般'}）\n登入有效期 90 天。\n\n直接輸入記帳內容開始記錄。\n查資料就傳 /menu 叫出按鈕選單。`);
+            `登入成功，歡迎 ${newSession.realName || newSession.username}！\n帳戶：${newSession.tenantName}（${newSession.roleCode === 'admin' ? '管理員' : '一般'}）\n登入有效期 90 天。\n\n直接輸入記帳內容開始記錄。\n查資料就傳 /menu 叫出按鈕選單。`);
 
         // 把 session 過期時被擋下的那則訊息補送回自己，使用者不用重打。
         // 用 re-emit 而不是遞迴呼叫：這時 session 已存在，不會再走進上面這個分支，
         // 不會無限迴圈，而且完整重跑一次正常流程（查詢/記帳判斷都照舊）。
         if (replayText) {
             logLine('REPLAY', chatId, replayText.slice(0, 120));
-            await bot.sendMessage(chatId, `↩️ 幫你送出剛才那則：「${replayText}」`);
+            await bot.sendMessage(chatId, `幫你送出剛才那則：「${replayText}」`);
             // node-telegram-bot-api 的型別把 emit 收斂成唯讀事件集合，明確轉型後重新派送
             (bot as unknown as NodeJS.EventEmitter).emit('message', { ...msg, text: replayText });
         }
@@ -1008,17 +1008,17 @@ bot.on('message', async (msg) => {
                 data: { name: vendorName, isActive: true, tenantId: session.tenantId },
             });
             addToConfirmed(chatId, { ...pending.entry, vendorId: vendor.id, vendorName: vendor.name });
-            await bot.sendMessage(chatId, `✅ 已新增廠商「${vendor.name}」。`);
+            await bot.sendMessage(chatId, `已新增廠商「${vendor.name}」。`);
         } catch {
             const existing = await prisma.vendor.findFirst({
                 where: { name: vendorName, tenantId: session.tenantId },
             });
             if (existing) {
                 addToConfirmed(chatId, { ...pending.entry, vendorId: existing.id, vendorName: existing.name });
-                await bot.sendMessage(chatId, `✅ 廠商「${existing.name}」已存在，已使用。`);
+                await bot.sendMessage(chatId, `廠商「${existing.name}」已存在，已使用。`);
             } else {
                 addToConfirmed(chatId, { ...pending.entry, vendorId: null, vendorName: null });
-                await bot.sendMessage(chatId, '❌ 新增廠商失敗，將不記錄廠商。');
+                await bot.sendMessage(chatId, '新增廠商失敗，將不記錄廠商。');
             }
         }
         const next = exitNewItemFlow(chatId);
@@ -1043,7 +1043,7 @@ bot.on('message', async (msg) => {
                 await finalizeEntries(chatId, session);
             }
         } else {
-            await bot.sendMessage(chatId, '請點選上方按鈕選擇品項，或點「❌ 略過」跳過。');
+            await bot.sendMessage(chatId, '請點選上方按鈕選擇品項，或點「略過」跳過。');
         }
         return;
     }
@@ -1073,7 +1073,7 @@ bot.on('message', async (msg) => {
         if (enriched.itemId) {
             // 比對成功
             addToConfirmed(chatId, enriched);
-            await bot.sendMessage(chatId, `✅ 找到「${enriched.itemName}」，已加入待儲存清單。`);
+            await bot.sendMessage(chatId, `找到「${enriched.itemName}」，已加入待儲存清單。`);
             const next = exitNewItemFlow(chatId);
             if (next) {
                 await sendUncertainPrompt(chatId, next, 0, ctx);
@@ -1122,7 +1122,7 @@ bot.on('message', async (msg) => {
                 await finalizeEntries(chatId, session, ctx2);
             }
         } else {
-            await bot.sendMessage(chatId, '請點選上方按鈕選擇分類，或點「❌ 取消」略過。');
+            await bot.sendMessage(chatId, '請點選上方按鈕選擇分類，或點「取消」略過。');
         }
         return;
     }
@@ -1154,7 +1154,7 @@ bot.on('message', async (msg) => {
             return;
         }
         // 非確認詞 → 提示使用按鈕，不重置待確認記錄
-        await bot.sendMessage(chatId, '⚠️ 請點選上方 ✅/❌ 按鈕確認，或輸入「略過」放棄本批記錄。');
+        await bot.sendMessage(chatId, '【注意】請點選上方按鈕確認，或輸入「略過」放棄本批記錄。');
         return;
     }
 
@@ -1285,7 +1285,7 @@ bot.on('message', async (msg) => {
         });
         setState(chatId, { phase: 'awaiting_intent_clarify', pendingClarifyText: text, pendingLogId: clarifyLogId ?? undefined });
         await bot.sendMessage(chatId,
-            `🤔 「${text}」我不確定你是要查詢還是要記帳，請選一個：`,
+            `「${text}」我不確定你是要查詢還是要記帳，請選一個：`,
             { reply_markup: INTENT_CLARIFY_KEYBOARD });
         return;
     }
@@ -1294,7 +1294,7 @@ bot.on('message', async (msg) => {
     // ── handler body end ────────────────────────────────
     } catch (err) {
         console.error('[MessageHandler Error]', err);
-        try { await bot.sendMessage(chatId, '⚠️ 處理時發生錯誤，請重新輸入。'); } catch { /* ignore */ }
+        try { await bot.sendMessage(chatId, '【注意】處理時發生錯誤，請重新輸入。'); } catch { /* ignore */ }
     }
 });
 
@@ -1336,20 +1336,20 @@ bot.on('callback_query', async (query) => {
         };
 
         if (kind === 'root') { await nav(MENU_ROOT_TEXT, buildRootMenu()); return; }
-        if (kind === 's1') { await nav('🔧 *進階查詢* — 第 1 步：查什麼？', buildMetricMenu()); return; }
+        if (kind === 's1') { await nav('*進階查詢* — 第 1 步：查什麼？', buildMetricMenu()); return; }
         if (kind === 'm') {
             const metric = parts[2] as Metric;
-            await nav(`🔧 *${METRIC_LABEL[metric]}* — 第 2 步：哪段時間？`, buildPeriodMenu(metric));
+            await nav(`*${METRIC_LABEL[metric]}* — 第 2 步：哪段時間？`, buildPeriodMenu(metric));
             return;
         }
-        if (kind === 'pm') { await nav('📅 挑月份', buildPickMonthMenu(parts[2] as Metric)); return; }
-        if (kind === 'pd') { await nav('📆 挑日期（近 7 天）', buildPickDateMenu()); return; }
+        if (kind === 'pm') { await nav('挑月份', buildPickMonthMenu(parts[2] as Metric)); return; }
+        if (kind === 'pd') { await nav('挑日期（近 7 天）', buildPickDateMenu()); return; }
         if (kind === 'p') {
             const metric = parts[2] as Metric;
             const pcode = parts[3];
             const period = periodFromCode(pcode);
             if (!period) { await bot.sendMessage(chatId, '期間代碼不對，請重開 /menu。'); return; }
-            await nav(`🔧 *${period.label} · ${METRIC_LABEL[metric]}* — 第 3 步：怎麼看？`, buildGroupByKeyboard(metric, pcode));
+            await nav(`*${period.label} · ${METRIC_LABEL[metric]}* — 第 3 步：怎麼看？`, buildGroupByKeyboard(metric, pcode));
             return;
         }
 
@@ -1413,7 +1413,7 @@ bot.on('callback_query', async (query) => {
             }
         } catch (e) {
             console.error('[Menu v2 error]', data, e);
-            result = '⚠️ 查詢時發生錯誤，請再試一次或改用打字查詢。';
+            result = '【注意】查詢時發生錯誤，請再試一次或改用打字查詢。';
         }
 
         logLine('MENU', chatId, data);
@@ -1453,7 +1453,7 @@ bot.on('callback_query', async (query) => {
             });
             const updatedEntry = { ...pending.entry, vendorId: vendor.id, vendorName: vendor.name };
             addToConfirmed(chatId, updatedEntry);
-            await bot.sendMessage(chatId, `✅ 已新增廠商「${vendor.name}」。`);
+            await bot.sendMessage(chatId, `已新增廠商「${vendor.name}」。`);
         } catch (e) {
             // 若廠商名稱重複，嘗試查找後使用
             const existing = await prisma.vendor.findFirst({
@@ -1461,10 +1461,10 @@ bot.on('callback_query', async (query) => {
             });
             if (existing) {
                 addToConfirmed(chatId, { ...pending.entry, vendorId: existing.id, vendorName: existing.name });
-                await bot.sendMessage(chatId, `✅ 廠商「${existing.name}」已存在，已使用。`);
+                await bot.sendMessage(chatId, `廠商「${existing.name}」已存在，已使用。`);
             } else {
                 addToConfirmed(chatId, pending.entry);
-                await bot.sendMessage(chatId, `❌ 新增廠商失敗，將不記錄廠商：${e}`);
+                await bot.sendMessage(chatId, `新增廠商失敗，將不記錄廠商：${e}`);
             }
         }
         const next = exitNewItemFlow(chatId);
@@ -1480,7 +1480,7 @@ bot.on('callback_query', async (query) => {
         const vendorId = data.replace('vendor_select_', '');
         const vendor = ctx.vendors.find(v => v.id === vendorId);
         addToConfirmed(chatId, { ...pending.entry, vendorId, vendorName: vendor?.name ?? null });
-        await bot.sendMessage(chatId, `✅ 廠商：${vendor?.name ?? vendorId}`);
+        await bot.sendMessage(chatId, `廠商：${vendor?.name ?? vendorId}`);
         const next = exitNewItemFlow(chatId);
         if (next) await sendUncertainPrompt(chatId, next, 0, ctx);
         else await finalizeEntries(chatId, session);
@@ -1506,7 +1506,7 @@ bot.on('callback_query', async (query) => {
         const itemId = data.replace('item_select_', '');
         const item = ctx.items.find(i => i.id === itemId);
         if (!item) {
-            await bot.sendMessage(chatId, '❌ 找不到該品項，請重新選擇。');
+            await bot.sendMessage(chatId, '找不到該品項，請重新選擇。');
             return;
         }
 
@@ -1533,8 +1533,8 @@ bot.on('callback_query', async (query) => {
             await bot.sendMessage(chatId,
                 `「${enriched2.vendorName}」不在廠商清單中，要新增嗎？`,
                 { reply_markup: { inline_keyboard: [[
-                    { text: '✅ 新增廠商', callback_data: 'vendor_create' },
-                    { text: '⬜ 不填廠商', callback_data: 'vendor_skip' },
+                    { text: '新增廠商', callback_data: 'vendor_create' },
+                    { text: '不填廠商', callback_data: 'vendor_skip' },
                 ]] } },
             );
         } else {
@@ -1555,7 +1555,7 @@ bot.on('callback_query', async (query) => {
         const pending = state.newItemPending;
         if (!pending) return;
         if (ctx.categories.length === 0) {
-            await bot.sendMessage(chatId, '❌ 尚無品項分類，請先至後台新增分類。');
+            await bot.sendMessage(chatId, '尚無品項分類，請先至後台新增分類。');
             return;
         }
         setState(chatId, {
@@ -1581,9 +1581,9 @@ bot.on('callback_query', async (query) => {
                 itemId: null,
             };
             addToConfirmed(chatId, updatedEntry);
-            await bot.sendMessage(chatId, `✅ 已新增「${pending.suggestedName}」為支出費用。`);
+            await bot.sendMessage(chatId, `已新增「${pending.suggestedName}」為支出費用。`);
         } catch (e) {
-            await bot.sendMessage(chatId, `❌ 新增失敗：${e}`);
+            await bot.sendMessage(chatId, `新增失敗：${e}`);
         }
         const next = exitNewItemFlow(chatId);
         if (next) {
@@ -1609,7 +1609,7 @@ bot.on('callback_query', async (query) => {
             const category = ctx.categories.find(c => c.id === categoryId);
             const updatedEntry: ParsedEntry = { ...pending.entry, itemId: newItemId, itemName };
 
-            await bot.sendMessage(chatId, `✅ 已新增品項「${itemName}」（分類：${category?.name ?? categoryId}）`);
+            await bot.sendMessage(chatId, `已新增品項「${itemName}」（分類：${category?.name ?? categoryId}）`);
 
             // 新品項建立後詢問廠商（有廠商資料才問）
             if (ctx.vendors.length > 0) {
@@ -1632,7 +1632,7 @@ bot.on('callback_query', async (query) => {
                 }
             }
         } catch (e) {
-            await bot.sendMessage(chatId, `❌ 新增品項失敗：${e}`);
+            await bot.sendMessage(chatId, `新增品項失敗：${e}`);
             const next = exitNewItemFlow(chatId);
             if (next) await sendUncertainPrompt(chatId, next, 0, ctx);
             else await finalizeEntries(chatId, session, ctx);
@@ -1655,7 +1655,7 @@ bot.on('callback_query', async (query) => {
         if (!pending) return;
         const value = data.replace('expense_type_select_', '');
         const et = ctx.expenseTypes.find(e => e.value === value);
-        if (!et) { await bot.sendMessage(chatId, '❌ 找不到該支出類型'); return; }
+        if (!et) { await bot.sendMessage(chatId, '找不到該支出類型'); return; }
 
         // 更新 pending entry（含支出類型），顯示確認訊息讓使用者最終確認
         const finalEntry = { ...pending.entry, expenseType: value };
@@ -1665,13 +1665,13 @@ bot.on('callback_query', async (query) => {
         });
         const display = formatEntry(finalEntry, ctx);
         await bot.sendMessage(chatId,
-            `📋 即將儲存：\n*${display}*\n\n確認儲存嗎？`,
+            `即將儲存：\n*${display}*\n\n確認儲存嗎？`,
             {
                 parse_mode: 'Markdown',
                 reply_markup: { inline_keyboard: [[
-                    { text: '✅ 確認儲存', callback_data: 'expense_save_confirm' },
-                    { text: '↩️ 重選類型', callback_data: 'expense_reselect' },
-                    { text: '❌ 取消', callback_data: 'new_item_no' },
+                    { text: '確認儲存', callback_data: 'expense_save_confirm' },
+                    { text: '重選類型', callback_data: 'expense_reselect' },
+                    { text: '取消', callback_data: 'new_item_no' },
                 ]] },
             },
         );
@@ -1708,9 +1708,9 @@ bot.on('callback_query', async (query) => {
                 const newValue = await createExpenseType(session.tenantId, pending.suggestedName);
                 const updatedEntry: ParsedEntry = { ...pending.entry, expenseType: newValue };
                 addToConfirmed(chatId, updatedEntry);
-                await bot.sendMessage(chatId, `✅ 已新增「${pending.suggestedName}」為支出項目。`);
+                await bot.sendMessage(chatId, `已新增「${pending.suggestedName}」為支出項目。`);
             } catch (e) {
-                await bot.sendMessage(chatId, `❌ 新增失敗：${e}`);
+                await bot.sendMessage(chatId, `新增失敗：${e}`);
             }
         }
 
@@ -1748,7 +1748,7 @@ bot.on('callback_query', async (query) => {
     if (data.startsWith('confirm_yes_')) {
         // Guard: if state was lost (bot restart), inform user
         if (state.phase === 'idle' && !state.currentUncertain) {
-            await bot.sendMessage(chatId, '⚠️ 暫存資料已過期（可能因機器人重啟），請重新輸入一次。');
+            await bot.sendMessage(chatId, '【注意】暫存資料已過期（可能因機器人重啟），請重新輸入一次。');
             return;
         }
         const { accepted, next } = acceptCurrent(chatId);
@@ -1773,7 +1773,7 @@ bot.on('callback_query', async (query) => {
     // ── callback handler body end ───────────────────────
     } catch (err) {
         console.error('[CallbackHandler Error]', err);
-        try { await bot.sendMessage(chatId, '⚠️ 操作失敗，請重試。'); } catch { /* ignore */ }
+        try { await bot.sendMessage(chatId, '【注意】操作失敗，請重試。'); } catch { /* ignore */ }
     }
 });
 
@@ -1791,7 +1791,7 @@ async function finalizeEntries(
 
     if (confirmed.length === 0) {
         void logOutcome(logId, 'rejected');
-        await bot.sendMessage(chatId, '⚠️ 沒有任何記錄被儲存。\n（可能是機器人重新啟動導致暫存資料遺失，請重新輸入一次）');
+        await bot.sendMessage(chatId, '【注意】沒有任何記錄被儲存。\n（可能是機器人重新啟動導致暫存資料遺失，請重新輸入一次）');
         return;
     }
 
@@ -1816,4 +1816,4 @@ process.on('unhandledRejection', (err) => {
     console.error('[Unhandled Rejection]', err);
 });
 
-console.log('✅ Bot 已啟動（polling 模式）');
+console.log('Bot 已啟動（polling 模式）');

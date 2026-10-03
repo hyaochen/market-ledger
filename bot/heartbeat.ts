@@ -1,11 +1,11 @@
 // T-ML-031: liveness heartbeat for the bot container's Docker healthcheck.
 //
-// 🔴 為什麼不能比照 web（T-ML-030 的 /api/health）那樣「打一個 endpoint / 開一個 process
+// [重要] 為什麼不能比照 web（T-ML-030 的 /api/health）那樣「打一個 endpoint / 開一個 process
 // 去查 DB」：主控 2026-08-11 20:00 實測發現，在容器內用 `docker exec` 另開一個
 // node/tsx process 去開同一個 WAL DB，會穩定拿到 `SqliteError 522: disk I/O error`
 // （2/2 重現）；但同一時間 bot 本體長駐 process 用既有連線完全正常服務中（mom 19:50:39
 // 的登入 log 後面沒有跟任何 error）。詳見 vault/projects/market-ledger/bugs-log.md
-// 2026-08-11「🔬 事後追查補充」。
+// 2026-08-11「事後追查補充」。
 //
 // 結論：失效的單位是「連線」不是「容器」。任何 healthcheck 若用新 process/新連線去查
 // DB，會被這個現象騙成「假 unhealthy」——看門狗因此無限重啟一個其實健康的 bot，直接

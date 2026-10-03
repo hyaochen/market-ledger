@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { CalendarIcon } from "lucide-react";
+import { CalendarIcon, Receipt } from "lucide-react";
 import { recordRevenue, getFixedExpensePreview } from "@/app/actions/revenue";
 import { formatDateInput } from "@/lib/date";
 import { useToast } from "@/components/ui/use-toast";
@@ -217,13 +217,14 @@ export default function RevenueForm({ locations }: Props) {
                                             checked={form.isDayOff}
                                             onChange={(e) => handleDayOffToggle(loc.id, e.target.checked)}
                                         />
-                                        <Label htmlFor={`dayoff-${loc.id}`}>☑ 今日休假（金額將記為 0、不列入平均日營業額）</Label>
+                                        <Label htmlFor={`dayoff-${loc.id}`}>今日休假（金額將記為 0、不列入平均日營業額）</Label>
                                     </div>
 
                                     {!form.isDayOff && fixedItems[loc.id] && fixedItems[loc.id]!.length > 0 && (
                                         <div className="rounded-md border border-dashed border-primary/40 bg-muted/30 p-3 space-y-2">
-                                            <p className="text-xs font-semibold text-muted-foreground">
-                                                🧾 將自動帶入固定支出（可取消勾選、可改金額）
+                                            <p className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                                                <Receipt className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                                                將自動帶入固定支出（可取消勾選、可改金額）
                                             </p>
                                             {fixedItems[loc.id]!.map((item) => (
                                                 <div key={item.expenseType} className="flex items-center gap-2">

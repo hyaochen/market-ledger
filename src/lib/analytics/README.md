@@ -27,7 +27,7 @@ src/lib/analytics/
 
 所有函式都是純 async function，直接 `import prisma from '@/lib/prisma'`（不用 DI），**每個函式第一個必要參數都是 `tenantId: string`**，呼叫端（API route / bot / 網頁 server action）自己負責從 session 拿到 tenantId 再傳進來 — 這幾支函式本身完全不管 auth/session。
 
-## 🔴 日期陷阱（批 2/3 一定要讀）
+## [重要] 日期陷阱（批 2/3 一定要讀）
 
 `Entry.date` / `Revenue.date` 存進 DB 的是「該筆記錄所屬營業日的 **UTC 午夜**」epoch ms（已用 `$queryRawUnsafe` 直接驗證過）。這是因為寫入路徑跑在 Docker 容器（TZ=UTC），`new Date(y,m-1,d)` 在容器裡剛好等於 UTC 午夜。
 
@@ -35,7 +35,7 @@ src/lib/analytics/
 
 一律用 `dateRange.ts` 提供的 `utcDate()` / `resolveRange()` / `monthRangeUTC()` 等函式，或至少用 `Date.UTC(...)`。
 
-## 🔴 攤位判斷的本質限制（批 2/3 設計 UI/bot 對話時要知道）
+## [重要] 攤位判斷的本質限制（批 2/3 設計 UI/bot 對話時要知道）
 
 `Entry`（進貨/支出）沒有 `locationId`，攤位只能靠 `note` 字串猜（`stallInference.ts`）。實測：
 
@@ -163,7 +163,7 @@ function getStallProfitComparison(params: {
     stall: 'pingtung' | 'chaozhou'; label: string;
     revenue: number; revenueDays: number;
     attributedExpense: number; attributedPurchase: number; // 只有備註可信對應到攤位的部分
-    netAttributed: number; // revenue - attributedExpense - attributedPurchase，⚠️ 不是完整攤位損益
+    netAttributed: number; // revenue - attributedExpense - attributedPurchase，[注意] 不是完整攤位損益
   }[];
   shared: {
     unattributedExpense: number; unattributedExpenseCount: number;
@@ -207,7 +207,7 @@ interface DeltaBlock {
 
 `GET /api/analytics/period-compare?month=2026-07`
 
-**🔴 資料庫最早資料是 2026-01**（少數 2001 年是異常值，已被案例 3 偵測器排除），所以 2026 年任何月份的 YoY 目前都會是 `yoy: null`。批 2/3 UI 要處理這個狀態（顯示「無去年同期資料」而不是崩潰或顯示 0%）。
+**[重要] 資料庫最早資料是 2026-01**（少數 2001 年是異常值，已被案例 3 偵測器排除），所以 2026 年任何月份的 YoY 目前都會是 `yoy: null`。批 2/3 UI 要處理這個狀態（顯示「無去年同期資料」而不是崩潰或顯示 0%）。
 
 ## 需求 7：異常偵測 — `detectAllAnomalies()` + 6 個子偵測器
 

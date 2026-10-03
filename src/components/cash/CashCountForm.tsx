@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { ClipboardList, TriangleAlert } from "lucide-react";
 import SignaturePad from "./SignaturePad";
 import { submitCashCount } from "@/app/actions/cash";
 import {
@@ -274,7 +275,7 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
             }
             submittedRef.current = true;
             clearDraft(key);
-            setSuccess(`✅ 已儲存（今日營業額 NT$ ${totalSales.toLocaleString()}），同步寫入 Revenue。`);
+            setSuccess(`已儲存（今日營業額 NT$ ${totalSales.toLocaleString()}），同步寫入 Revenue。`);
             router.refresh();
             setTimeout(() => router.push("/cash/history"), 1200);
         });
@@ -286,7 +287,10 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
             {restoredAt !== null && (
                 <div className="bg-sky-50 border border-sky-300 text-sky-900 rounded-md p-3 text-sm flex items-start justify-between gap-3">
                     <div className="flex-1">
-                        <div className="font-semibold">📋 找到上次未完成的清點，已自動還原</div>
+                        <div className="flex items-center gap-1.5 font-semibold">
+                            <ClipboardList className="h-4 w-4 shrink-0" aria-hidden="true" />
+                            找到上次未完成的清點，已自動還原
+                        </div>
                         <div className="text-xs text-sky-700 mt-0.5">
                             儲存時間：{new Date(restoredAt).toLocaleString("zh-Hant-TW")}
                         </div>
@@ -467,8 +471,9 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
                 </div>
 
                 {error && (
-                    <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-md p-2">
-                        ⚠ {error}
+                    <div className="flex items-center gap-1.5 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md p-2">
+                        <TriangleAlert className="h-4 w-4 shrink-0" aria-hidden="true" />
+                        {error}
                     </div>
                 )}
                 {success && (

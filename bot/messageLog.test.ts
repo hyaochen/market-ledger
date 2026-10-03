@@ -1,6 +1,6 @@
 // T-ML-033 的單元測試。
 //
-// 🔴 紅線：這支模組會寫入 BotMessageLog 表，絕對不能對真實 docker-data/dev.db 做
+// [重要] 紅線：這支模組會寫入 BotMessageLog 表，絕對不能對真實 docker-data/dev.db 做
 // create/update（T-ML-025 批 1 立下的規矩：吃真實 DB 的測試只能 SELECT，見
 // src/lib/fixedExpenseAutofill.test.ts 的先例）。全部用記憶體假資料庫
 // （FakeBotMessageLogDb）測 logIncoming / logOutcome / logCallback，purely-in-memory，

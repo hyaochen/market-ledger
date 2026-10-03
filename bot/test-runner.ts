@@ -382,7 +382,7 @@ async function main(): Promise<void> {
     console.log(`\n${BOLD}結果：${GREEN}通過 ${passed}${RESET} / ${RED}失敗 ${failed}${RESET} / ${YELLOW}錯誤 ${errors}${RESET} / 共 ${summary.length}${RESET}`);
 
     if (failed + errors === 0) {
-        console.log(`\n${GREEN}${BOLD}🎉 所有測試通過！${RESET}\n`);
+        console.log(`\n${GREEN}${BOLD}所有測試通過！${RESET}\n`);
     } else {
         console.log(`\n${RED}${BOLD}⚠ 有 ${failed + errors} 個測試未通過，請檢查上方詳情${RESET}\n`);
         process.exit(1);

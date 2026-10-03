@@ -1,6 +1,6 @@
 // T-ML-027 範圍 A 的單元測試。
 //
-// 🔴 紅線：這支模組會寫入 Entry 表，絕對不能對真實 docker-data/dev.db 做
+// [重要] 紅線：這支模組會寫入 Entry 表，絕對不能對真實 docker-data/dev.db 做
 // create/update（T-ML-025 批 1 立下的規矩：吃真實 DB 的測試只能 SELECT）。
 // 所以這裡全部用記憶體假資料庫（FakeEntryWriteDb）測 upsertExpenseEntry /
 // applyFixedExpenses，purely-in-memory，不連任何真實資料庫。

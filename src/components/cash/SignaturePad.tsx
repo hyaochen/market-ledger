@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import SignaturePadLib from "signature_pad";
+import { PenLine, RotateCcw, RotateCw, Smartphone } from "lucide-react";
 
 type Props = {
     label: string;
@@ -30,7 +31,10 @@ export default function SignaturePad({ label, value, onChange }: Props) {
                 {value ? (
                     <img src={value} alt={`${label} 簽名`} className="max-h-full max-w-full object-contain" />
                 ) : (
-                    <span className="text-sm text-zinc-500">✍ 點兩下開始簽名</span>
+                    <span className="inline-flex items-center gap-1 text-sm text-zinc-500">
+                        <PenLine className="h-4 w-4" aria-hidden="true" />
+                        點兩下開始簽名
+                    </span>
                 )}
             </div>
             <div className="mt-1 flex items-center justify-between text-xs">
@@ -335,7 +339,10 @@ function SignatureModal({
             {/* T-ML-009: 直握手機 UX 提示 — T-ML-008 CSS rotate 走不通改純 prompt
                 只 portrait + 手機尺寸顯示，landscape 跟桌面/iPad 自動隱藏 */}
             <div className="orientation-portrait-only flex-col items-center justify-center px-6 py-3 bg-amber-500/95 text-white border-b border-amber-700">
-                <span className="text-2xl mb-1">📱 ↻</span>
+                <span className="flex items-center gap-1 mb-1" aria-hidden="true">
+                    <Smartphone className="h-7 w-7" />
+                    <RotateCw className="h-6 w-6" />
+                </span>
                 <span className="font-semibold text-base">請把手機橫過來簽名</span>
                 <span className="text-xs text-amber-100 mt-1">橫向才有完整簽名空間</span>
             </div>
@@ -366,7 +373,8 @@ function SignatureModal({
                     onClick={handleClear}
                     className="py-3 bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-base font-semibold rounded-lg"
                 >
-                    🔄 重畫
+                    <RotateCcw className="mr-1 inline h-4 w-4 align-text-bottom" aria-hidden="true" />
+                    重畫
                 </button>
                 <button
                     type="button"

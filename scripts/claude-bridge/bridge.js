@@ -10,7 +10,7 @@
  * calls it over HTTP via `host.docker.internal`, exactly the same pattern already
  * used for the host Ollama instance (OLLAMA_BASE_URL=http://host.docker.internal:11434).
  *
- * 🔴 SECURITY — bind is hardcoded to 127.0.0.1 and NOT configurable via env.
+ * [重要] SECURITY — bind is hardcoded to 127.0.0.1 and NOT configurable via env.
  * The wiki project's `rag/claude_bridge.py` once bound 0.0.0.0 and let any device
  * on the LAN call it with no auth, silently burning the owner's subscription quota.
  * Do not "fix" this by adding a BIND env var — see README.md.
@@ -42,7 +42,7 @@ const MAX_CONCURRENT = Number(process.env.CLAUDE_BRIDGE_MAX_CONCURRENT) || 2;
 const REQUEST_BUDGET_MS = Number(process.env.CLAUDE_BRIDGE_TIMEOUT_MS) || 25000;
 
 // ── 找出真正可以 shell:false 直接 spawn 的 claude 執行檔 ─────────────────
-// 🔴 踩坑記錄（T-ML-024）：Windows 上 `claude` 在 PATH 裡是 claude.cmd（批次檔）。
+// [重要] 踩坑記錄（T-ML-024）：Windows 上 `claude` 在 PATH 裡是 claude.cmd（批次檔）。
 // Node 的 child_process.spawn 對 .cmd 檔案強制要求 shell:true（否則直接 EINVAL），
 // 但 shell:true 在 Windows 上「不會」對陣列 args 做跳脫，只會用空白直接 join 後
 // 丟給 cmd.exe —— 一旦某個 arg 含空白、中文、JSON 特殊字元（我們的 --system-prompt
@@ -155,7 +155,7 @@ function runClaude(system, user, model, timeoutMs) {
             // owner 專案對照資訊。bot 只需要「文字→JSON」，不需要任何工具，所以兩層都擋：
             // --tools ''（空白名單）+ 明確 --disallowed-tools 黑名單（防未來版本新增
             // 預設開啟的工具繞過空白名單）。
-            // 🔴 Windows 專屬踩坑：這台機器的 claude CLI 把 "PowerShell" 列成獨立工具
+            // [重要] Windows 專屬踩坑：這台機器的 claude CLI 把 "PowerShell" 列成獨立工具
             // （不是併入 "Bash"）—— 只擋 Bash/Read/Grep/... 這種通用 Unix 清單完全沒用，
             // claude 直接改用 PowerShell 讀檔，外洩照樣發生。ToolSearch 可在執行期動態
             // 載入其他延遲工具，Agent/Skill 能開子任務拿到自己的工具權限，兩者也一併擋掉，

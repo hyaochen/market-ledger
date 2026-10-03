@@ -33,7 +33,7 @@ test("verifySession: malformed token returns null", () => {
 test("verifySession: tampered signature rejected", () => {
     const token = signSession({ userId: "u1", tenantId: null, isSuperAdmin: false, issuedAt: Date.now() });
     const [payload, sig] = token.split(".");
-    // 🔴 2026-08-09 主控 spot-check：這裡原本翻的是 sig 的「最後一個」字元，會
+    // [重要] 2026-08-09 主控 spot-check：這裡原本翻的是 sig 的「最後一個」字元，會
     // flaky（實測連跑 3 次會失敗 1 次）。原因是簽章是 base64url 的 HMAC-SHA256
     // （32 bytes → 43 字元），最後一個字元只承載 4 個有效 bit，低 2 bit 在解碼時
     // 直接被丟棄 —— 所以把它換成「同一組」的另一個字元（例如 B→A），解出來的

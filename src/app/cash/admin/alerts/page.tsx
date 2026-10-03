@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { TriangleAlert } from "lucide-react";
 import { listCashAlerts } from "@/app/actions/cash";
 
 export default async function CashAlertsPage() {
@@ -12,7 +13,10 @@ export default async function CashAlertsPage() {
 
     return (
         <div className="p-4 space-y-4">
-            <h1 className="text-lg font-bold">⚠ 異常清單</h1>
+            <h1 className="flex items-center gap-2 text-lg font-bold">
+                <TriangleAlert className="h-5 w-5" aria-hidden="true" />
+                異常清單
+            </h1>
 
             <AlertSection title={`錢盒/備用金差額未平 (${grouped.diff.length})`} alerts={grouped.diff} colorClass="text-red-700 bg-red-50 border-red-200" />
             <AlertSection title={`動作未全部打勾 (${grouped.checklist.length})`} alerts={grouped.checklist} colorClass="text-amber-700 bg-amber-50 border-amber-200" />

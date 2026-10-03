@@ -1,4 +1,5 @@
 import prisma from "@/lib/prisma";
+import { ClipboardList } from "lucide-react";
 import { requireCashAdmin } from "@/lib/cash-auth";
 import ChecklistAdminClient from "./ChecklistAdminClient";
 
@@ -10,7 +11,10 @@ export default async function ChecklistAdminPage() {
     });
     return (
         <div className="p-4 space-y-3">
-            <h1 className="text-lg font-bold">📋 動作清單管理</h1>
+            <h1 className="flex items-center gap-2 text-lg font-bold">
+                <ClipboardList className="h-5 w-5" aria-hidden="true" />
+                動作清單管理
+            </h1>
             <ChecklistAdminClient items={items.map((i) => ({
                 id: i.id,
                 name: i.name,

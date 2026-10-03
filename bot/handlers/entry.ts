@@ -23,12 +23,12 @@ function shortDate(dateStr: string): string {
 
 // 格式化單筆記錄顯示文字
 export function formatEntry(e: ParsedEntry, ctx: DbContext): string {
-    const datePrefix = e.date && !isToday(e.date) ? `📅${shortDate(e.date)} ` : '';
+    const datePrefix = e.date && !isToday(e.date) ? `${shortDate(e.date)} ` : '';
     if (e.type === 'REVENUE') {
         const loc = e.locationId ? ctx.locations.find(l => l.id === e.locationId) : null;
-        const amountDisplay = e.isDayOff ? '💤 休假' : `$${e.price.toLocaleString()}`;
+        const amountDisplay = e.isDayOff ? '休假' : `$${e.price.toLocaleString()}`;
         const parts = [
-            `💰 ${loc?.name ?? e.locationName ?? '未知地點'}`,
+            `營業額 ${loc?.name ?? e.locationName ?? '未知地點'}`,
             amountDisplay,
             e.note ? `備註：${e.note}` : '',
         ].filter(Boolean);
@@ -206,7 +206,7 @@ export async function autofillFixedExpensesForSaved(
         const result = await applyFixedExpenses(realEntryDb, session.tenantId, date, stall, session.userId ?? null, toApply);
         if (result.created.length > 0) {
             const desc = result.created.map((c) => `${c.expenseLabel} $${c.amount}`).join('、');
-            lines.push(`🧾 已自動帶入固定支出：${desc}\n（如需修改/刪除請到網頁支出紀錄頁調整該筆）`);
+            lines.push(`已自動帶入固定支出：${desc}\n（如需修改/刪除請到網頁支出紀錄頁調整該筆）`);
         }
     }
     return lines;
@@ -248,12 +248,12 @@ export function formatSummary(
     const lines: string[] = [];
 
     if (saved.length > 0) {
-        lines.push(`✅ 已記錄 ${saved.length} 筆：`);
+        lines.push(`已記錄 ${saved.length} 筆：`);
         saved.forEach(e => lines.push(`  • ${formatEntry(e, ctx)}`));
     }
 
     if (failed.length > 0) {
-        lines.push(`❌ 儲存失敗 ${failed.length} 筆：`);
+        lines.push(`儲存失敗 ${failed.length} 筆：`);
         failed.forEach(({ entry, error }) => lines.push(`  • ${formatEntry(entry, ctx)}（${error}）`));
     }
 

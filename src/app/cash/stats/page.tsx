@@ -1,5 +1,6 @@
 import { requireCashAdmin } from "@/lib/cash-auth";
 import prisma from "@/lib/prisma";
+import { ChartColumn } from "lucide-react";
 import StatsClient from "./StatsClient";
 
 type ExpenseRow = { item: string; note?: string; amount: number };
@@ -59,7 +60,10 @@ export default async function CashStatsPage() {
 
     return (
         <div className="p-4 space-y-4">
-            <h1 className="text-lg font-bold">📊 清點分析（近 90 天）</h1>
+            <h1 className="flex items-center gap-2 text-lg font-bold">
+                <ChartColumn className="h-5 w-5" aria-hidden="true" />
+                清點分析（近 90 天）
+            </h1>
             <div className="grid grid-cols-3 gap-2">
                 <Kpi label="總營業額" value={`NT$ ${totalSum.toLocaleString()}`} />
                 <Kpi label="日均" value={`NT$ ${avgPerDay.toLocaleString()}`} />

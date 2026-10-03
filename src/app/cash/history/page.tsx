@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ScrollText, TriangleAlert } from "lucide-react";
 import { requireCashAuth } from "@/lib/cash-auth";
 import { listCashCounts } from "@/app/actions/cash";
 import { CASH_BOX_TARGET_TOTAL, RESERVE_TARGET_TOTAL } from "@/lib/cash-constants";
@@ -14,7 +15,10 @@ export default async function CashHistoryPage(props: { searchParams: Promise<Sea
     return (
         <div className="p-4 space-y-3">
             <div className="flex items-center justify-between">
-                <h1 className="text-lg font-bold">📜 清點歷史</h1>
+                <h1 className="flex items-center gap-2 text-lg font-bold">
+                    <ScrollText className="h-5 w-5" aria-hidden="true" />
+                    清點歷史
+                </h1>
                 <span className="text-xs text-zinc-500">
                     {user.isAdmin ? `${user.displayName}（admin 看全部）` : `${user.displayName}（僅顯示自己）`}
                 </span>
@@ -45,7 +49,10 @@ export default async function CashHistoryPage(props: { searchParams: Promise<Sea
                                         <div className="text-xs text-zinc-500 truncate">
                                             {attendantName}
                                             {flags.length > 0 && (
-                                                <span className="ml-2 text-red-600">⚠ {flags.join("、")}</span>
+                                                <span className="ml-2 inline-flex items-center gap-1 text-red-600">
+                                                    <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                                                    {flags.join("、")}
+                                                </span>
                                             )}
                                         </div>
                                     </div>

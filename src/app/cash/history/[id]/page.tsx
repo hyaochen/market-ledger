@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
+import { CircleCheck, Circle } from "lucide-react";
 import { getCashCountById } from "@/app/actions/cash";
 import { CASH_BOX_TARGET_TOTAL, RESERVE_TARGET_TOTAL } from "@/lib/cash-constants";
 import PrintButton from "./PrintButton";
@@ -134,8 +135,11 @@ export default async function CashHistoryDetailPage(props: { params: Promise<{ i
                     <div className="font-bold text-sm mb-1">動作清點</div>
                     <ul className="text-sm space-y-0.5">
                         {cc.checklistDones.map((d) => (
-                            <li key={d.id} className={d.done ? "text-zinc-900" : "text-red-600"}>
-                                {d.done ? "✅" : "⬜"} {d.item?.name ?? "（項目已刪除）"}
+                            <li key={d.id} className={`flex items-center gap-1.5 ${d.done ? "text-zinc-900" : "text-red-600"}`}>
+                                {d.done
+                                    ? <CircleCheck className="h-4 w-4 shrink-0" aria-label="已完成" />
+                                    : <Circle className="h-4 w-4 shrink-0" aria-label="未完成" />}
+                                {d.item?.name ?? "（項目已刪除）"}
                             </li>
                         ))}
                     </ul>

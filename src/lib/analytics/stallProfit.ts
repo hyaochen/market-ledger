@@ -1,6 +1,6 @@
 // 分析 #5：攤位損益對比 — 屏東 vs 潮州。
 //
-// 🔴 誠實面對限制（owner spec 明講不准硬湊）：
+// [重要] 誠實面對限制（owner spec 明講不准硬湊）：
 // - Revenue 有正式 locationId，營業額可以精準分攤位。
 // - Entry（進貨+支出）沒有 locationId，只能靠 note 字串猜（stallInference.ts）。
 //   實測：July 158 筆進貨裡只有 3 筆有備註，且沒有一筆備註內容對得到「中山/潮州」——
