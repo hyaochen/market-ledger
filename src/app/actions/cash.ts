@@ -8,6 +8,7 @@ import { requireCashAuth, requireCashAdmin } from "@/lib/cash-auth";
 import { CASH_BOX_TARGET_TOTAL, RESERVE_TARGET_TOTAL } from "@/lib/cash-constants";
 import { previewFixedExpenses, applyFixedExpenses, stallForLocation, realEntryDb } from "@/lib/fixedExpenseAutofill";
 import { syncCashExpensesToEntry } from "@/lib/cashExpenseSync";
+import { buildCashCountWhere, type CashCountFilters } from "@/lib/cash-queries";
 
 // ---------- Schema ----------
 
@@ -212,21 +213,11 @@ export async function submitCashCount(input: SubmitCashCountInput) {
 
 // ---------- Queries ----------
 
-export async function listCashCounts(filters?: { from?: string; to?: string; mineOnly?: boolean }) {
+// T-ML-034：where 條件抽到 src/lib/cash-queries.ts（有單元測試鎖住既有行為），
+// 新增可選參數 locationId（管理者的攤位篩選）；沒帶時行為與以前完全相同。
+export async function listCashCounts(filters?: CashCountFilters) {
     const user = await requireCashAuth();
-    const where: Record<string, unknown> = { tenantId: user.tenantId };
-    if (filters?.from) {
-        const f = parseLocalDate(filters.from);
-        if (f) (where as { date?: Record<string, Date> }).date = { ...(where.date as object), gte: f };
-    }
-    if (filters?.to) {
-        const t = parseLocalDate(filters.to);
-        if (t) (where as { date?: Record<string, Date> }).date = { ...(where.date as object), lte: t };
-    }
-    // 員工只看自己；admin 看全部
-    if (filters?.mineOnly || (!user.isAdmin)) {
-        where.attendantId = user.id;
-    }
+    const where = buildCashCountWhere(user, filters);
     return prisma.cashCount.findMany({
         where,
         orderBy: { date: "desc" },

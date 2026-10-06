@@ -16,6 +16,7 @@ import {
     formatNumber,
     formatTaipeiDateTime,
     formatTaipeiHHmm,
+    hrefWithParams,
     identityLine,
     isSameRange,
     navItemsFor,
@@ -257,6 +258,17 @@ test("resolveLocationFilter: loc 參數必須是現有攤位，否則視為全�
     assert.equal(resolveLocationFilter("", locations), undefined);
     assert.equal(resolveLocationFilter(undefined, locations), undefined);
     assert.equal(resolveLocationFilter(null, locations), undefined);
+});
+
+test("hrefWithParams: 切換攤位時保留日期參數；選「全部」就把 loc 拿掉", () => {
+    const params = { from: "2026-10-01", to: "2026-10-06", loc: "loc_屏東攤位" };
+    assert.equal(
+        hrefWithParams("/cash/history", params, { loc: "loc_潮州攤位" }),
+        "/cash/history?from=2026-10-01&to=2026-10-06&loc=loc_%E6%BD%AE%E5%B7%9E%E6%94%A4%E4%BD%8D",
+    );
+    assert.equal(hrefWithParams("/cash/history", params, { loc: undefined }), "/cash/history?from=2026-10-01&to=2026-10-06");
+    assert.equal(hrefWithParams("/cash/stats", { loc: "loc_x" }, { loc: "" }), "/cash/stats");
+    assert.equal(hrefWithParams("/cash/stats", {}, {}), "/cash/stats");
 });
 
 // ── 輸入清洗 ─────────────────────────────────────────────────

@@ -44,6 +44,7 @@ const tests = [
     "src/lib/cash-ui.test.ts",
     "src/lib/cash-draft.test.ts",
     "src/lib/cash-stats.test.ts",
+    "src/lib/cash-queries.test.ts",
 ];
 
 const child = spawn("tsx", ["--test", ...tests], {

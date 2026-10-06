@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CircleCheck, ClipboardList, LoaderCircle, TriangleAlert } from "lucide-react";
+import { CircleCheck, ClipboardList, Info, LoaderCircle, TriangleAlert } from "lucide-react";
 import SignaturePad from "./SignaturePad";
 import { submitCashCount } from "@/app/actions/cash";
 import {
@@ -25,6 +26,7 @@ import {
     type DraftPayload,
     type ExpenseRow,
 } from "@/lib/cash-draft";
+import { submissionNoticeText, type SubmissionNotice } from "@/lib/cash-queries";
 import { cn } from "@/lib/utils";
 import CashConfirmDialog from "./CashConfirmDialog";
 import ChecklistSection from "./form/ChecklistSection";
@@ -46,6 +48,8 @@ type Props = {
     attendantName: string;
     locationName: string;
     checklistItems: ChecklistItemDef[];
+    /** 今天這個攤位已經提交過的紀錄（只用來提醒「再提交會覆蓋」，不會預填內容） */
+    existing?: SubmissionNotice | null;
 };
 
 const INITIAL_EXPENSE_ROWS = 6;
@@ -75,7 +79,7 @@ function sumDenoms(map: Record<string, string>): number {
  * - beforeunload 防呆（有內容且尚未提交成功才攔）
  * - submitCashCount 呼叫、錯誤處理、成功後 1.2 秒導向 /cash/history
  */
-export default function CashCountForm({ today, attendantId, attendantName, locationName, checklistItems }: Props) {
+export default function CashCountForm({ today, attendantId, attendantName, locationName, checklistItems, existing = null }: Props) {
     const router = useRouter();
     const [cashBox, setCashBox] = useState<Record<string, string>>(emptyDenomState(CASH_BOX_DENOMS));
     const [reserve, setReserve] = useState<Record<string, string>>(emptyDenomState(RESERVE_DENOMS));
@@ -251,6 +255,22 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
     return (
         <div className="px-4 pb-4 pt-4 md:pt-6">
             <div className="space-y-4">
+                {/* 今天這個攤位已經提交過：提醒再次提交會覆蓋（不預填、不改提交語意） */}
+                {existing && (
+                    <section
+                        aria-label="今天已經提交過"
+                        className={notice("warn", "flex-col gap-3 sm:flex-row sm:items-center sm:justify-between")}
+                    >
+                        <div className="flex min-w-0 flex-1 items-start gap-2.5 font-bold">
+                            <Info className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+                            <p>{submissionNoticeText(existing)}</p>
+                        </div>
+                        <Link href={`/cash/history/${existing.id}`} className={btn("secondary", "sm", "w-full shrink-0 sm:w-auto")}>
+                            查看已提交內容
+                        </Link>
+                    </section>
+                )}
+
                 {/* 草稿還原提示 */}
                 {restoredAt !== null && (
                     <div role="status" className={notice("info", "items-center justify-between gap-3")}>
@@ -426,6 +446,11 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
                         "提交今日清點"
                     )}
                 </button>
+                {existing ? (
+                    <p className="text-center text-[15px] text-stone-700">
+                        這會覆蓋 {existing.timeLabel} 由 {existing.byName} 提交的內容。
+                    </p>
+                ) : null}
             </div>
 
             <CashConfirmDialog

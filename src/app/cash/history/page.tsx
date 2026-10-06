@@ -1,27 +1,50 @@
 import Link from "next/link";
 import { ChevronRight, CircleCheck, TriangleAlert } from "lucide-react";
 import { requireCashAuth } from "@/lib/cash-auth";
+import prisma from "@/lib/prisma";
 import { listCashCounts } from "@/app/actions/cash";
-import { countFlags, formatMonthDayWeekday, formatNtd, todayLocalIsoDate } from "@/lib/cash-ui";
+import { countFlags, formatMonthDayWeekday, formatNtd, resolveLocationFilter, todayLocalIsoDate } from "@/lib/cash-ui";
 import { chip } from "@/components/cash/ui";
 import { InfoChip } from "@/components/cash/StatusChip";
+import LocationFilter from "@/components/cash/LocationFilter";
 import HistoryToolbar from "./HistoryToolbar";
 
-type SearchParams = { from?: string; to?: string };
+type SearchParams = { from?: string; to?: string; loc?: string };
 
 export default async function CashHistoryPage(props: { searchParams: Promise<SearchParams> }) {
     const user = await requireCashAuth();
     const sp = await props.searchParams;
-    const rows = await listCashCounts({ from: sp.from, to: sp.to });
+
+    // 管理者可以依攤位篩選（員工只看自己的紀錄，不顯示也不套用 loc）
+    const locations = user.isAdmin
+        ? await prisma.location.findMany({
+              where: { tenantId: user.tenantId, isActive: true },
+              orderBy: [{ createdAt: "asc" }, { name: "asc" }],
+              select: { id: true, name: true },
+          })
+        : [];
+    const locationId = user.isAdmin ? resolveLocationFilter(sp.loc, locations) : undefined;
+    const locationName = locations.find((l) => l.id === locationId)?.name;
+
+    const rows = await listCashCounts({ from: sp.from, to: sp.to, locationId });
 
     return (
         <div className="space-y-4 px-4 pb-4 pt-4 md:pt-6 print:p-0">
             <header>
                 <h1 className="text-2xl font-bold text-stone-900">清點歷史</h1>
                 <p className="mt-0.5 text-[15px] text-stone-600">
-                    {user.isAdmin ? "管理者檢視：全部攤位" : "僅顯示自己的紀錄"}
+                    {user.isAdmin ? `管理者檢視：${locationName ?? "全部攤位"}` : "僅顯示自己的紀錄"}
                 </p>
             </header>
+
+            {user.isAdmin ? (
+                <LocationFilter
+                    basePath="/cash/history"
+                    params={{ from: sp.from, to: sp.to }}
+                    locations={locations}
+                    selectedId={locationId}
+                />
+            ) : null}
 
             <HistoryToolbar
                 defaultFrom={sp.from}

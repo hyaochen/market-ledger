@@ -15,7 +15,9 @@ export async function GET(req: Request) {
         const url = new URL(req.url);
         const from = url.searchParams.get("from") || undefined;
         const to = url.searchParams.get("to") || undefined;
-        const rows = await listCashCounts({ from, to });
+        // T-ML-034：管理者在歷史頁篩選了某個攤位時，匯出也只匯出那個攤位（沒帶就是全部，跟以前一樣）
+        const locationId = url.searchParams.get("loc") || undefined;
+        const rows = await listCashCounts({ from, to, locationId });
 
         const header = [
             "日期", "攤位", "清點人",

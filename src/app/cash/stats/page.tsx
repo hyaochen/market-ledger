@@ -2,8 +2,10 @@ import { requireCashAdmin } from "@/lib/cash-auth";
 import prisma from "@/lib/prisma";
 import AdminSubNav from "@/components/cash/AdminSubNav";
 import { CARD } from "@/components/cash/ui";
-import { formatMonthDayWeekday, formatNumber } from "@/lib/cash-ui";
+import LocationFilter from "@/components/cash/LocationFilter";
+import { formatMonthDayWeekday, formatNumber, resolveLocationFilter } from "@/lib/cash-ui";
 import { NEUTRAL_BAR_COLOR, averageLabel, buildTrend } from "@/lib/cash-stats";
+import { buildStatsWhere } from "@/lib/cash-queries";
 import { cn } from "@/lib/utils";
 import StatsClient from "./StatsClient";
 
@@ -11,15 +13,27 @@ type ExpenseRow = { item: string; note?: string; amount: number };
 
 const WINDOW_DAYS = 90;
 
-export default async function CashStatsPage() {
+export default async function CashStatsPage(props: { searchParams: Promise<{ loc?: string }> }) {
     const user = await requireCashAdmin();
+    const sp = await props.searchParams;
 
-    // 近 90 天的 CashCount
+    // 全部攤位（含已停用）：決定圖上每個攤位的固定顏色，也用來把 locationId 轉成名稱
+    const allLocations = await prisma.location.findMany({
+        where: { tenantId: user.tenantId },
+        orderBy: [{ createdAt: "asc" }, { name: "asc" }],
+        select: { id: true, name: true, isActive: true },
+    });
+    const activeLocations = allLocations.filter((l) => l.isActive);
+    const locationName = new Map(allLocations.map((l) => [l.id, l.name]));
+    // 攤位篩選（?loc=）：必須是啟用中的攤位，否則視為全部
+    const locationId = resolveLocationFilter(sp.loc, activeLocations);
+
+    // 近 90 天的 CashCount（可選：只看某個攤位）
     const since = new Date();
     since.setDate(since.getDate() - WINDOW_DAYS);
 
     const rows = await prisma.cashCount.findMany({
-        where: { tenantId: user.tenantId, date: { gte: since } },
+        where: buildStatsWhere({ tenantId: user.tenantId, since, locationId }),
         orderBy: { date: "asc" },
         select: {
             id: true,
@@ -33,14 +47,6 @@ export default async function CashStatsPage() {
             expensesJson: true,
         },
     });
-
-    // 全部攤位（含已停用）：決定圖上每個攤位的固定顏色，也用來把 locationId 轉成名稱
-    const allLocations = await prisma.location.findMany({
-        where: { tenantId: user.tenantId },
-        orderBy: [{ createdAt: "asc" }, { name: "asc" }],
-        select: { id: true, name: true },
-    });
-    const locationName = new Map(allLocations.map((l) => [l.id, l.name]));
 
     // 每日趨勢：兩個攤位同一天各一筆，轉成「每個攤位一條線」
     const { series, trend } = buildTrend(rows, allLocations);
@@ -73,7 +79,7 @@ export default async function CashStatsPage() {
 
     const kpis: { label: string; value: string; sub?: string[] }[] = [
         { label: "總營業額（元）", value: formatNumber(totalSum) },
-        { label: `${averageLabel(false, allLocations.length)}（元）`, value: formatNumber(avgPerDay) },
+        { label: `${averageLabel(locationId !== undefined, allLocations.length)}（元）`, value: formatNumber(avgPerDay) },
         { label: "清點筆數", value: `${rows.length} 筆` },
         {
             label: "最高單日（元）",
@@ -90,8 +96,12 @@ export default async function CashStatsPage() {
 
             <header>
                 <h1 className="text-2xl font-bold text-stone-900">清點分析</h1>
-                <p className="mt-0.5 text-[15px] text-stone-600">近 {WINDOW_DAYS} 天，全部攤位</p>
+                <p className="mt-0.5 text-[15px] text-stone-600">
+                    近 {WINDOW_DAYS} 天，{locationId ? locationName.get(locationId) : "全部攤位"}
+                </p>
             </header>
+
+            <LocationFilter basePath="/cash/stats" params={{}} locations={activeLocations} selectedId={locationId} />
 
             <dl className="grid grid-cols-2 gap-3 md:grid-cols-4">
                 {kpis.map((k) => (

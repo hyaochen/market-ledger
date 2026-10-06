@@ -276,6 +276,24 @@ export function resolveLocationFilter(raw: string | undefined | null, locations:
     return locations.some((l) => l.id === raw) ? raw : undefined;
 }
 
+/**
+ * 在現有網址參數上覆寫幾個值，產生新的連結（切換攤位時要保留 from / to，反之亦然）。
+ * overrides 的值是 undefined 或空字串 = 移除那個參數；沒有任何參數時回傳純路徑。
+ */
+export function hrefWithParams(
+    basePath: string,
+    params: Record<string, string | undefined>,
+    overrides: Record<string, string | undefined>,
+): string {
+    const merged: Record<string, string | undefined> = { ...params, ...overrides };
+    const usp = new URLSearchParams();
+    for (const [k, v] of Object.entries(merged)) {
+        if (v) usp.set(k, v);
+    }
+    const qs = usp.toString();
+    return qs ? `${basePath}?${qs}` : basePath;
+}
+
 // ── 表單輸入清洗 ─────────────────────────────────────────────
 
 /** 張數：只留數字，並去掉前導 0（"05" -> "5"）。伺服器端要求非負整數。 */
