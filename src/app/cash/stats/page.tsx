@@ -1,17 +1,22 @@
 import { requireCashAdmin } from "@/lib/cash-auth";
 import prisma from "@/lib/prisma";
-import { ChartColumn } from "lucide-react";
 import AdminSubNav from "@/components/cash/AdminSubNav";
+import { CARD } from "@/components/cash/ui";
+import { formatMonthDayWeekday, formatNumber } from "@/lib/cash-ui";
+import { NEUTRAL_BAR_COLOR, averageLabel, buildTrend } from "@/lib/cash-stats";
+import { cn } from "@/lib/utils";
 import StatsClient from "./StatsClient";
 
 type ExpenseRow = { item: string; note?: string; amount: number };
+
+const WINDOW_DAYS = 90;
 
 export default async function CashStatsPage() {
     const user = await requireCashAdmin();
 
     // 近 90 天的 CashCount
     const since = new Date();
-    since.setDate(since.getDate() - 90);
+    since.setDate(since.getDate() - WINDOW_DAYS);
 
     const rows = await prisma.cashCount.findMany({
         where: { tenantId: user.tenantId, date: { gte: since } },
@@ -19,6 +24,7 @@ export default async function CashStatsPage() {
         select: {
             id: true,
             date: true,
+            locationId: true,
             totalSales: true,
             salesTotal: true,
             expensesTotal: true,
@@ -28,13 +34,16 @@ export default async function CashStatsPage() {
         },
     });
 
-    // 每日趨勢
-    const trend = rows.map((r) => ({
-        date: r.date.toISOString().slice(0, 10),
-        totalSales: r.totalSales,
-        sales: r.salesTotal,
-        expenses: r.expensesTotal,
-    }));
+    // 全部攤位（含已停用）：決定圖上每個攤位的固定顏色，也用來把 locationId 轉成名稱
+    const allLocations = await prisma.location.findMany({
+        where: { tenantId: user.tenantId },
+        orderBy: [{ createdAt: "asc" }, { name: "asc" }],
+        select: { id: true, name: true },
+    });
+    const locationName = new Map(allLocations.map((l) => [l.id, l.name]));
+
+    // 每日趨勢：兩個攤位同一天各一筆，轉成「每個攤位一條線」
+    const { series, trend } = buildTrend(rows, allLocations);
 
     // 支出分類加總
     const expenseAgg: Record<string, number> = {};
@@ -54,38 +63,59 @@ export default async function CashStatsPage() {
         .sort((a, b) => b.amount - a.amount)
         .slice(0, 12);
 
-    // KPI
+    // KPI（算法與重設計前完全相同）
     const totalSum = rows.reduce((acc, r) => acc + r.totalSales, 0);
     const avgPerDay = rows.length > 0 ? Math.round(totalSum / rows.length) : 0;
-    const maxDay = rows.reduce((m, r) => (r.totalSales > m.totalSales ? r : m), { date: new Date(), totalSales: 0 } as { date: Date; totalSales: number });
+    let maxRow: (typeof rows)[number] | null = null;
+    for (const r of rows) {
+        if (r.totalSales > (maxRow?.totalSales ?? 0)) maxRow = r;
+    }
+
+    const kpis: { label: string; value: string; sub?: string[] }[] = [
+        { label: "總營業額（元）", value: formatNumber(totalSum) },
+        { label: `${averageLabel(false, allLocations.length)}（元）`, value: formatNumber(avgPerDay) },
+        { label: "清點筆數", value: `${rows.length} 筆` },
+        {
+            label: "最高單日（元）",
+            value: maxRow ? formatNumber(maxRow.totalSales) : "—",
+            sub: maxRow
+                ? [formatMonthDayWeekday(maxRow.date.toISOString().slice(0, 10)), locationName.get(maxRow.locationId) ?? ""].filter(Boolean)
+                : undefined,
+        },
+    ];
 
     return (
-        <div className="p-4 space-y-4">
+        <div className="space-y-4 px-4 pb-4 pt-4 md:pt-6">
             <AdminSubNav />
-            <h1 className="flex items-center gap-2 text-lg font-bold">
-                <ChartColumn className="h-5 w-5" aria-hidden="true" />
-                清點分析（近 90 天）
-            </h1>
-            <div className="grid grid-cols-3 gap-2">
-                <Kpi label="總營業額" value={`NT$ ${totalSum.toLocaleString()}`} />
-                <Kpi label="日均" value={`NT$ ${avgPerDay.toLocaleString()}`} />
-                <Kpi label="筆數" value={String(rows.length)} />
-            </div>
-            <StatsClient trend={trend} expenseBreakdown={expenseBreakdown} />
-            {maxDay.totalSales > 0 && (
-                <p className="text-xs text-zinc-500">
-                    最高單日：{maxDay.date.toISOString().slice(0, 10)} NT$ {maxDay.totalSales.toLocaleString()}
-                </p>
-            )}
-        </div>
-    );
-}
 
-function Kpi({ label, value }: { label: string; value: string }) {
-    return (
-        <div className="border border-amber-200 bg-white rounded-md p-2.5 text-center">
-            <div className="text-xs text-zinc-500">{label}</div>
-            <div className="font-bold text-amber-700">{value}</div>
+            <header>
+                <h1 className="text-2xl font-bold text-stone-900">清點分析</h1>
+                <p className="mt-0.5 text-[15px] text-stone-600">近 {WINDOW_DAYS} 天，全部攤位</p>
+            </header>
+
+            <dl className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                {kpis.map((k) => (
+                    <div key={k.label} className={cn(CARD, "p-3.5")}>
+                        <dt className="text-[15px] text-stone-600">{k.label}</dt>
+                        <dd className="mt-1 text-2xl font-extrabold leading-tight text-stone-900">{k.value}</dd>
+                        {k.sub ? (
+                            <dd className="mt-0.5 text-[13px] leading-snug text-stone-600">
+                                {k.sub.map((line) => (
+                                    <span key={line} className="block">{line}</span>
+                                ))}
+                            </dd>
+                        ) : null}
+                    </div>
+                ))}
+            </dl>
+
+            <StatsClient
+                series={series}
+                trend={trend}
+                expenseBreakdown={expenseBreakdown}
+                barColor={series.length === 1 ? series[0].color : NEUTRAL_BAR_COLOR}
+                windowDays={WINDOW_DAYS}
+            />
         </div>
     );
 }

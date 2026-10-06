@@ -64,7 +64,7 @@ export default function CashShell({ user, children }: Props) {
                     {/* 手機：左側就是「哪個攤位、誰在用」 */}
                     <Link
                         href="/cash"
-                        className="flex min-w-0 flex-1 items-center gap-3 rounded-lg md:hidden"
+                        className="flex min-h-12 min-w-0 flex-1 items-center gap-3 rounded-lg md:hidden"
                     >
                         <CashLogo className="h-10 w-10 shrink-0" />
                         <span className="min-w-0 leading-tight">

@@ -1,8 +1,18 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { CircleCheck, Circle } from "lucide-react";
+import { ArrowLeft, CircleCheck, Circle, TriangleAlert } from "lucide-react";
 import { getCashCountById } from "@/app/actions/cash";
-import { CASH_BOX_TARGET_TOTAL, RESERVE_TARGET_TOTAL } from "@/lib/cash-constants";
+import {
+    CASH_BOX_DENOMS,
+    CASH_BOX_TARGET_TOTAL,
+    RESERVE_DENOMS,
+    RESERVE_TARGET_TOTAL,
+    SALES_DENOMS,
+} from "@/lib/cash-constants";
+import { diffStatus, formatDateWithWeekday, formatNtd, formatTaipeiDateTime } from "@/lib/cash-ui";
+import { btn, CARD } from "@/components/cash/ui";
+import { DiffChip } from "@/components/cash/StatusChip";
+import { cn } from "@/lib/utils";
 import PrintButton from "./PrintButton";
 
 type DenomMap = Record<string, number>;
@@ -28,8 +38,8 @@ export default async function CashHistoryDetailPage(props: { params: Promise<{ i
     const cc = await getCashCountById(id);
     if (!cc) notFound();
 
-    const dateStr = cc.date ? cc.date.toISOString().slice(0, 10) : "—";
-    const handoverStr = cc.handoverTime ? cc.handoverTime.toISOString().slice(0, 19).replace("T", " ") : "—";
+    const dateStr = cc.date ? cc.date.toISOString().slice(0, 10) : "";
+    const handoverStr = cc.handoverTime ? formatTaipeiDateTime(cc.handoverTime) : "—";
     const cashBox = safeParseDenom(cc.cashBoxJson);
     const reserve = safeParseDenom(cc.reserveJson);
     const sales = safeParseDenom(cc.salesJson);
@@ -38,108 +48,151 @@ export default async function CashHistoryDetailPage(props: { params: Promise<{ i
     const attendantName = cc.attendant?.realName || cc.attendant?.username || "—";
 
     return (
-        <div className="p-4 space-y-3 print:p-0">
-            <div className="flex items-center justify-between print:hidden">
-                <Link href="/cash/history" className="text-sm text-amber-700">&larr; 返回列表</Link>
+        <div className="space-y-4 px-4 pb-4 pt-4 md:pt-6 print:space-y-3 print:p-0 print:text-black">
+            {/* 列印時的紙張邊界；這個 style 只在這一頁存在，不影響其他頁面的列印 */}
+            <style>{`@media print { @page { margin: 12mm; } }`}</style>
+
+            <div className="flex items-center justify-between gap-3 print:hidden">
+                <Link href="/cash/history" className={btn("secondary", "md")}>
+                    <ArrowLeft className="h-5 w-5" aria-hidden="true" />
+                    返回列表
+                </Link>
                 <PrintButton />
             </div>
 
-            <h1 className="text-xl font-extrabold text-center border-b-2 border-double border-zinc-800 pb-1">
-                每日現金清點表
-            </h1>
-            <div className="grid grid-cols-3 gap-2 text-sm">
-                <div><span className="text-zinc-500">日期：</span><b>{dateStr}</b></div>
-                <div><span className="text-zinc-500">攤位：</span><b>{locationName}</b></div>
-                <div><span className="text-zinc-500">清點人：</span><b>{attendantName}</b></div>
-            </div>
+            <header className="border-b-4 border-double border-stone-800 pb-3 text-center print:pb-2">
+                <h1 className="text-2xl font-extrabold text-stone-900 print:text-black">每日現金清點表</h1>
+            </header>
+
+            <dl className={cn(CARD, "grid grid-cols-1 gap-x-4 gap-y-3 p-4 sm:grid-cols-3 print:grid-cols-3 print:gap-y-1 print:rounded-none print:border-black print:p-2 print:shadow-none")}>
+                <div>
+                    <dt className="text-[13px] text-stone-600 print:text-black">日期</dt>
+                    <dd className="text-lg font-bold text-stone-900 print:text-base print:text-black">
+                        {dateStr ? formatDateWithWeekday(dateStr) : "—"}
+                    </dd>
+                </div>
+                <div>
+                    <dt className="text-[13px] text-stone-600 print:text-black">攤位</dt>
+                    <dd className="text-lg font-bold text-stone-900 print:text-base print:text-black">{locationName}</dd>
+                </div>
+                <div>
+                    <dt className="text-[13px] text-stone-600 print:text-black">清點人</dt>
+                    <dd className="text-lg font-bold text-stone-900 print:text-base print:text-black">{attendantName}</dd>
+                </div>
+            </dl>
 
             <DetailTable
-                title={`① 錢盒清點（目標 ${CASH_BOX_TARGET_TOTAL.toLocaleString()}）`}
-                rows={[500, 100, 50, 10, 5].map((d) => ({ denom: d, qty: cashBox[String(d)] ?? 0 }))}
+                title="錢盒清點"
+                denoms={CASH_BOX_DENOMS}
+                qtys={cashBox}
                 total={cc.cashBoxTotal}
                 target={CASH_BOX_TARGET_TOTAL}
             />
             <DetailTable
-                title={`② 備用金清點（目標 ${RESERVE_TARGET_TOTAL.toLocaleString()}）`}
-                rows={[500, 100, 50, 10, 5].map((d) => ({ denom: d, qty: reserve[String(d)] ?? 0 }))}
+                title="備用金清點"
+                denoms={RESERVE_DENOMS}
+                qtys={reserve}
                 total={cc.reserveTotal}
                 target={RESERVE_TARGET_TOTAL}
             />
-            <DetailTable
-                title="③ 當日營業現金"
-                rows={[1000, 500, 100, 50, 10, 5].map((d) => ({ denom: d, qty: sales[String(d)] ?? 0 }))}
-                total={cc.salesTotal}
-                target={null}
-            />
+            <DetailTable title="當日營業現金" denoms={SALES_DENOMS} qtys={sales} total={cc.salesTotal} target={null} />
 
-            <section className="border-2 border-zinc-300 rounded-md overflow-hidden">
-                <header className="bg-amber-100 px-3 py-1.5 border-b-2 border-zinc-300 font-bold text-sm">
-                    ④ 當天現金支出明細
-                </header>
-                <table className="w-full text-sm">
-                    <thead className="bg-zinc-50 text-xs">
-                        <tr>
-                            <th className="px-2 py-1 text-left">項目</th>
-                            <th className="px-2 py-1 text-left">備註</th>
-                            <th className="px-2 py-1 text-right">金額</th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-zinc-200">
-                        {expenses.length === 0 && (
-                            <tr><td colSpan={3} className="px-2 py-2 text-center text-zinc-400">無</td></tr>
-                        )}
-                        {expenses.map((e, i) => (
-                            <tr key={i}>
-                                <td className="px-2 py-1">{e.item || "—"}</td>
-                                <td className="px-2 py-1 text-zinc-500">{e.note || ""}</td>
-                                <td className="px-2 py-1 text-right font-semibold">{e.amount.toLocaleString()}</td>
+            <section className={cn(CARD, "overflow-hidden print:break-inside-avoid print:rounded-none print:border-black print:shadow-none")}>
+                <h2 className="border-b border-stone-200 bg-stone-50 px-4 py-3 text-lg font-bold text-stone-900 print:border-black print:bg-white print:px-2 print:py-1 print:text-base print:text-black">
+                    當天現金支出明細
+                </h2>
+                {expenses.length === 0 ? (
+                    <p className="px-4 py-4 text-base text-stone-700 print:px-2 print:py-1 print:text-black">這天沒有現金支出。</p>
+                ) : (
+                    <table className="w-full text-base">
+                        <thead className="text-[13px] text-stone-600 print:text-black">
+                            <tr className="border-b border-stone-200 print:border-black">
+                                <th scope="col" className="px-4 py-2 text-left font-semibold print:px-2 print:py-1">項目</th>
+                                <th scope="col" className="px-2 py-2 text-left font-semibold print:py-1">備註</th>
+                                <th scope="col" className="px-4 py-2 text-right font-semibold print:px-2 print:py-1">金額</th>
                             </tr>
-                        ))}
-                        <tr className="bg-amber-50/80 font-bold">
-                            <td colSpan={2} className="px-2 py-1.5 text-right">支出合計</td>
-                            <td className="px-2 py-1.5 text-right text-amber-700">{cc.expensesTotal.toLocaleString()}</td>
-                        </tr>
-                    </tbody>
-                </table>
+                        </thead>
+                        <tbody className="divide-y divide-stone-200 print:divide-stone-400">
+                            {expenses.map((e, i) => (
+                                <tr key={i}>
+                                    <td className="px-4 py-2.5 font-semibold text-stone-900 print:px-2 print:py-1 print:text-black">{e.item || "—"}</td>
+                                    <td className="px-2 py-2.5 text-stone-700 print:py-1 print:text-black">{e.note || ""}</td>
+                                    <td className="px-4 py-2.5 text-right font-bold tabular-nums text-stone-900 print:px-2 print:py-1 print:text-black">
+                                        {e.amount.toLocaleString("en-US")}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                )}
+                <div className="flex items-baseline justify-between gap-3 border-t border-stone-200 bg-stone-50 px-4 py-3 print:border-black print:bg-white print:px-2 print:py-1">
+                    <span className="text-base font-bold text-stone-900 print:text-black">支出合計</span>
+                    <span className="text-xl font-extrabold tabular-nums text-stone-900 print:text-base print:text-black">
+                        {formatNtd(cc.expensesTotal)}
+                    </span>
+                </div>
             </section>
 
-            <div className="border-4 border-double border-zinc-800 bg-yellow-50 px-5 py-4 rounded-md flex items-center justify-between">
-                <div>
-                    <div className="text-base font-bold">今日營業額</div>
-                    <div className="text-xs text-zinc-500">＝ 營業現金 ＋ 當天支出</div>
+            <section
+                aria-label="今日營業額"
+                className="rounded-2xl border-2 border-stone-800 bg-amber-100 px-5 py-4 print:break-inside-avoid print:rounded-none print:border-4 print:border-double print:bg-white print:py-2"
+            >
+                <div className="flex items-baseline justify-between gap-3">
+                    <h2 className="text-lg font-bold text-stone-900 print:text-black">今日營業額</h2>
+                    <p className="text-3xl font-extrabold tabular-nums text-stone-900 print:text-2xl print:text-black">
+                        {formatNtd(cc.totalSales)}
+                    </p>
                 </div>
-                <div className="text-2xl font-extrabold tracking-wider">
-                    NT$ {cc.totalSales.toLocaleString()}
-                </div>
-            </div>
+                <p className="mt-1.5 text-[15px] text-stone-800 print:text-black">
+                    營業現金 {formatNtd(cc.salesTotal)} ＋ 當天支出 {formatNtd(cc.expensesTotal)}
+                </p>
+            </section>
 
-            <div className="grid grid-cols-3 gap-3 text-xs">
-                <div className="border border-zinc-200 rounded-md p-2 bg-white">
-                    <div className="text-zinc-500 mb-1">清點人簽名</div>
-                    {cc.signatureDataUrl && (
-                        <img src={cc.signatureDataUrl} alt="清點人簽名" className="h-16 object-contain" />
+            <section className={cn(CARD, "grid grid-cols-1 gap-4 p-4 sm:grid-cols-3 print:grid-cols-3 print:break-inside-avoid print:gap-2 print:rounded-none print:border-black print:p-2 print:shadow-none")}>
+                <div>
+                    <h2 className="mb-1 text-[13px] font-semibold text-stone-600 print:text-black">清點人簽名</h2>
+                    {cc.signatureDataUrl ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                            src={cc.signatureDataUrl}
+                            alt="清點人簽名"
+                            className="h-20 rounded-lg border border-stone-200 bg-white object-contain print:h-16 print:rounded-none print:border-0"
+                        />
+                    ) : (
+                        <p className="text-base text-stone-600 print:text-black">（沒有簽名）</p>
                     )}
                 </div>
-                <div className="border border-zinc-200 rounded-md p-2 bg-white">
-                    <div className="text-zinc-500 mb-1">覆核人</div>
-                    <div className="text-base font-bold">{cc.supervisorName}</div>
+                <div>
+                    <h2 className="mb-1 text-[13px] font-semibold text-stone-600 print:text-black">覆核人</h2>
+                    <p className="text-xl font-bold text-stone-900 print:text-base print:text-black">{cc.supervisorName}</p>
                 </div>
-                <div className="border border-zinc-200 rounded-md p-2 bg-white">
-                    <div className="text-zinc-500 mb-1">交班時間</div>
-                    <div className="font-mono text-sm">{handoverStr}</div>
+                <div>
+                    <h2 className="mb-1 text-[13px] font-semibold text-stone-600 print:text-black">交班時間</h2>
+                    <p className="text-lg font-bold tabular-nums text-stone-900 print:text-base print:text-black">{handoverStr}</p>
                 </div>
-            </div>
+            </section>
 
             {cc.checklistDones.length > 0 && (
-                <section className="border border-zinc-200 rounded-md p-3 bg-white">
-                    <div className="font-bold text-sm mb-1">動作清點</div>
-                    <ul className="text-sm space-y-0.5">
+                <section className={cn(CARD, "overflow-hidden print:break-inside-avoid print:rounded-none print:border-black print:shadow-none")}>
+                    <h2 className="border-b border-stone-200 bg-stone-50 px-4 py-3 text-lg font-bold text-stone-900 print:border-black print:bg-white print:px-2 print:py-1 print:text-base print:text-black">
+                        動作清點
+                    </h2>
+                    <ul className="divide-y divide-stone-200 print:divide-stone-400">
                         {cc.checklistDones.map((d) => (
-                            <li key={d.id} className={`flex items-center gap-1.5 ${d.done ? "text-zinc-900" : "text-red-600"}`}>
-                                {d.done
-                                    ? <CircleCheck className="h-4 w-4 shrink-0" aria-label="已完成" />
-                                    : <Circle className="h-4 w-4 shrink-0" aria-label="未完成" />}
-                                {d.item?.name ?? "（項目已刪除）"}
+                            <li
+                                key={d.id}
+                                className={cn(
+                                    "flex items-center gap-2.5 px-4 py-3 text-base print:px-2 print:py-1",
+                                    d.done ? "text-stone-900" : "bg-red-50 font-semibold text-red-900 print:bg-white print:text-black",
+                                )}
+                            >
+                                {d.done ? (
+                                    <CircleCheck className="h-5 w-5 shrink-0 text-emerald-700 print:text-black" aria-hidden="true" />
+                                ) : (
+                                    <Circle className="h-5 w-5 shrink-0" aria-hidden="true" />
+                                )}
+                                <span className="flex-1">{d.item?.name ?? "（項目已刪除）"}</span>
+                                <span className="text-[15px] font-bold">{d.done ? "已完成" : "未完成"}</span>
                             </li>
                         ))}
                     </ul>
@@ -147,15 +200,15 @@ export default async function CashHistoryDetailPage(props: { params: Promise<{ i
             )}
 
             {cc.note && (
-                <section className="border border-zinc-200 rounded-md p-3 bg-white">
-                    <div className="font-bold text-sm mb-1">備註</div>
-                    <p className="text-sm whitespace-pre-wrap">{cc.note}</p>
+                <section className={cn(CARD, "p-4 print:break-inside-avoid print:rounded-none print:border-black print:p-2 print:shadow-none")}>
+                    <h2 className="mb-1 text-base font-bold text-stone-900 print:text-black">備註</h2>
+                    <p className="whitespace-pre-wrap text-base text-stone-800 print:text-black">{cc.note}</p>
                 </section>
             )}
 
             {cc.revenueId && (
-                <p className="text-xs text-zinc-500 text-center print:hidden">
-                    已同步至營業額表（Revenue ID: <code>{cc.revenueId}</code>）
+                <p className="text-center text-[13px] text-stone-600 print:hidden">
+                    已同步到營業額表（編號 <code>{cc.revenueId}</code>）
                 </p>
             )}
         </div>
@@ -164,48 +217,71 @@ export default async function CashHistoryDetailPage(props: { params: Promise<{ i
 
 function DetailTable({
     title,
-    rows,
+    denoms,
+    qtys,
     total,
     target,
 }: {
     title: string;
-    rows: { denom: number; qty: number }[];
+    denoms: readonly number[];
+    qtys: DenomMap;
     total: number;
     target: number | null;
 }) {
+    // 已存檔的紀錄：合計 0 也是真的存下來的數字，照實跟目標比
+    const status = target === null ? null : diffStatus(total, target, false);
     return (
-        <section className="border-2 border-zinc-300 rounded-md overflow-hidden">
-            <header className="bg-amber-100 px-3 py-1.5 border-b-2 border-zinc-300 font-bold text-sm">{title}</header>
-            <table className="w-full text-sm">
-                <thead className="bg-zinc-50 text-xs">
-                    <tr>
-                        <th className="px-2 py-1 text-left">面額</th>
-                        <th className="px-2 py-1 text-center">張數</th>
-                        <th className="px-2 py-1 text-right">金額</th>
+        <section className={cn(CARD, "overflow-hidden print:break-inside-avoid print:rounded-none print:border-black print:shadow-none")}>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-stone-200 bg-stone-50 px-4 py-3 print:border-black print:bg-white print:px-2 print:py-1">
+                <h2 className="text-lg font-bold text-stone-900 print:text-base print:text-black">
+                    {title}
+                    {target !== null ? (
+                        <span className="ml-2 text-[15px] font-normal text-stone-600 print:text-black">
+                            （目標 {target.toLocaleString("en-US")}）
+                        </span>
+                    ) : null}
+                </h2>
+                {status ? (
+                    <span className="print:hidden"><DiffChip status={status} /></span>
+                ) : null}
+            </div>
+            <table className="w-full text-base">
+                <thead className="text-[13px] text-stone-600 print:text-black">
+                    <tr className="border-b border-stone-200 print:border-black">
+                        <th scope="col" className="px-4 py-2 text-left font-semibold print:px-2 print:py-1">面額</th>
+                        <th scope="col" className="px-2 py-2 text-center font-semibold print:py-1">張數</th>
+                        <th scope="col" className="px-4 py-2 text-right font-semibold print:px-2 print:py-1">金額</th>
                     </tr>
                 </thead>
-                <tbody className="divide-y divide-zinc-200">
-                    {rows.map((r) => (
-                        <tr key={r.denom}>
-                            <td className="px-2 py-1 font-bold">{r.denom}</td>
-                            <td className="px-2 py-1 text-center">{r.qty}</td>
-                            <td className="px-2 py-1 text-right">{(r.denom * r.qty).toLocaleString()}</td>
-                        </tr>
-                    ))}
-                    <tr className="bg-amber-50/80 font-bold">
-                        <td colSpan={2} className="px-2 py-1.5 text-right">合計</td>
-                        <td className="px-2 py-1.5 text-right text-amber-700">{total.toLocaleString()}</td>
-                    </tr>
-                    {target !== null && total !== target && (
-                        <tr className="bg-red-50 text-xs">
-                            <td colSpan={2} className="px-2 py-1 text-right text-red-700">差額</td>
-                            <td className="px-2 py-1 text-right font-bold text-red-700">
-                                {total - target > 0 ? "+" : ""}{(total - target).toLocaleString()}
-                            </td>
-                        </tr>
-                    )}
+                <tbody className="divide-y divide-stone-200 print:divide-stone-400">
+                    {denoms.map((d) => {
+                        const qty = qtys[String(d)] ?? 0;
+                        return (
+                            <tr key={d}>
+                                <td className="px-4 py-2.5 font-bold tabular-nums text-stone-900 print:px-2 print:py-1 print:text-black">{d}</td>
+                                <td className="px-2 py-2.5 text-center tabular-nums text-stone-900 print:py-1 print:text-black">{qty}</td>
+                                <td className="px-4 py-2.5 text-right tabular-nums text-stone-900 print:px-2 print:py-1 print:text-black">
+                                    {(d * qty).toLocaleString("en-US")}
+                                </td>
+                            </tr>
+                        );
+                    })}
                 </tbody>
             </table>
+            <div className="flex items-baseline justify-between gap-3 border-t border-stone-200 bg-stone-50 px-4 py-3 print:border-black print:bg-white print:px-2 print:py-1">
+                <span className="text-base font-bold text-stone-900 print:text-black">合計</span>
+                <span className="text-xl font-extrabold tabular-nums text-stone-900 print:text-base print:text-black">
+                    {formatNtd(total)}
+                </span>
+            </div>
+            {target !== null && total !== target ? (
+                <p className="flex items-center gap-1.5 border-t border-stone-200 bg-red-50 px-4 py-2.5 text-[15px] font-bold text-red-900 print:border-black print:bg-white print:px-2 print:py-1 print:text-black">
+                    <TriangleAlert className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    差額 {total - target > 0 ? "+" : ""}
+                    {(total - target).toLocaleString("en-US")}
+                    （{total - target > 0 ? "比目標多" : "比目標少"} {Math.abs(total - target).toLocaleString("en-US")} 元）
+                </p>
+            ) : null}
         </section>
     );
 }

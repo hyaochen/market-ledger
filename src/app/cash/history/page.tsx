@@ -1,8 +1,10 @@
 import Link from "next/link";
-import { ScrollText, TriangleAlert } from "lucide-react";
+import { ChevronRight, CircleCheck, TriangleAlert } from "lucide-react";
 import { requireCashAuth } from "@/lib/cash-auth";
 import { listCashCounts } from "@/app/actions/cash";
-import { CASH_BOX_TARGET_TOTAL, RESERVE_TARGET_TOTAL } from "@/lib/cash-constants";
+import { countFlags, formatMonthDayWeekday, formatNtd, todayLocalIsoDate } from "@/lib/cash-ui";
+import { chip } from "@/components/cash/ui";
+import { InfoChip } from "@/components/cash/StatusChip";
 import HistoryToolbar from "./HistoryToolbar";
 
 type SearchParams = { from?: string; to?: string };
@@ -13,56 +15,69 @@ export default async function CashHistoryPage(props: { searchParams: Promise<Sea
     const rows = await listCashCounts({ from: sp.from, to: sp.to });
 
     return (
-        <div className="p-4 space-y-3">
-            <div className="flex items-center justify-between">
-                <h1 className="flex items-center gap-2 text-lg font-bold">
-                    <ScrollText className="h-5 w-5" aria-hidden="true" />
-                    清點歷史
-                </h1>
-                <span className="text-xs text-zinc-500">
-                    {user.isAdmin ? `${user.displayName}（admin 看全部）` : `${user.displayName}（僅顯示自己）`}
-                </span>
-            </div>
-            <HistoryToolbar defaultFrom={sp.from} defaultTo={sp.to} isAdmin={user.isAdmin} />
+        <div className="space-y-4 px-4 pb-4 pt-4 md:pt-6 print:p-0">
+            <header>
+                <h1 className="text-2xl font-bold text-stone-900">清點歷史</h1>
+                <p className="mt-0.5 text-[15px] text-stone-600">
+                    {user.isAdmin ? "管理者檢視：全部攤位" : "僅顯示自己的紀錄"}
+                </p>
+            </header>
+
+            <HistoryToolbar
+                defaultFrom={sp.from}
+                defaultTo={sp.to}
+                isAdmin={user.isAdmin}
+                today={todayLocalIsoDate()}
+            />
 
             {rows.length === 0 ? (
-                <p className="text-sm text-zinc-500 py-6 text-center">尚無清點紀錄。</p>
+                <div className="rounded-2xl border border-dashed border-stone-300 bg-white px-4 py-10 text-center">
+                    <p className="text-lg font-bold text-stone-900">這個條件下還沒有清點紀錄</p>
+                    <p className="mt-1 text-base text-stone-600">換一個日期範圍看看，或先去「新增清點」。</p>
+                </div>
             ) : (
-                <ul className="divide-y divide-zinc-200 border border-zinc-200 rounded-md bg-white">
+                <ul className="space-y-3">
                     {rows.map((r) => {
-                        const dateStr = r.date ? r.date.toISOString().slice(0, 10) : "—";
+                        const dateStr = r.date ? r.date.toISOString().slice(0, 10) : "";
                         const locationName = r.location?.name ?? "—";
                         const attendantName = r.attendant?.realName || r.attendant?.username || "—";
-                        const cashBoxOk = r.cashBoxTotal === CASH_BOX_TARGET_TOTAL;
-                        const reserveOk = r.reserveTotal === RESERVE_TARGET_TOTAL;
-                        const flags: string[] = [];
-                        if (!cashBoxOk) flags.push(`錢盒${r.cashBoxTotal - CASH_BOX_TARGET_TOTAL > 0 ? "+" : ""}${r.cashBoxTotal - CASH_BOX_TARGET_TOTAL}`);
-                        if (!reserveOk) flags.push(`備用金${r.reserveTotal - RESERVE_TARGET_TOTAL > 0 ? "+" : ""}${r.reserveTotal - RESERVE_TARGET_TOTAL}`);
+                        const flags = countFlags(r.cashBoxTotal, r.reserveTotal);
                         return (
-                            <li key={r.id}>
+                            <li key={r.id} className="print:break-inside-avoid">
                                 <Link
                                     href={`/cash/history/${r.id}`}
-                                    className="flex items-center justify-between gap-3 px-3 py-3 hover:bg-amber-50"
+                                    className="block rounded-2xl border border-stone-200 bg-white p-4 shadow-sm transition-colors duration-150 hover:border-amber-500 active:bg-stone-50 motion-reduce:transition-none print:rounded-none print:border-black print:shadow-none"
                                 >
-                                    <div className="min-w-0">
-                                        <div className="text-sm font-semibold">{dateStr} · {locationName}</div>
-                                        <div className="text-xs text-zinc-500 truncate">
-                                            {attendantName}
-                                            {flags.length > 0 && (
-                                                <span className="ml-2 inline-flex items-center gap-1 text-red-600">
-                                                    <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                                                    {flags.join("、")}
-                                                </span>
+                                    <div className="flex items-start justify-between gap-3">
+                                        <p className="text-lg font-bold text-stone-900">
+                                            {dateStr ? formatMonthDayWeekday(dateStr) : "—"}
+                                        </p>
+                                        <p className="shrink-0 text-xl font-extrabold tabular-nums text-stone-900">
+                                            {formatNtd(r.totalSales)}
+                                        </p>
+                                    </div>
+
+                                    <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1.5">
+                                        <span className={chip("warn", "px-2.5 py-0.5 text-[13px]")}>{locationName}</span>
+                                        <span className="text-[15px] text-stone-700">{attendantName}</span>
+                                        {dateStr ? (
+                                            <span className="text-[13px] text-stone-600">{dateStr.slice(0, 4)} 年</span>
+                                        ) : null}
+                                    </div>
+
+                                    <div className="mt-3 flex items-center justify-between gap-2 border-t border-stone-100 pt-3">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            {flags.length === 0 ? (
+                                                <InfoChip tone="ok" icon={CircleCheck}>正常</InfoChip>
+                                            ) : (
+                                                flags.map((f) => (
+                                                    <InfoChip key={f.kind} tone="bad" icon={TriangleAlert}>
+                                                        {f.label}
+                                                    </InfoChip>
+                                                ))
                                             )}
                                         </div>
-                                    </div>
-                                    <div className="text-right shrink-0">
-                                        <div className="text-base font-bold text-amber-700">
-                                            NT$ {r.totalSales.toLocaleString()}
-                                        </div>
-                                        <div className="text-[10px] text-zinc-400">
-                                            收 {r.salesTotal.toLocaleString()} / 支 {r.expensesTotal.toLocaleString()}
-                                        </div>
+                                        <ChevronRight className="h-5 w-5 shrink-0 text-stone-500 print:hidden" aria-hidden="true" />
                                     </div>
                                 </Link>
                             </li>

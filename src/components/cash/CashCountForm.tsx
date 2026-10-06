@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { ClipboardList, TriangleAlert } from "lucide-react";
+import { CircleCheck, ClipboardList, LoaderCircle, TriangleAlert } from "lucide-react";
 import SignaturePad from "./SignaturePad";
 import { submitCashCount } from "@/app/actions/cash";
 import {
@@ -14,6 +14,26 @@ import {
     RESERVE_TARGET_TOTAL,
     SALES_DENOMS,
 } from "@/lib/cash-constants";
+import { diffStatus, formatDateWithWeekday, formatNtd } from "@/lib/cash-ui";
+import {
+    DRAFT_SCHEMA_VERSION,
+    clearDraft,
+    draftHasContent,
+    draftKey,
+    readDraft,
+    writeDraft,
+    type DraftPayload,
+    type ExpenseRow,
+} from "@/lib/cash-draft";
+import { cn } from "@/lib/utils";
+import CashConfirmDialog from "./CashConfirmDialog";
+import ChecklistSection from "./form/ChecklistSection";
+import DenomSection from "./form/DenomSection";
+import ExpenseSection from "./form/ExpenseSection";
+import SectionCard from "./form/SectionCard";
+import SummaryBar from "./form/SummaryBar";
+import { InfoChip } from "./StatusChip";
+import { btn, CARD, notice } from "./ui";
 
 type ChecklistItemDef = {
     id: string;
@@ -29,22 +49,6 @@ type Props = {
 };
 
 const INITIAL_EXPENSE_ROWS = 6;
-
-const DRAFT_SCHEMA_VERSION = 1;
-
-type ExpenseRow = { item: string; note: string; amount: string };
-
-type DraftPayload = {
-    v: number;
-    cashBox: Record<string, string>;
-    reserve: Record<string, string>;
-    sales: Record<string, string>;
-    expenses: ExpenseRow[];
-    checkedIds: string[];
-    signature: string | null;
-    note: string;
-    savedAt: number;
-};
 
 function emptyDenomState(denoms: readonly number[]): Record<string, string> {
     return Object.fromEntries(denoms.map((d) => [String(d), ""])) as Record<string, string>;
@@ -62,57 +66,15 @@ function sumDenoms(map: Record<string, string>): number {
     return Object.entries(map).reduce((acc, [d, v]) => acc + (Number(d) * (Number(v) || 0)), 0);
 }
 
-function ntFormat(n: number): string {
-    if (!Number.isFinite(n) || n === 0) return "—";
-    return "NT$ " + n.toLocaleString("zh-Hant-TW");
-}
-
-function draftKey(attendantId: string, date: string) {
-    return `cashcount-draft:${attendantId}:${date}`;
-}
-
-function readDraft(key: string): DraftPayload | null {
-    if (typeof window === "undefined") return null;
-    try {
-        const raw = window.sessionStorage.getItem(key);
-        if (!raw) return null;
-        const parsed = JSON.parse(raw) as DraftPayload;
-        if (!parsed || parsed.v !== DRAFT_SCHEMA_VERSION) return null;
-        return parsed;
-    } catch {
-        return null;
-    }
-}
-
-function writeDraft(key: string, payload: DraftPayload) {
-    if (typeof window === "undefined") return;
-    try {
-        window.sessionStorage.setItem(key, JSON.stringify(payload));
-    } catch {
-        // quota / private mode — silently skip
-    }
-}
-
-function clearDraft(key: string) {
-    if (typeof window === "undefined") return;
-    try {
-        window.sessionStorage.removeItem(key);
-    } catch {
-        // ignore
-    }
-}
-
-function draftHasContent(p: DraftPayload): boolean {
-    if (p.signature) return true;
-    if (p.note.trim().length > 0) return true;
-    if (p.checkedIds.length > 0) return true;
-    if (Object.values(p.cashBox).some((v) => v && Number(v) > 0)) return true;
-    if (Object.values(p.reserve).some((v) => v && Number(v) > 0)) return true;
-    if (Object.values(p.sales).some((v) => v && Number(v) > 0)) return true;
-    if (p.expenses.some((r) => r.item.trim() || r.note.trim() || (Number(r.amount) || 0) > 0)) return true;
-    return false;
-}
-
+/**
+ * 每日現金清點表單（T-ML-034 介面重設計）。
+ *
+ * 只重組版面與樣式；以下行為與重設計前完全等價：
+ * - 計算（面額 x 張數、支出合計、今日營業額 = 營業現金 + 當天支出）與差額判斷（合計 0 視為未填）
+ * - 草稿：sessionStorage key `cashcount-draft:${attendantId}:${date}`、schema 版本 1、300ms debounce 寫入
+ * - beforeunload 防呆（有內容且尚未提交成功才攔）
+ * - submitCashCount 呼叫、錯誤處理、成功後 1.2 秒導向 /cash/history
+ */
 export default function CashCountForm({ today, attendantId, attendantName, locationName, checklistItems }: Props) {
     const router = useRouter();
     const [cashBox, setCashBox] = useState<Record<string, string>>(emptyDenomState(CASH_BOX_DENOMS));
@@ -125,6 +87,7 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState<string | null>(null);
     const [restoredAt, setRestoredAt] = useState<number | null>(null);
+    const [discardOpen, setDiscardOpen] = useState(false);
     const [isPending, startTransition] = useTransition();
 
     const key = useMemo(() => draftKey(attendantId, today), [attendantId, today]);
@@ -167,6 +130,9 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
         };
         const isEmpty = !draftHasContent(payload);
         const t = window.setTimeout(() => {
+            // 提交成功後不要再寫草稿：若最後一次編輯後 300ms 內就提交成功，
+            // 這個計時器會在 clearDraft 之後才觸發，把已送出的內容又存成草稿。
+            if (submittedRef.current) return;
             if (isEmpty) {
                 clearDraft(key);
             } else {
@@ -208,8 +174,9 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
     );
     const totalSales = salesTotal + expensesTotal;
 
-    const cashBoxDiff = cashBoxTotal === 0 ? null : cashBoxTotal - CASH_BOX_TARGET_TOTAL;
-    const reserveDiff = reserveTotal === 0 ? null : reserveTotal - RESERVE_TARGET_TOTAL;
+    // 差額判斷與原本相同：合計為 0 視為「尚未填寫」，其餘才跟目標比
+    const cashBoxStatus = diffStatus(cashBoxTotal, CASH_BOX_TARGET_TOTAL);
+    const reserveStatus = diffStatus(reserveTotal, RESERVE_TARGET_TOTAL);
 
     function updateExpense(i: number, k: keyof ExpenseRow, v: string) {
         setExpenses((prev) => prev.map((r, idx) => (idx === i ? { ...r, [k]: v } : r)));
@@ -229,7 +196,6 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
     }
 
     function handleDiscardDraft() {
-        if (!window.confirm("確定要丟棄已自動還原的草稿？本表單會清空。")) return;
         setCashBox(emptyDenomState(CASH_BOX_DENOMS));
         setReserve(emptyDenomState(RESERVE_DENOMS));
         setSales(emptyDenomState(SALES_DENOMS));
@@ -239,6 +205,7 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
         setNote("");
         clearDraft(key);
         setRestoredAt(null);
+        setDiscardOpen(false);
     }
 
     function handleSubmit() {
@@ -250,7 +217,7 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
             return;
         }
         if (totalSales <= 0) {
-            setError("今日營業額為 0，請確認金額或聯絡管理員。");
+            setError("今日營業額是 0，請確認有沒有填金額；如果金額沒錯，請聯絡管理者。");
             return;
         }
 
@@ -275,210 +242,171 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
             }
             submittedRef.current = true;
             clearDraft(key);
-            setSuccess(`已儲存（今日營業額 NT$ ${totalSales.toLocaleString()}），同步寫入 Revenue。`);
+            setSuccess(`已儲存。今日營業額 ${formatNtd(totalSales)}，已同步到營業額表。`);
             router.refresh();
             setTimeout(() => router.push("/cash/history"), 1200);
         });
     }
 
     return (
-        <div className="p-4 space-y-4">
-            {/* 草稿還原 toast */}
-            {restoredAt !== null && (
-                <div className="bg-sky-50 border border-sky-300 text-sky-900 rounded-md p-3 text-sm flex items-start justify-between gap-3">
-                    <div className="flex-1">
-                        <div className="flex items-center gap-1.5 font-semibold">
-                            <ClipboardList className="h-4 w-4 shrink-0" aria-hidden="true" />
-                            找到上次未完成的清點，已自動還原
+        <div className="px-4 pb-4 pt-4 md:pt-6">
+            <div className="space-y-4">
+                {/* 草稿還原提示 */}
+                {restoredAt !== null && (
+                    <div role="status" className={notice("info", "items-center justify-between gap-3")}>
+                        <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 font-bold">
+                                <ClipboardList className="h-5 w-5 shrink-0" aria-hidden="true" />
+                                找到上次沒填完的清點，已幫你還原
+                            </div>
+                            <div className="mt-0.5 text-[15px]">
+                                儲存時間：{new Date(restoredAt).toLocaleTimeString("zh-Hant-TW", { hour: "2-digit", minute: "2-digit" })}
+                            </div>
                         </div>
-                        <div className="text-xs text-sky-700 mt-0.5">
-                            儲存時間：{new Date(restoredAt).toLocaleString("zh-Hant-TW")}
+                        <button
+                            type="button"
+                            onClick={() => setDiscardOpen(true)}
+                            aria-haspopup="dialog"
+                            className={btn("secondary", "sm", "shrink-0")}
+                        >
+                            丟棄草稿
+                        </button>
+                    </div>
+                )}
+
+                {/* 這份清點的資訊：攤位用大字，避免記到錯的攤位 */}
+                <section aria-labelledby="cash-info-title" className={cn(CARD, "p-4")}>
+                    <h1 id="cash-info-title" className="text-[15px] font-bold text-amber-800">
+                        今日現金清點
+                    </h1>
+                    <p className="mt-1 text-3xl font-extrabold leading-tight text-stone-900">{locationName}</p>
+                    <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-stone-200 pt-3 text-base sm:grid-cols-3">
+                        <div className="col-span-2 sm:col-span-1">
+                            <dt className="text-[13px] text-stone-600">日期</dt>
+                            <dd className="font-bold text-stone-900">{formatDateWithWeekday(today)}</dd>
                         </div>
+                        <div>
+                            <dt className="text-[13px] text-stone-600">清點人</dt>
+                            <dd className="font-bold text-stone-900">{attendantName}</dd>
+                        </div>
+                        <div>
+                            <dt className="text-[13px] text-stone-600">覆核人（固定）</dt>
+                            <dd className="font-bold text-stone-900">洪怜俼</dd>
+                        </div>
+                    </dl>
+                </section>
+
+                {/* 捲動後仍看得到：今日營業額 + 錢盒/備用金狀態 */}
+                <SummaryBar totalSales={totalSales} cashBox={cashBoxStatus} reserve={reserveStatus} />
+
+                <DenomSection
+                    step={1}
+                    title="錢盒清點"
+                    description={`目標 ${formatNtd(CASH_BOX_TARGET_TOTAL)}（各面額張數固定）`}
+                    denoms={[...CASH_BOX_DENOMS]}
+                    targetQty={CASH_BOX_TARGET_QTY}
+                    targetTotal={CASH_BOX_TARGET_TOTAL}
+                    values={cashBox}
+                    onChange={(d, v) => setCashBox((p) => ({ ...p, [d]: v }))}
+                    total={cashBoxTotal}
+                />
+
+                <DenomSection
+                    step={2}
+                    title="備用金清點"
+                    description={`目標 ${formatNtd(RESERVE_TARGET_TOTAL)}（總額固定）`}
+                    denoms={[...RESERVE_DENOMS]}
+                    targetQty={RESERVE_TARGET_QTY}
+                    targetTotal={RESERVE_TARGET_TOTAL}
+                    values={reserve}
+                    onChange={(d, v) => setReserve((p) => ({ ...p, [d]: v }))}
+                    total={reserveTotal}
+                />
+
+                <DenomSection
+                    step={3}
+                    title="當日營業現金"
+                    description={`扣掉要留的錢盒 ${formatNtd(CASH_BOX_TARGET_TOTAL)} 和備用金 ${formatNtd(RESERVE_TARGET_TOTAL)} 之後，剩下的現金`}
+                    denoms={[...SALES_DENOMS]}
+                    targetQty={null}
+                    targetTotal={null}
+                    values={sales}
+                    onChange={(d, v) => setSales((p) => ({ ...p, [d]: v }))}
+                    total={salesTotal}
+                />
+
+                <ExpenseSection step={4} rows={expenses} total={expensesTotal} onChange={updateExpense} onAddRow={addExpenseRow} />
+
+                {/* 今日營業額 = 營業現金 + 當天支出 */}
+                <section
+                    aria-label="今日營業額"
+                    className="rounded-2xl border-2 border-stone-800 bg-amber-100 px-5 py-4"
+                >
+                    <div className="flex items-baseline justify-between gap-3">
+                        <h2 className="text-lg font-bold text-stone-900">今日營業額</h2>
+                        <p className="text-3xl font-extrabold tabular-nums text-stone-900">
+                            {totalSales > 0 ? formatNtd(totalSales) : "—"}
+                        </p>
                     </div>
-                    <button
-                        type="button"
-                        onClick={handleDiscardDraft}
-                        className="px-3 py-1.5 bg-white border border-sky-400 text-sky-700 rounded-md text-xs font-semibold whitespace-nowrap"
-                    >
-                        丟棄草稿
-                    </button>
-                </div>
-            )}
+                    <p className="mt-1.5 text-[15px] text-stone-800">
+                        營業現金 {formatNtd(salesTotal)} ＋ 當天支出 {formatNtd(expensesTotal)}
+                    </p>
+                </section>
 
-            {/* 表頭 */}
-            <div className="bg-amber-100 border border-amber-300 rounded-md p-3 text-sm">
-                <div className="grid grid-cols-3 gap-2">
-                    <div>
-                        <div className="text-zinc-600 text-xs">日期</div>
-                        <div className="font-bold">{today}</div>
-                    </div>
-                    <div>
-                        <div className="text-zinc-600 text-xs">攤位</div>
-                        <div className="font-bold">{locationName}</div>
-                    </div>
-                    <div>
-                        <div className="text-zinc-600 text-xs">清點人</div>
-                        <div className="font-bold">{attendantName}</div>
-                    </div>
-                </div>
-                <div className="mt-1 text-xs text-zinc-500">覆核人：洪怜俼（自動）</div>
-            </div>
+                <ChecklistSection step={5} items={checklistItems} checkedIds={checkedIds} onToggle={toggleCheck} />
 
-            <DenomTable
-                title="① 錢盒清點"
-                subtitle={`目標 NT$ ${CASH_BOX_TARGET_TOTAL.toLocaleString()}（面額張數固定）`}
-                denoms={[...CASH_BOX_DENOMS]}
-                targetQty={CASH_BOX_TARGET_QTY}
-                values={cashBox}
-                onChange={(d, v) => setCashBox((p) => ({ ...p, [d]: v }))}
-                total={cashBoxTotal}
-                diff={cashBoxDiff}
-            />
+                <SectionCard
+                    step={6}
+                    title="簽名確認"
+                    description="請清點人簽名；覆核人固定是洪怜俼。"
+                    status={
+                        signature ? (
+                            <InfoChip tone="ok" icon={CircleCheck}>已簽名</InfoChip>
+                        ) : (
+                            <InfoChip tone="muted">尚未簽名</InfoChip>
+                        )
+                    }
+                >
+                    <div className="space-y-4 p-4">
+                        <div className="grid grid-cols-2 gap-3">
+                            <SignaturePad label="清點人簽名" value={signature} onChange={setSignature} />
+                            <div className="flex flex-col">
+                                <div className="mb-1.5 flex items-center justify-between gap-2">
+                                    <span className="text-base font-bold text-stone-900">覆核人</span>
+                                    <span className="text-[13px] text-stone-600">固定</span>
+                                </div>
+                                <div className="flex h-28 items-center justify-center rounded-xl border-2 border-stone-300 bg-stone-50">
+                                    <span className="text-xl font-bold text-stone-900">洪怜俼</span>
+                                </div>
+                            </div>
+                        </div>
 
-            <DenomTable
-                title="② 備用金清點"
-                subtitle={`目標 NT$ ${RESERVE_TARGET_TOTAL.toLocaleString()}（總額固定）`}
-                denoms={[...RESERVE_DENOMS]}
-                targetQty={RESERVE_TARGET_QTY}
-                values={reserve}
-                onChange={(d, v) => setReserve((p) => ({ ...p, [d]: v }))}
-                total={reserveTotal}
-                diff={reserveDiff}
-            />
-
-            <DenomTable
-                title="③ 當日營業現金"
-                subtitle={`扣回錢盒 ${CASH_BOX_TARGET_TOTAL.toLocaleString()} / 備用金 ${RESERVE_TARGET_TOTAL.toLocaleString()} 後剩下的現金`}
-                denoms={[...SALES_DENOMS]}
-                targetQty={null}
-                values={sales}
-                onChange={(d, v) => setSales((p) => ({ ...p, [d]: v }))}
-                total={salesTotal}
-                diff={null}
-            />
-
-            <section className="border-2 border-zinc-300 rounded-md overflow-hidden">
-                <header className="bg-amber-100 px-3 py-2 border-b-2 border-zinc-300 flex items-center justify-between">
-                    <h3 className="font-bold text-sm">④ 當天現金支出明細</h3>
-                    <button
-                        type="button"
-                        onClick={addExpenseRow}
-                        className="text-xs text-amber-700 underline"
-                    >
-                        + 新增一列
-                    </button>
-                </header>
-                <div className="bg-amber-50/60 px-3 py-1 text-xs text-zinc-600 border-b border-zinc-200">
-                    從錢盒/營業現金支付的項目（進貨、零工、雜支）寫完自動加總。
-                </div>
-                <div className="divide-y divide-zinc-200">
-                    {expenses.map((row, i) => (
-                        <div key={i} className="grid grid-cols-12 gap-2 px-2 py-1.5 items-center">
-                            <input
-                                type="text"
-                                placeholder="項目"
-                                value={row.item}
-                                onChange={(e) => updateExpense(i, "item", e.target.value)}
-                                className="col-span-5 border-b border-dashed border-zinc-400 px-1 py-1 text-sm bg-transparent focus:outline-none focus:border-amber-600"
+                        <div>
+                            <label htmlFor="cash-note" className="mb-1.5 block text-base font-bold text-stone-900">
+                                備註<span className="ml-1.5 text-[15px] font-normal text-stone-600">（選填）</span>
+                            </label>
+                            <textarea
+                                id="cash-note"
+                                value={note}
+                                onChange={(e) => setNote(e.target.value)}
+                                rows={3}
+                                className="w-full rounded-xl border border-stone-300 bg-white px-3 py-2.5 text-base text-stone-900 placeholder:text-stone-500"
+                                placeholder="今天有什麼特別狀況？"
                             />
-                            <input
-                                type="text"
-                                placeholder="備註"
-                                value={row.note}
-                                onChange={(e) => updateExpense(i, "note", e.target.value)}
-                                className="col-span-4 border-b border-dashed border-zinc-400 px-1 py-1 text-sm bg-transparent focus:outline-none focus:border-amber-600"
-                            />
-                            <input
-                                type="number"
-                                inputMode="numeric"
-                                min="0"
-                                placeholder="金額"
-                                value={row.amount}
-                                onChange={(e) => updateExpense(i, "amount", e.target.value)}
-                                className="col-span-3 border-b border-dashed border-zinc-400 px-1 py-1 text-sm text-right font-bold bg-transparent focus:outline-none focus:border-amber-600"
-                            />
                         </div>
-                    ))}
-                    <div className="px-3 py-2 bg-amber-100/80 flex justify-between items-center text-sm font-bold">
-                        <span>支出合計</span>
-                        <span className="text-amber-700">{ntFormat(expensesTotal)}</span>
                     </div>
-                </div>
-            </section>
-
-            <div className="border-4 border-double border-zinc-800 bg-yellow-50 px-5 py-4 rounded-md flex items-center justify-between">
-                <div>
-                    <div className="text-base font-bold">今日營業額</div>
-                    <div className="text-xs text-zinc-500">＝ 營業現金 ＋ 當天支出</div>
-                </div>
-                <div className="text-2xl font-extrabold tracking-wider">
-                    {totalSales > 0 ? `NT$ ${totalSales.toLocaleString()}` : "—"}
-                </div>
-            </div>
-
-            <section className="border-2 border-zinc-300 rounded-md overflow-hidden">
-                <header className="bg-amber-100 px-3 py-2 border-b-2 border-zinc-300 flex items-center justify-between">
-                    <h3 className="font-bold text-sm">⑤ 動作清點</h3>
-                    <span className="text-xs text-zinc-600 font-mono">
-                        {checkedIds.size}/{checklistItems.length}
-                    </span>
-                </header>
-                <div className="p-3">
-                    {checklistItems.length === 0 ? (
-                        <p className="text-sm text-zinc-500">尚無動作項目，請聯絡管理員設定。</p>
-                    ) : (
-                        <ul className="space-y-2">
-                            {checklistItems.map((c) => (
-                                <li key={c.id}>
-                                    <label className="flex items-center gap-3 p-3 border border-zinc-200 rounded-md bg-white active:bg-amber-50 cursor-pointer">
-                                        <input
-                                            type="checkbox"
-                                            checked={checkedIds.has(c.id)}
-                                            onChange={() => toggleCheck(c.id)}
-                                            className="w-5 h-5 accent-amber-600"
-                                        />
-                                        <span className={checkedIds.has(c.id) ? "line-through text-zinc-500" : ""}>
-                                            {c.name}
-                                        </span>
-                                    </label>
-                                </li>
-                            ))}
-                        </ul>
-                    )}
-                </div>
-            </section>
-
-            <section className="space-y-3 border-t-2 border-zinc-200 pt-4">
-                <div className="grid grid-cols-2 gap-3">
-                    <SignaturePad label="清點人簽名" value={signature} onChange={setSignature} />
-                    <div className="flex flex-col">
-                        <div className="h-24 sm:h-28 border-2 border-dashed border-zinc-300 rounded-md flex items-center justify-center bg-zinc-50">
-                            <span className="text-lg font-semibold text-zinc-700">洪怜俼</span>
-                        </div>
-                        <div className="mt-1 text-xs text-zinc-600 text-center">覆核人（固定）</div>
-                    </div>
-                </div>
-
-                <div>
-                    <label className="text-xs text-zinc-600">備註（選填）</label>
-                    <textarea
-                        value={note}
-                        onChange={(e) => setNote(e.target.value)}
-                        rows={2}
-                        className="w-full border border-zinc-300 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-amber-500"
-                        placeholder="今天有什麼特別狀況？"
-                    />
-                </div>
+                </SectionCard>
 
                 {error && (
-                    <div className="flex items-center gap-1.5 text-sm text-red-700 bg-red-50 border border-red-200 rounded-md p-2">
-                        <TriangleAlert className="h-4 w-4 shrink-0" aria-hidden="true" />
-                        {error}
+                    <div role="alert" className={notice("bad")}>
+                        <TriangleAlert className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+                        <span>{error}</span>
                     </div>
                 )}
                 {success && (
-                    <div className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-md p-2">
-                        {success}
+                    <div role="status" className={notice("ok")}>
+                        <CircleCheck className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+                        <span>{success}</span>
                     </div>
                 )}
 
@@ -486,99 +414,29 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
                     type="button"
                     onClick={handleSubmit}
                     disabled={isPending}
-                    className="w-full py-3 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white text-base font-bold rounded-md disabled:opacity-60"
+                    aria-busy={isPending}
+                    className={btn("primary", "lg", "w-full")}
                 >
-                    {isPending ? "儲存中…" : "提交今日清點"}
+                    {isPending ? (
+                        <>
+                            <LoaderCircle className="h-5 w-5 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                            儲存中…
+                        </>
+                    ) : (
+                        "提交今日清點"
+                    )}
                 </button>
-            </section>
-        </div>
-    );
-}
+            </div>
 
-function DenomTable({
-    title,
-    subtitle,
-    denoms,
-    targetQty,
-    values,
-    onChange,
-    total,
-    diff,
-}: {
-    title: string;
-    subtitle: string;
-    denoms: number[];
-    targetQty: Record<number, number> | null;
-    values: Record<string, string>;
-    onChange: (denom: string, value: string) => void;
-    total: number;
-    diff: number | null;
-}) {
-    return (
-        <section className="border-2 border-zinc-300 rounded-md overflow-hidden">
-            <header className="bg-amber-100 px-3 py-2 border-b-2 border-zinc-300">
-                <h3 className="font-bold text-sm">{title}</h3>
-                <p className="text-xs text-zinc-600">{subtitle}</p>
-            </header>
-            <table className="w-full text-sm">
-                <thead className="bg-zinc-50 text-xs">
-                    <tr>
-                        <th className="px-2 py-1 text-left font-semibold w-1/4">面額</th>
-                        {targetQty && <th className="px-2 py-1 font-semibold">參考張數</th>}
-                        <th className="px-2 py-1 font-semibold">實際張數</th>
-                        <th className="px-2 py-1 font-semibold text-right">金額</th>
-                    </tr>
-                </thead>
-                <tbody className="divide-y divide-zinc-200">
-                    {denoms.map((d) => {
-                        const v = values[String(d)] ?? "";
-                        const amt = d * (Number(v) || 0);
-                        return (
-                            <tr key={d}>
-                                <td className="px-2 py-1 font-bold">{d}</td>
-                                {targetQty && (
-                                    <td className="px-2 py-1 text-center text-zinc-500">
-                                        {targetQty[d] ?? "—"}
-                                    </td>
-                                )}
-                                <td className="px-2 py-1 text-center">
-                                    <input
-                                        type="number"
-                                        inputMode="numeric"
-                                        min="0"
-                                        value={v}
-                                        onChange={(e) => onChange(String(d), e.target.value)}
-                                        className="w-16 border-b border-dashed border-zinc-400 text-center font-semibold bg-transparent focus:outline-none focus:border-amber-600"
-                                    />
-                                </td>
-                                <td className="px-2 py-1 text-right font-semibold">
-                                    {amt > 0 ? amt.toLocaleString() : "—"}
-                                </td>
-                            </tr>
-                        );
-                    })}
-                    <tr className="bg-amber-50/80 font-bold">
-                        <td colSpan={targetQty ? 3 : 2} className="px-2 py-1.5 text-right">合計</td>
-                        <td className="px-2 py-1.5 text-right text-amber-700">
-                            {total > 0 ? `NT$ ${total.toLocaleString()}` : "—"}
-                        </td>
-                    </tr>
-                    {diff !== null && diff !== 0 && (
-                        <tr className="bg-red-50">
-                            <td colSpan={targetQty ? 3 : 2} className="px-2 py-1 text-right text-xs text-red-700">差額</td>
-                            <td className="px-2 py-1 text-right text-xs font-bold text-red-700">
-                                {diff > 0 ? `+${diff.toLocaleString()}` : diff.toLocaleString()}
-                            </td>
-                        </tr>
-                    )}
-                    {diff === 0 && total > 0 && (
-                        <tr className="bg-green-50">
-                            <td colSpan={targetQty ? 3 : 2} className="px-2 py-1 text-right text-xs text-green-700">差額</td>
-                            <td className="px-2 py-1 text-right text-xs font-bold text-green-700">✓ 平</td>
-                        </tr>
-                    )}
-                </tbody>
-            </table>
-        </section>
+            <CashConfirmDialog
+                open={discardOpen}
+                onOpenChange={setDiscardOpen}
+                title="丟棄這份草稿？"
+                description="已自動還原的內容會全部清空，沒辦法再找回來。"
+                confirmLabel="丟棄草稿"
+                tone="danger"
+                onConfirm={handleDiscardDraft}
+            />
+        </div>
     );
 }

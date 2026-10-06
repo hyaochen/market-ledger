@@ -2,11 +2,16 @@
 
 import { useState, useTransition } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { Download, Printer } from "lucide-react";
+import { btn, CARD, INPUT } from "@/components/cash/ui";
+import { cn } from "@/lib/utils";
 
 type Props = {
     defaultFrom?: string;
     defaultTo?: string;
     isAdmin: boolean;
+    /** server 算好的「今天」（跟新增清點表單同一套日期規則） */
+    today: string;
 };
 
 export default function HistoryToolbar({ defaultFrom, defaultTo, isAdmin }: Props) {
@@ -36,53 +41,39 @@ export default function HistoryToolbar({ defaultFrom, defaultTo, isAdmin }: Prop
     }
 
     return (
-        <div className="bg-amber-50 border border-amber-200 rounded-md p-2 flex flex-wrap items-center gap-2 text-xs">
-            <label className="flex items-center gap-1">
-                <span className="text-zinc-600">從</span>
-                <input
-                    type="date"
-                    value={from}
-                    onChange={(e) => setFrom(e.target.value)}
-                    className="border border-zinc-300 rounded px-1.5 py-0.5"
-                />
-            </label>
-            <label className="flex items-center gap-1">
-                <span className="text-zinc-600">至</span>
-                <input
-                    type="date"
-                    value={to}
-                    onChange={(e) => setTo(e.target.value)}
-                    className="border border-zinc-300 rounded px-1.5 py-0.5"
-                />
-            </label>
-            <button
-                type="button"
-                onClick={applyFilter}
-                disabled={isPending}
-                className="bg-amber-600 text-white px-2.5 py-1 rounded disabled:opacity-50"
-            >
-                套用
-            </button>
-            <div className="ml-auto flex gap-2">
+        <section aria-label="篩選日期與匯出" className={cn(CARD, "space-y-3 p-4 print:hidden")}>
+            <div className="grid grid-cols-2 gap-3">
+                <label className="block">
+                    <span className="mb-1 block text-[15px] font-bold text-stone-900">從</span>
+                    <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className={INPUT} />
+                </label>
+                <label className="block">
+                    <span className="mb-1 block text-[15px] font-bold text-stone-900">至</span>
+                    <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className={INPUT} />
+                </label>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+                <button
+                    type="button"
+                    onClick={applyFilter}
+                    disabled={isPending}
+                    aria-busy={isPending}
+                    className={btn("primary", "md", "col-span-2 sm:col-span-1")}
+                >
+                    {isPending ? "查詢中…" : "套用日期"}
+                </button>
                 {isAdmin && (
-                    <button
-                        type="button"
-                        onClick={exportCsv}
-                        className="border border-zinc-400 px-2.5 py-1 rounded hover:bg-white"
-                        title="匯出 CSV (Excel 可開)"
-                    >
+                    <button type="button" onClick={exportCsv} className={btn("secondary", "md")} title="匯出成 Excel 可以開的 CSV 檔">
+                        <Download className="h-5 w-5" aria-hidden="true" />
                         匯出 CSV
                     </button>
                 )}
-                <button
-                    type="button"
-                    onClick={printPdf}
-                    className="border border-zinc-400 px-2.5 py-1 rounded hover:bg-white"
-                    title="瀏覽器列印 → 存 PDF"
-                >
+                <button type="button" onClick={printPdf} className={btn("secondary", "md")} title="用瀏覽器列印，或存成 PDF">
+                    <Printer className="h-5 w-5" aria-hidden="true" />
                     列印 / PDF
                 </button>
             </div>
-        </div>
+        </section>
     );
 }

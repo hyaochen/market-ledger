@@ -140,6 +140,13 @@ test("diffStatus: 多了顯示「差 +50」並附白話說明；少了顯示「�
     assert.equal(under.detail, "比目標少 100 元");
 });
 
+test("diffStatus: 已存檔的紀錄（zeroIsEmpty=false）合計 0 照實跟目標比，不當成尚未填寫", () => {
+    const s = diffStatus(0, CASH_BOX_TARGET_TOTAL, false);
+    assert.equal(s.kind, "under");
+    assert.equal(s.diff, -CASH_BOX_TARGET_TOTAL);
+    assert.equal(s.label, `差 -${CASH_BOX_TARGET_TOTAL.toLocaleString("en-US")}`);
+});
+
 test("diffStatus: 大額差額要有千分位", () => {
     assert.equal(diffStatus(CASH_BOX_TARGET_TOTAL + 1200, CASH_BOX_TARGET_TOTAL).label, "差 +1,200");
     assert.equal(diffStatus(CASH_BOX_TARGET_TOTAL - 1500, CASH_BOX_TARGET_TOTAL).label, "差 -1,500");

@@ -128,11 +128,12 @@ export type DiffStatus = {
 };
 
 /**
- * 表單區塊標頭用的差額狀態。
- * 與原本表單邏輯一致：合計為 0 視為「還沒填」，不顯示差額；有填才跟目標比。
+ * 差額狀態（表單區塊標頭、歷史詳情共用）。
+ * 預設與原本表單邏輯一致：合計為 0 視為「還沒填」，不顯示差額；有填才跟目標比。
+ * 已存檔的紀錄（歷史詳情）傳 zeroIsEmpty=false：0 是真的存下來的數字，要照實跟目標比。
  */
-export function diffStatus(total: number, target: number): DiffStatus {
-    if (!Number.isFinite(total) || total === 0) {
+export function diffStatus(total: number, target: number, zeroIsEmpty = true): DiffStatus {
+    if (!Number.isFinite(total) || (zeroIsEmpty && total === 0)) {
         return { kind: "empty", diff: null, label: "尚未填寫", detail: "還沒有填寫張數" };
     }
     const diff = total - target;

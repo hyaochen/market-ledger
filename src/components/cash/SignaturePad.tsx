@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import SignaturePadLib from "signature_pad";
-import { PenLine, RotateCcw, RotateCw, Smartphone } from "lucide-react";
+import { Check, CircleCheck, PenLine, RotateCcw, RotateCw, Smartphone, X } from "lucide-react";
+import { btn } from "./ui";
 
 type Props = {
     label: string;
@@ -17,38 +18,57 @@ export default function SignaturePad({ label, value, onChange }: Props) {
         onChange(null);
     }
 
+    // T-ML-034：只改外觀與按鈕尺寸。開啟 modal 的條件與原本相同
+    // （沒簽過：點一下就開；已簽過：連點兩下才重簽），另外補上鍵盤（Enter / 空白鍵）與明確的「重新簽名」按鈕。
     return (
         <div className="flex flex-col">
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+                <span className="text-base font-bold text-stone-900">{label}</span>
+                {value ? (
+                    <span className="inline-flex items-center gap-1 text-[15px] font-bold text-emerald-800">
+                        <CircleCheck className="h-4 w-4" aria-hidden="true" />
+                        已簽名
+                    </span>
+                ) : null}
+            </div>
             <div
-                className="h-24 sm:h-28 border-2 border-dashed border-zinc-400 rounded-md bg-white/70 flex items-center justify-center cursor-pointer select-none"
+                className={
+                    "flex h-28 cursor-pointer select-none items-center justify-center rounded-xl border-2 bg-white transition-colors duration-150 motion-reduce:transition-none " +
+                    (value ? "border-solid border-emerald-700" : "border-dashed border-stone-500 active:bg-stone-100")
+                }
                 onDoubleClick={() => setOpen(true)}
                 onClick={() => {
                     if (!value) setOpen(true);
                 }}
+                onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setOpen(true);
+                    }
+                }}
                 role="button"
                 tabIndex={0}
+                aria-label={value ? `${label}，已簽名，按 Enter 可以重新簽名` : `${label}，點一下開始簽名`}
             >
                 {value ? (
-                    <img src={value} alt={`${label} 簽名`} className="max-h-full max-w-full object-contain" />
+                    <img src={value} alt={`${label}的簽名`} className="max-h-full max-w-full object-contain" />
                 ) : (
-                    <span className="inline-flex items-center gap-1 text-sm text-zinc-500">
-                        <PenLine className="h-4 w-4" aria-hidden="true" />
-                        點兩下開始簽名
+                    <span className="inline-flex items-center gap-1.5 text-base font-semibold text-stone-700">
+                        <PenLine className="h-5 w-5" aria-hidden="true" />
+                        點一下開始簽名
                     </span>
                 )}
             </div>
-            <div className="mt-1 flex items-center justify-between text-xs">
-                <span className="text-zinc-600">{label}</span>
-                {value && (
-                    <button
-                        type="button"
-                        onClick={handleClear}
-                        className="text-red-600 underline"
-                    >
+            {value ? (
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                    <button type="button" onClick={() => setOpen(true)} className={btn("secondary", "sm", "px-2")}>
+                        重新簽名
+                    </button>
+                    <button type="button" onClick={handleClear} className={btn("secondary", "sm", "px-2 text-red-800")}>
                         清除
                     </button>
-                )}
-            </div>
+                </div>
+            ) : null}
 
             {open && (
                 <SignatureModal
@@ -78,6 +98,38 @@ function SignatureModal({
 }) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const padRef = useRef<SignaturePadLib | null>(null);
+
+    // T-ML-034：modal 的鍵盤無障礙，完全不碰下面的 canvas / signature_pad 邏輯：
+    // 開啟時把焦點移進 modal、Tab 只在 modal 內循環、Esc 關閉、關閉後焦點還給原本的按鈕。
+    const dialogRef = useRef<HTMLDivElement | null>(null);
+    useEffect(() => {
+        const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        dialogRef.current?.focus();
+        return () => {
+            previous?.focus();
+        };
+    }, []);
+
+    function handleDialogKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
+        if (e.key === "Escape") {
+            e.stopPropagation();
+            onClose();
+            return;
+        }
+        if (e.key !== "Tab") return;
+        const nodes = dialogRef.current?.querySelectorAll<HTMLElement>("button:not([disabled])");
+        if (!nodes || nodes.length === 0) return;
+        const first = nodes[0];
+        const last = nodes[nodes.length - 1];
+        const active = document.activeElement;
+        if (e.shiftKey && (active === first || active === dialogRef.current)) {
+            e.preventDefault();
+            last.focus();
+        } else if (!e.shiftKey && active === last) {
+            e.preventDefault();
+            first.focus();
+        }
+    }
 
     // T-ML-010: URL ?debug=1 觸發 debug overlay，顯示 touch / rect / vv.offset / dpr
     // 給未來簽名座標問題用（不影響 production 體驗）
@@ -309,23 +361,28 @@ function SignatureModal({
 
     return (
         <div
-            className="fixed inset-0 z-50 bg-black/95 flex flex-col"
+            ref={dialogRef}
+            tabIndex={-1}
+            onKeyDown={handleDialogKeyDown}
+            style={{ outline: "none" }}
+            className="cash-on-dark fixed inset-0 z-50 flex flex-col bg-black/95"
             role="dialog"
-            aria-modal
+            aria-modal="true"
+            aria-label={`${label}（簽名）`}
         >
-            {/* 標題列：右上角浮動關閉按鈕（醒目） */}
-            <div className="flex items-center justify-between px-4 py-3 text-white">
-                <div className="text-sm sm:text-base">
-                    <span className="font-semibold">{label}</span>
-                    <span className="ml-2 text-zinc-300 text-xs">請於下方簽名（手指或筆觸控）</span>
+            {/* 標題列：右上角關閉按鈕（44px） */}
+            <div className="flex items-center justify-between gap-3 px-4 py-3 text-white">
+                <div className="min-w-0">
+                    <span className="text-lg font-bold">{label}</span>
+                    <span className="ml-2 text-sm text-stone-300">請於下方簽名（手指或觸控筆）</span>
                 </div>
                 <button
                     type="button"
                     onClick={onClose}
                     aria-label="取消並關閉簽名"
-                    className="w-10 h-10 rounded-full bg-zinc-700 hover:bg-zinc-600 active:bg-zinc-800 text-white text-xl flex items-center justify-center"
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-stone-700 text-white transition-colors duration-150 hover:bg-stone-600 active:bg-stone-800 motion-reduce:transition-none"
                 >
-                    ✕
+                    <X className="h-6 w-6" aria-hidden="true" />
                 </button>
             </div>
 
@@ -338,13 +395,13 @@ function SignatureModal({
 
             {/* T-ML-009: 直握手機 UX 提示 — T-ML-008 CSS rotate 走不通改純 prompt
                 只 portrait + 手機尺寸顯示，landscape 跟桌面/iPad 自動隱藏 */}
-            <div className="orientation-portrait-only flex-col items-center justify-center px-6 py-3 bg-amber-500/95 text-white border-b border-amber-700">
-                <span className="flex items-center gap-1 mb-1" aria-hidden="true">
+            <div className="orientation-portrait-only flex-col items-center justify-center border-b border-amber-300 bg-amber-100 px-6 py-3 text-amber-950">
+                <span className="mb-1 flex items-center gap-1" aria-hidden="true">
                     <Smartphone className="h-7 w-7" />
                     <RotateCw className="h-6 w-6" />
                 </span>
-                <span className="font-semibold text-base">請把手機橫過來簽名</span>
-                <span className="text-xs text-amber-100 mt-1">橫向才有完整簽名空間</span>
+                <span className="text-lg font-bold">請把手機橫過來簽名</span>
+                <span className="mt-0.5 text-[15px] text-amber-900">橫向才有完整簽名空間</span>
             </div>
 
             {/* canvas 區塊 */}
@@ -358,30 +415,32 @@ function SignatureModal({
 
             {/* 底部三顆大按鈕 — sticky + safe-area */}
             <div
-                className="grid grid-cols-3 gap-3 px-4 py-3 bg-black/60 border-t border-zinc-700"
+                className="grid grid-cols-3 gap-3 border-t border-stone-700 bg-black/60 px-4 py-3"
                 style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 0.75rem)" }}
             >
                 <button
                     type="button"
                     onClick={onClose}
-                    className="py-3 bg-zinc-600 hover:bg-zinc-500 active:bg-zinc-700 text-white text-base font-semibold rounded-lg"
+                    className="inline-flex min-h-14 items-center justify-center gap-1.5 rounded-xl bg-stone-600 text-lg font-bold text-white transition-colors duration-150 hover:bg-stone-500 active:bg-stone-700 motion-reduce:transition-none"
                 >
-                    ✕ 取消
+                    <X className="h-5 w-5" aria-hidden="true" />
+                    取消
                 </button>
                 <button
                     type="button"
                     onClick={handleClear}
-                    className="py-3 bg-sky-600 hover:bg-sky-500 active:bg-sky-700 text-white text-base font-semibold rounded-lg"
+                    className="inline-flex min-h-14 items-center justify-center gap-1.5 rounded-xl bg-sky-700 text-lg font-bold text-white transition-colors duration-150 hover:bg-sky-600 active:bg-sky-800 motion-reduce:transition-none"
                 >
-                    <RotateCcw className="mr-1 inline h-4 w-4 align-text-bottom" aria-hidden="true" />
+                    <RotateCcw className="h-5 w-5" aria-hidden="true" />
                     重畫
                 </button>
                 <button
                     type="button"
                     onClick={handleDone}
-                    className="py-3 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white text-base font-bold rounded-lg shadow-lg"
+                    className="inline-flex min-h-14 items-center justify-center gap-1.5 rounded-xl bg-emerald-700 text-lg font-bold text-white shadow-lg transition-colors duration-150 hover:bg-emerald-600 active:bg-emerald-800 motion-reduce:transition-none"
                 >
-                    ✓ 完成
+                    <Check className="h-5 w-5" aria-hidden="true" />
+                    完成
                 </button>
             </div>
         </div>
