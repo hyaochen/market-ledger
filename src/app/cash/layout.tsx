@@ -1,6 +1,6 @@
 import type { Metadata, Viewport } from "next";
-import Link from "next/link";
-import { Coins } from "lucide-react";
+import { getCashUserOrNull } from "@/lib/cash-auth";
+import CashShell from "@/components/cash/CashShell";
 
 export const metadata: Metadata = {
     title: "市場現金清點",
@@ -31,22 +31,19 @@ export const viewport: Viewport = {
     themeColor: "#b56500",
 };
 
-export default function CashLayout({ children }: { children: React.ReactNode }) {
+/**
+ * /cash 的 layout（T-ML-034）。
+ *
+ * /cash/login 也套這個 layout，所以不能用會 redirect 的 requireCashAuth，
+ * 改用 getCashUserOrNull()：未登入只渲染 children（登入頁不顯示任何導覽），
+ * 已登入才包上 App shell（標頭 + 導覽 + 登出）。
+ */
+export default async function CashLayout({ children }: { children: React.ReactNode }) {
+    const user = await getCashUserOrNull();
+
     return (
-        <div className="min-h-[100dvh] bg-amber-50 text-zinc-900 flex flex-col">
-            <header className="sticky top-0 z-30 bg-amber-700 text-white shadow-sm pt-safe">
-                <div className="px-4 py-2 flex items-center justify-between max-w-3xl mx-auto w-full">
-                    <Link href="/cash" className="flex items-center gap-1.5 text-base font-bold tracking-wider">
-                        <Coins className="h-5 w-5" aria-hidden="true" />
-                        市場現金清點
-                    </Link>
-                    <nav className="text-xs flex gap-3">
-                        <Link href="/cash" className="hover:underline">新增</Link>
-                        <Link href="/cash/history" className="hover:underline">歷史</Link>
-                    </nav>
-                </div>
-            </header>
-            <main className="flex-1 w-full max-w-3xl mx-auto pb-nav-safe">{children}</main>
+        <div className="cash-app min-h-[100dvh] bg-amber-50 text-stone-900 print:bg-white">
+            {user ? <CashShell user={user}>{children}</CashShell> : children}
         </div>
     );
 }

@@ -40,6 +40,9 @@ const tests = [
     "src/lib/analytics/fixedExpenseRules.test.ts",
     "src/lib/fixedExpenseAutofill.test.ts",
     "src/lib/cashExpenseSync.test.ts",
+    // T-ML-034：cash 站介面重設計的純函式（導覽 active、差額狀態、日期、區間、草稿機制）
+    "src/lib/cash-ui.test.ts",
+    "src/lib/cash-draft.test.ts",
 ];
 
 const child = spawn("tsx", ["--test", ...tests], {
