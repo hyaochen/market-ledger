@@ -6,6 +6,7 @@ import type { ExpenseRow } from "@/lib/cash-draft";
 import { btn, INPUT } from "../ui";
 import { InfoChip } from "../StatusChip";
 import SectionCard from "./SectionCard";
+import { selectOnFocus } from "./selectOnFocus";
 import { cn } from "@/lib/utils";
 
 type Props = {
@@ -63,10 +64,7 @@ export default function ExpenseSection({ step, rows, total, onChange, onAddRow }
                             placeholder="金額"
                             value={row.amount}
                             onChange={(e) => onChange(i, "amount", sanitizeAmount(e.target.value))}
-                            onFocus={(e) => {
-                                const el = e.currentTarget;
-                                requestAnimationFrame(() => el.select());
-                            }}
+                            onFocus={selectOnFocus}
                             className={cn(INPUT, "scroll-mt-36 px-2.5 text-right font-bold tabular-nums")}
                         />
                     </li>

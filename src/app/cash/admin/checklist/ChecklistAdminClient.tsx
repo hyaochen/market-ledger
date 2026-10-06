@@ -176,7 +176,7 @@ export default function ChecklistAdminClient({ items }: { items: Item[] }) {
                                                 onBlur={(e) => {
                                                     if (Number(e.target.value) !== item.sortOrder) handleSortOrder(item.id, e.target.value);
                                                 }}
-                                                className="mt-0.5 block h-12 w-16 rounded-xl border border-stone-300 bg-white px-1 text-center text-base text-stone-900"
+                                                className="mt-0.5 block h-12 w-16 rounded-xl border border-stone-500 bg-white px-1 text-center text-base text-stone-900"
                                             />
                                         </label>
                                     </div>

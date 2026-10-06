@@ -41,7 +41,7 @@ export function btn(variant: BtnVariant = "primary", size: BtnSize = "md", class
 
 /** 單行文字輸入框：高 48px、字級 16px（iOS 聚焦時才不會自動放大）。 */
 export const INPUT =
-    "h-12 w-full rounded-xl border border-stone-300 bg-white px-3 text-base text-stone-900 " +
+    "h-12 w-full rounded-xl border border-stone-500 bg-white px-3 text-base text-stone-900 " +
     "placeholder:text-stone-500 disabled:bg-stone-100 disabled:text-stone-600";
 
 /** 白底卡片：圓角 2xl、細邊框、淡陰影。卡片內不再巢狀卡片，用分隔線切區。 */

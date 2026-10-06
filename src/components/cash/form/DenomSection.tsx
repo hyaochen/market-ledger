@@ -5,6 +5,7 @@ import { diffStatus, formatNtd, sanitizeCount, stepCount, type DiffStatus } from
 import { cn } from "@/lib/utils";
 import { DiffChip, InfoChip } from "../StatusChip";
 import SectionCard from "./SectionCard";
+import { selectOnFocus } from "./selectOnFocus";
 
 type Props = {
     step: number;
@@ -90,14 +91,10 @@ export default function DenomSection({
                                     enterKeyHint="next"
                                     value={v}
                                     onChange={(e) => onChange(String(d), sanitizeCount(e.target.value))}
-                                    onFocus={(e) => {
-                                        const el = e.currentTarget;
-                                        // iOS 要等一個 frame 才能真的全選
-                                        requestAnimationFrame(() => el.select());
-                                    }}
+                                    onFocus={selectOnFocus}
                                     aria-label={`${d} 元的張數`}
                                     placeholder="0"
-                                    className="h-12 w-14 scroll-mt-36 rounded-xl border border-stone-300 bg-white text-center text-lg font-bold tabular-nums text-stone-900 placeholder:text-stone-400"
+                                    className="h-12 w-14 scroll-mt-36 rounded-xl border border-stone-500 bg-white text-center text-lg font-bold tabular-nums text-stone-900 placeholder:text-stone-400"
                                 />
                                 <button
                                     type="button"
