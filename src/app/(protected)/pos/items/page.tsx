@@ -1,10 +1,11 @@
 import Link from "next/link";
 import { requirePosAccess } from "@/lib/pos-access";
-import { ITEM_SORTS, type ItemSort, getItemRanking, hasPosData, kgToCatty, resolveRange } from "@/lib/pos-queries";
-import { buildQuery, fmtMoney, fmtNum } from "@/lib/pos-format";
+import { ITEM_SORTS, type ItemSort, getItemLines, getItemRanking, hasPosData, kgToCatty, resolveRange } from "@/lib/pos-queries";
+import { buildQuery, fmtMoney, fmtNum, parsePage } from "@/lib/pos-format";
+import ItemDetail from "../ItemDetail";
 import { btnCls, fieldCls, numCls, tdCls, thCls } from "../ui";
 
-type SP = { from?: string; to?: string; sort?: string };
+type SP = { from?: string; to?: string; sort?: string; item?: string; ipage?: string };
 
 export default async function ItemsPage({ searchParams }: { searchParams: Promise<SP> }) {
     await requirePosAccess();
@@ -12,11 +13,14 @@ export default async function ItemsPage({ searchParams }: { searchParams: Promis
     const range = resolveRange(sp.from, sp.to, 30);
     const sort: ItemSort = sp.sort && sp.sort in ITEM_SORTS ? (sp.sort as ItemSort) : "total";
     const data = getItemRanking(range, sort);
+    const selectedItem = (sp.item ?? "").trim().slice(0, 60);
+    const itemPage = parsePage(sp.ipage);
+    const itemData = selectedItem ? getItemLines(range, selectedItem, itemPage) : null;
     const base = { from: range.from ?? "", to: range.to ?? "" };
     const maxShare = data.rows.reduce((a, r) => Math.max(a, data.total ? r.total / data.total : 0), 0);
     const sortLink = (s: ItemSort, label: string) => (
         <Link
-            href={`/pos/items${buildQuery({ ...base, sort: s })}`}
+            href={`/pos/items${buildQuery({ ...base, sort: s, item: selectedItem || undefined })}`}
             className={sort === s ? "text-primary font-semibold" : "hover:text-foreground"}
         >
             {label}
@@ -50,6 +54,17 @@ export default async function ItemsPage({ searchParams }: { searchParams: Promis
                         {data.rows.length >= 500 ? "（僅列前 500）" : ""}。依品名合併（同名但不同編號、不同價格的合併成一列），
                         營收占比以明細總額為分母。重量單位：1 台斤 = 0.6 公斤。
                     </p>
+                    {itemData && (
+                        <ItemDetail
+                            name={selectedItem}
+                            lines={itemData.lines}
+                            summary={itemData.summary}
+                            page={itemPage}
+                            closeHref={`/pos/items${buildQuery({ ...base, sort })}`}
+                            pagerBase="/pos/items"
+                            pagerParams={{ ...base, sort, item: selectedItem }}
+                        />
+                    )}
                     <div className="overflow-x-auto rounded-md border">
                         <table className="w-full text-sm">
                             <thead className="bg-muted/50">
@@ -76,10 +91,15 @@ export default async function ItemsPage({ searchParams }: { searchParams: Promis
                                 {data.rows.map((r, idx) => {
                                     const share = data.total ? r.total / data.total : 0;
                                     return (
-                                        <tr key={r.name + idx} className="border-t">
+                                        <tr key={r.name + idx} className={"border-t " + (r.name === selectedItem ? "bg-primary/10" : "")}>
                                             <td className={tdCls}>{idx + 1}</td>
                                             <td className={tdCls}>
-                                                {r.name}
+                                                <Link
+                                                    href={`/pos/items${buildQuery({ ...base, sort, item: r.name })}#item-detail`}
+                                                    className="text-primary underline underline-offset-2"
+                                                >
+                                                    {r.name}
+                                                </Link>
                                                 {r.ids > 1 && (
                                                     <span className="ml-1 rounded bg-muted px-1 text-xs text-muted-foreground">
                                                         合併 {r.ids} 個編號
@@ -96,7 +116,7 @@ export default async function ItemsPage({ searchParams }: { searchParams: Promis
                                                     />
                                                 </div>
                                             </td>
-                                            <td className={tdCls + " " + numCls}>{r.kg ? fmtNum(kgToCatty(r.kg), 1) : ""}</td>
+                                            <td className={tdCls + " " + numCls}>{r.kg ? fmtNum(kgToCatty(r.kg), 2) : ""}</td>
                                             <td className={tdCls + " " + numCls}>{r.kg ? fmtNum(r.kg, 1) : ""}</td>
                                             <td className={tdCls + " " + numCls}>{fmtMoney(r.n)}</td>
                                             <td className={tdCls + " " + numCls}>

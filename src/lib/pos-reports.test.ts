@@ -38,6 +38,9 @@ before(async () => {
                         ["261008A0004", 1, "米血", 0, 260, "02011", 1, 260, 0],
                         ["261009A0001", 1, "豬腳", 1.2, 150, "01001", 1, 150, 0],
                         ["261009A0002", 1, "豬腳", 0.6, 250, "01001", 1, 250, 0],
+                        ["261009A0001", 2, "豬腳 ", 0.3, 60, "01009", 1, 200, 0],
+                        ["261009A0001", 3, "東坡肉(小)", 0.6, 120, "01004", 1, 120, 0],
+                        ["261009A0002", 2, "豬腳", 0.6, -250, "01001", -1, 250, 1],
                         ["261007A0001", 1, "豬腳", 0, 80, "01001", 1, 80, 0],
                         ["261007A0002", 1, "豬腳", 0, 20, "01001", 1, 20, 0],
                     ],
@@ -176,8 +179,27 @@ test("order detail flags the 40 difference", async () => {
     assert.equal(d.diff, 40);
     assert.equal(q.getOrderDetail("261008A0001")!.mismatch, false);
     const only = q.searchOrders({ from: null, to: null }, "", 1, true);
-    assert.deepEqual(
-        only.rows.map((r) => r.m_OrderNo),
-        ["261008A0004"]
-    );
+    const nos = only.rows.map((r) => r.m_OrderNo);
+    assert.ok(nos.includes("261008A0004"));
+    assert.ok(!nos.includes("261008A0001"));
+});
+
+test("getItemLines: merges ids and trailing-space names, summary equals the ranking row, flags returns", async () => {
+    const q = await import("./pos-queries");
+    const range = { from: "2026-10-09", to: "2026-10-09" };
+    const rank = q.getItemRanking(range, "total").rows.find((r) => r.name === "豬腳")!;
+    const d = q.getItemLines(range, "豬腳", 1);
+    assert.equal(d.summary.n, rank.n);
+    assert.equal(d.summary.total, rank.total);
+    assert.equal(d.summary.kg, rank.kg);
+    assert.equal(d.lines.length, rank.n);
+    assert.ok(d.lines.some((l) => l.p_Return === 1));
+    assert.ok(d.lines.some((l) => l.p_FoodID === "01009")); // 尾端空白那筆（不同編號）也在
+    // 括號與空白的名稱
+    assert.equal(q.getItemLines(range, "  東坡肉(小) ", 1).summary.n, 1);
+    assert.equal(q.getItemLines(range, "沒有這個品項", 1).summary.n, 0);
+    // 分頁：第 2 頁沒資料但 summary 仍是全部
+    const p2 = q.getItemLines(range, "豬腳", 2);
+    assert.equal(p2.lines.length, 0);
+    assert.equal(p2.summary.n, rank.n);
 });

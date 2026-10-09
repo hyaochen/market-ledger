@@ -267,3 +267,67 @@ export function getRawPage(table: string, col: string, q: string, page: number) 
         .all(...params, PAGE_SIZE, (Math.max(1, page) - 1) * PAGE_SIZE) as Array<Record<string, unknown>>;
     return { columns, rows, total, activeCol: useCol };
 }
+
+// ---------------------------------------------------------------------------
+// 單一品項的每一筆銷售明細（品項排行、單日分析的「點開看明細」共用）
+//
+// 依品名合併（TRIM 後比對，所以不同編號的同名品項都會列進來）。篩選條件與排行表完全相同
+// （只計 m_Checkout = 1、營業日在區間內），所以小計列的數字會跟排行表那一列一致。
+
+export type ItemLine = {
+    m_OrderNo: string;
+    m_CloseTime: string | null;
+    m_SaleTime: string | null;
+    p_serno: number;
+    p_Count: number;
+    p_Weight: number;
+    p_Price: number;
+    p_Total: number;
+    p_Return: number;
+    p_PriceExpr: string | null;
+    p_FoodID: string | null;
+};
+
+export type ItemLineSummary = {
+    n: number;
+    qty: number;
+    kg: number;
+    total: number;
+    /** 有秤重的明細（p_Weight > 0）的合計，用來算平均每台斤價 */
+    weightedKg: number;
+    weightedTotal: number;
+};
+
+export function getItemLines(range: DateRange, name: string, page: number) {
+    const empty = {
+        lines: [] as ItemLine[],
+        summary: { n: 0, qty: 0, kg: 0, total: 0, weightedKg: 0, weightedTotal: 0 } as ItemLineSummary,
+    };
+    const target = name.trim();
+    if (!target || !tableExists("i_orders") || !tableExists("i_items")) return empty;
+    const db = getYjcDb();
+    const rc = rangeClause("o.m_WorkDate", range);
+    const where = `o.m_Checkout = 1 AND TRIM(i.p_FoodName) = ?${rc.sql}`;
+    const params = [target, ...rc.params];
+    const hasExpr = listTableColumns("i_items").includes("p_PriceExpr");
+    const s = db
+        .prepare(
+            `SELECT COUNT(*) AS n, COALESCE(SUM(i.p_Count), 0) AS qty, COALESCE(SUM(i.p_Weight), 0) AS kg,
+                    COALESCE(SUM(i.p_Total), 0) AS total,
+                    COALESCE(SUM(CASE WHEN i.p_Weight > 0 THEN i.p_Weight END), 0) AS weightedKg,
+                    COALESCE(SUM(CASE WHEN i.p_Weight > 0 THEN i.p_Total END), 0) AS weightedTotal
+             FROM i_items i JOIN i_orders o ON o.m_OrderNo = i.p_OrderID WHERE ${where}`
+        )
+        .get(...params) as ItemLineSummary;
+    const lines = db
+        .prepare(
+            `SELECT o.m_OrderNo, o.m_CloseTime, o.m_SaleTime, i.p_serno, i.p_Count, i.p_Weight, i.p_Price, i.p_Total,
+                    i.p_Return, ${hasExpr ? "i.p_PriceExpr" : "NULL"} AS p_PriceExpr, i.p_FoodID
+             FROM i_items i JOIN i_orders o ON o.m_OrderNo = i.p_OrderID
+             WHERE ${where}
+             ORDER BY COALESCE(o.m_CloseTime, o.m_SaleTime), o.m_OrderNo, i.p_serno
+             LIMIT ? OFFSET ?`
+        )
+        .all(...params, PAGE_SIZE, (Math.max(1, page) - 1) * PAGE_SIZE) as ItemLine[];
+    return { lines, summary: s };
+}

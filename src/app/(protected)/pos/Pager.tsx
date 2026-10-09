@@ -7,14 +7,20 @@ export default function Pager({
     params,
     page,
     total,
+    pageParam = "page",
+    hash = "",
 }: {
     basePath: string;
     params: Record<string, string | undefined>;
     page: number;
     total: number;
+    /** 換頁用的 query 參數名（同一頁有兩個分頁時用） */
+    pageParam?: string;
+    /** 換頁後要捲到的錨點，例如 "#item-detail" */
+    hash?: string;
 }) {
     const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-    const link = (p: number) => `${basePath}${buildQuery({ ...params, page: p })}`;
+    const link = (p: number) => `${basePath}${buildQuery({ ...params, [pageParam]: p })}${hash}`;
     const cls = "px-3 py-1.5 text-sm border rounded-md";
     return (
         <div className="flex items-center justify-between gap-2 pt-3 text-sm">

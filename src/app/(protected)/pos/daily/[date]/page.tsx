@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { requirePosAccess } from "@/lib/pos-access";
-import { hasPosData, kgToCatty, parseIsoDate } from "@/lib/pos-queries";
+import { getItemLines, hasPosData, kgToCatty, parseIsoDate } from "@/lib/pos-queries";
 import { weekdayName } from "@/lib/pos-reports";
 import {
     DAY_ITEM_SORTS,
@@ -19,11 +19,12 @@ import {
     posToIso,
     prevBusinessDay,
 } from "@/lib/pos-day";
-import { buildQuery, fmtMoney, fmtNum, fmtSaleTime } from "@/lib/pos-format";
+import { buildQuery, fmtMoney, fmtNum, fmtSaleTime, parsePage } from "@/lib/pos-format";
+import ItemDetail from "../../ItemDetail";
 import { numCls, tdCls, thCls } from "../../ui";
 import HourChart from "./HourChart";
 
-type SP = { sort?: string };
+type SP = { sort?: string; item?: string; ipage?: string };
 
 export default async function DayDetailPage({
     params,
@@ -39,6 +40,8 @@ export default async function DayDetailPage({
     const sp = await searchParams;
     const sort: DayItemSort = sp.sort && sp.sort in DAY_ITEM_SORTS ? (sp.sort as DayItemSort) : "total";
     const date = isoToPos(iso);
+    const selectedItem = (sp.item ?? "").trim().slice(0, 60);
+    const itemPage = parsePage(sp.ipage);
 
     if (!hasPosData()) return <p className="text-sm text-muted-foreground">尚未收到 POS 資料。</p>;
 
@@ -79,6 +82,7 @@ export default async function DayDetailPage({
     const { metrics: m, z } = overview;
     const comparisons = getComparisons(date);
     const items = getDayItems(date, sort);
+    const itemData = selectedItem ? getItemLines({ from: iso, to: iso }, selectedItem, itemPage) : null;
     const hours = getDayHours(date);
     const orders = getDayOrders(date);
     const anomalies = getDayAnomalies(date);
@@ -90,7 +94,7 @@ export default async function DayDetailPage({
 
     const sortLink = (s: DayItemSort, label: string) => (
         <Link
-            href={`/pos/daily/${iso}${buildQuery({ sort: s })}`}
+            href={`/pos/daily/${iso}${buildQuery({ sort: s, item: selectedItem || undefined })}#item-table`}
             className={sort === s ? "text-primary font-semibold" : "hover:text-foreground"}
         >
             {label}
@@ -171,7 +175,21 @@ export default async function DayDetailPage({
             </section>
 
             <section className="space-y-2" aria-label="品項明細">
-                <h3 className="text-base font-semibold">品項明細</h3>
+                <h3 id="item-table" className="scroll-mt-4 text-base font-semibold">
+                    品項明細
+                </h3>
+                <p className="text-xs text-muted-foreground">點品名可展開當天該品項的每一筆明細。</p>
+                {itemData && (
+                    <ItemDetail
+                        name={selectedItem}
+                        lines={itemData.lines}
+                        summary={itemData.summary}
+                        page={itemPage}
+                        closeHref={`/pos/daily/${iso}${buildQuery({ sort })}#item-table`}
+                        pagerBase={`/pos/daily/${iso}`}
+                        pagerParams={{ sort, item: selectedItem }}
+                    />
+                )}
                 <div className="overflow-x-auto rounded-md border">
                     <table className="w-full text-sm">
                         <thead className="bg-muted/50">
@@ -193,10 +211,17 @@ export default async function DayDetailPage({
                                 </tr>
                             )}
                             {items.rows.map((r) => (
-                                <tr key={r.name} className="border-t">
-                                    <td className={tdCls}>{r.name}</td>
+                                <tr key={r.name} className={"border-t " + (r.name === selectedItem ? "bg-primary/10" : "")}>
+                                    <td className={tdCls}>
+                                        <Link
+                                            href={`/pos/daily/${iso}${buildQuery({ sort, item: r.name })}#item-detail`}
+                                            className="text-primary underline underline-offset-2"
+                                        >
+                                            {r.name}
+                                        </Link>
+                                    </td>
                                     <td className={tdCls + " " + numCls}>{fmtMoney(r.n)}</td>
-                                    <td className={tdCls + " " + numCls}>{fmtNum(r.qty, 1)}</td>
+                                    <td className={tdCls + " " + numCls}>{fmtNum(r.qty, 2)}</td>
                                     <td className={tdCls + " " + numCls}>{r.kg ? fmtNum(kgToCatty(r.kg), 2) : ""}</td>
                                     <td className={tdCls + " " + numCls}>{fmtMoney(r.total)}</td>
                                     <td className={tdCls + " " + numCls}>
