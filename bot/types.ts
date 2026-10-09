@@ -37,6 +37,8 @@ export type ParsedEntry = {
     _itemCandidates?: { id: string; name: string }[];
     // 暫存：使用者原始輸入的品項名稱（用於確認後自動儲存 alias，不寫入 DB）
     _originalSearchName?: string;
+    // Jev 高信心採用的品項對照（原說法 -> 標準品名），供存檔後訊息顯示，不寫入 DB
+    _jevMapping?: { from: string; to: string };
 };
 
 export type SessionData = {

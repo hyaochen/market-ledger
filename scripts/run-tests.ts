@@ -17,6 +17,7 @@ const tests = [
     "bot/handlers/nlQuery.test.ts",
     "bot/itemKeywords.test.ts",
     "bot/jev.test.ts",
+    "bot/jevApply.test.ts",
     // T-ML-033：bot 訊息 log（供離線評測解析器與 Jev 意圖閘門）
     "bot/messageLog.test.ts",
     "src/lib/password.test.ts",

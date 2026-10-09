@@ -41,8 +41,7 @@ import {
 import { isQueryLike, translateQuestion } from './handlers/nlQuery';
 import { saveAlias } from './aliases';
 import { logIncoming, logOutcome, logCallback } from './messageLog';
-import { jevMatchItem, type JevItemResult } from './jev';
-import { getAmbiguousCandidates } from './itemKeywords';
+import { applyJevMatch } from './jevApply';
 import type { SessionData, DbContext, ParsedEntry } from './types';
 
 // ── 持久化 Log（寫入 /app/data/bot.log，方便事後查閱）──────────
@@ -730,6 +729,15 @@ function buildFinalPayload(
     };
 }
 
+// Jev 高信心採用的品項對照提示（原說法 -> 標準品項），讓使用者看得到、錯了能改
+function jevMappingNote(entries: ParsedEntry[]): string {
+    const maps = entries.filter(e => e._jevMapping).map(e => `${e._jevMapping!.from} -> ${e._jevMapping!.to}`);
+    return maps.length > 0 ? `
+
+品項自動對照（AI 判斷）：${maps.join('、')}
+若對照不對，請到網頁修改該筆品項。` : '';
+}
+
 // ── 記帳解析：原本 message handler 的尾段，抽出來讓意圖釐清也能重用 ──
 async function runEntryParse(
     chatId: number, session: SessionData, text: string, preloaded?: DbContext,
@@ -764,34 +772,10 @@ async function runEntryParse(
     // 逐筆 enrichment
     const enrichedRaw = await Promise.all(rawEntries.map(e => enrichEntry(e, ctx)));
 
-    // Jev 品項快速判斷（2026-10-09）：只處理 PURCHASE 仍找不到品項的筆；口語模糊名（大骨粉）
-    // 不交給 Jev，一律走候選確認。任何失敗 fail-open（jev.ts 保證不拋錯），回傳原 entry。
-    const jevResults: (JevItemResult | null)[] = rawEntries.map(() => null);
-    const enrichedJev = await Promise.all(enrichedRaw.map(async (e, i) => {
-        try {
-        if (e.type !== 'PURCHASE' || e.itemId) return e;
-        const name = rawEntries[i].itemName;
-        if (!name || getAmbiguousCandidates(name)) return e;
-        const jev = await jevMatchItem(text, name, ctx.items.map(it => it.name));
-        jevResults[i] = jev;
-        if (!jev.adopted || !jev.choice) return e;
-        const item = ctx.items.find(it => it.name === jev.choice);
-        if (!item) return e;
-        // 用標準品名重跑 matcher（廠商帶入、重複偵測照舊），但一律要求使用者確認
-        const re = await enrichEntry({ ...rawEntries[i], itemName: item.name }, ctx);
-        if (!re.itemId) return e;
-        const reason = `「${name}」→「${item.name}」（AI 判斷），請確認是否正確`;
-        return {
-            ...re,
-            _originalSearchName: name,
-            confident: false,
-            uncertainReason: re.uncertainReason ? `${reason}；${re.uncertainReason}` : reason,
-        };
-        } catch (err) {
-            console.warn('[Jev] fail-open (wiring):', err instanceof Error ? err.message : err);
-            return e;
-        }
-    }));
+    // Jev 品項快速判斷（2026-10-09）：細節與 fail-open 見 jevApply.ts / jev.ts
+    const jevApplied = await Promise.all(enrichedRaw.map((e, i) => applyJevMatch(text, rawEntries[i], e, ctx, enrichEntry)));
+    const enrichedJev = jevApplied.map(r => r.entry);
+    const jevResults = jevApplied.map(r => r.jev);
 
     const parsedForLog = rawEntries.map((e, i) => ({
         type: e.type, itemName: e.itemName, quantity: e.quantity, unit: e.unit,
@@ -831,7 +815,7 @@ async function runEntryParse(
         const summary = formatSummary(saved, failed, ctx);
         resetToIdle(chatId);
         void logOutcome(logId, saved.length > 0 ? 'auto_saved' : 'error', buildFinalPayload(saved, failed));
-        await bot.sendMessage(chatId, summary);
+        await bot.sendMessage(chatId, summary + jevMappingNote(confident));
         const fixedExpenseNotes = await autofillFixedExpensesForSaved(saved, session);
         for (const note of fixedExpenseNotes) {
             await bot.sendMessage(chatId, note);
@@ -840,7 +824,7 @@ async function runEntryParse(
         void logOutcome(logId, 'awaiting_confirmation');
         if (confident.length > 0) {
             const preview = confident.map(e => `  • ${formatEntry(e, ctx)}`).join('\n');
-            await bot.sendMessage(chatId, `以下 ${confident.length} 筆確認無誤，稍後儲存：\n${preview}`);
+            await bot.sendMessage(chatId, `以下 ${confident.length} 筆確認無誤，稍後儲存：\n${preview}${jevMappingNote(confident)}`);
         }
         const first = getState(chatId).currentUncertain;
         if (first) {
