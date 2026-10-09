@@ -42,6 +42,6 @@ export function middleware(req: NextRequest) {
 export const config = {
     // 不攔 _next 內部資源、static files、PWA manifest、icons
     matcher: [
-        "/((?!_next/static|_next/image|favicon.ico|cash-manifest.json|apple-touch-icon.png|icon-192.png|icon-512.png|manifest.json|.*\\.svg).*)",
+        "/((?!_next/static|_next/image|favicon.ico|api/pos-import|cash-manifest.json|apple-touch-icon.png|icon-192.png|icon-512.png|manifest.json|.*\\.svg).*)",
     ],
 };

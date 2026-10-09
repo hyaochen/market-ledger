@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import { usePathname, useRouter } from 'next/navigation';
-import { LayoutDashboard, ShoppingCart, DollarSign, Settings, PlusCircle, BarChart3 } from 'lucide-react';
+import { LayoutDashboard, ShoppingCart, DollarSign, Settings, PlusCircle, BarChart3, Database } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 
@@ -15,6 +15,7 @@ export default function MobileNav({ role }: { role: string }) {
         { icon: PlusCircle, label: '記帳', href: '/entry/new', prominent: true },
         { icon: DollarSign, label: '營收', href: '/revenue' },
         { icon: BarChart3, label: '報表', href: '/reports' },
+        { icon: Database, label: 'POS資料', href: '/pos', requireAdmin: true },
         { icon: Settings, label: '設定', href: '/settings', requireAdmin: true },
     ];
 
