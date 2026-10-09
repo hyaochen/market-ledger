@@ -10,6 +10,7 @@ import {
     fixJinLiangFromRaw,
     fixNumbersFromRaw,
     detectDayOffEntries,
+    dedupeSameMessageEntries,
 } from "./parser";
 
 test("normalizeNumbers: comma-separated thousands", () => {
@@ -307,4 +308,45 @@ test("detectDayOffEntries: 休息 + 前天日期模式（regression guard）", (
     assert.equal(result![0].locationName, "屏東");
     // 日期 fallback 到 TODAY（detectDayOffEntries 不解析「前天」相對詞）
     assert.equal(result![0].date, TODAY);
+});
+
+// ── 2026-10-09 事故：同一則訊息拆成兩筆相同數量價格 -> 合併 ───────────────
+const dedupeBase = { type: "PURCHASE", quantity: 40, unit: "kg", price: 8200, vendorName: null as string | null, note: null };
+
+test("dedupeSameMessageEntries: 大骨粉 + 大骨高湯 數量價格相同 -> 合併為一筆", () => {
+    const out = dedupeSameMessageEntries([
+        { ...dedupeBase, itemName: "大骨粉" },
+        { ...dedupeBase, itemName: "大骨高湯" },
+    ]);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].itemName, "大骨高湯");
+});
+
+test("dedupeSameMessageEntries: 有標準品名時留標準品名", () => {
+    const out = dedupeSameMessageEntries([
+        { ...dedupeBase, itemName: "大骨粉" },
+        { ...dedupeBase, itemName: "大骨高湯1600" },
+    ]);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].itemName, "大骨高湯1600");
+});
+
+test("dedupeSameMessageEntries: 不同價格或不同品項不合併", () => {
+    assert.equal(dedupeSameMessageEntries([
+        { ...dedupeBase, itemName: "大骨粉" },
+        { ...dedupeBase, itemName: "大骨高湯", price: 4100 },
+    ]).length, 2);
+    assert.equal(dedupeSameMessageEntries([
+        { ...dedupeBase, itemName: "味鮮A", quantity: 20, price: 4100 },
+        { ...dedupeBase, itemName: "大骨高湯1601", quantity: 20, price: 4100 },
+    ]).length, 2);
+    assert.equal(dedupeSameMessageEntries([
+        { ...dedupeBase, itemName: "肝連", vendorName: "海豐" },
+        { ...dedupeBase, itemName: "肝連頭", vendorName: "大成" },
+    ]).length, 2);
+});
+
+test("dedupeSameMessageEntries: 非進貨（支出）不動", () => {
+    const e = { ...dedupeBase, type: "EXPENSE", itemName: "電費", quantity: null, unit: null, price: 800 };
+    assert.equal(dedupeSameMessageEntries([e, { ...e }]).length, 2);
 });

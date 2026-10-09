@@ -25,6 +25,30 @@ export const ITEM_KEYWORDS: ItemKeyword[] = [
     { keyword: '滷汁粉', itemName: '滷汁粉', code: '20-0023G', isNumeric: false },
 ];
 
+/**
+ * 口語前綴：使用者常在數字 keyword 前加口語描述（「大骨粉，1600 40公斤」）。
+ * mask 時要把這段一起吸收，否則「大骨粉，大骨高湯1600」會被 LLM 拆成兩個品項
+ * （2026-10-09 BotMessageLog id=144 事故）。長的放前面，regex alternation 才會先吃長的。
+ */
+export const NUMERIC_COLLOQUIAL_PREFIXES = ['大骨高湯', '大骨粉', '大骨湯', '大骨', '高湯'];
+
+/**
+ * 口語名稱單獨出現（沒寫 1600/1601）時對不到單一 SKU：列出候選讓使用者選，不自動存。
+ */
+export const AMBIGUOUS_COLLOQUIAL: { terms: string[]; candidates: string[] }[] = [
+    { terms: ['大骨粉', '大骨高湯', '大骨湯'], candidates: ['大骨高湯1600', '大骨高湯1601'] },
+];
+
+/** itemName 是否為口語模糊名（回傳其候選標準品名；否則 null） */
+export function getAmbiguousCandidates(name: string | null | undefined): string[] | null {
+    if (!name) return null;
+    const n = name.trim();
+    for (const g of AMBIGUOUS_COLLOQUIAL) {
+        if (g.terms.includes(n)) return g.candidates;
+    }
+    return null;
+}
+
 const CANONICAL_NAME_SET = new Set(ITEM_KEYWORDS.map(k => k.itemName));
 
 /** 偵測 input 中第一個出現的關鍵字（中文 substring；數字 word-boundary） */
@@ -55,7 +79,12 @@ export function maskKeywordsForLlm(input: string): string {
     let out = input;
     for (const k of ITEM_KEYWORDS) {
         if (k.isNumeric) {
-            out = out.replace(new RegExp(`(?<!\\d)${k.keyword}(?!\\d)`, 'g'), k.itemName);
+            // 吸收緊鄰的口語前綴（含中間逗號/空白），整段只剩一個標準品名
+            const prefix = NUMERIC_COLLOQUIAL_PREFIXES.join('|');
+            out = out.replace(
+                new RegExp(`(?:(?:${prefix})[\\s,，、:：]*)?(?<!\\d)${k.keyword}(?!\\d)`, 'g'),
+                k.itemName,
+            );
         } else {
             // 中文無詞邊界，全部置換
             out = out.split(k.keyword).join(k.itemName);
@@ -76,4 +105,27 @@ export function stripCanonicalNumericNames(text: string): string {
         out = out.split(k.itemName).join('');
     }
     return out;
+}
+
+const AMBIGUOUS_FAMILY_NAMES = new Set(AMBIGUOUS_COLLOQUIAL.flatMap(g => [...g.terms, ...g.candidates]));
+
+/**
+ * 兩個品項名是否互為包含/同義（用於同一則訊息解析成多筆時的防重複合併）。
+ * 規則：其中一個包含另一個（至少 2 字），或兩者都屬於同一組口語/標準名（大骨粉 / 大骨高湯 / 大骨高湯1600）。
+ */
+export function areSameItemFamily(a: string | null | undefined, b: string | null | undefined): boolean {
+    const x = (a ?? '').trim();
+    const y = (b ?? '').trim();
+    if (x.length < 2 || y.length < 2) return false;
+    if (x === y) return true;
+    if (x.includes(y) || y.includes(x)) return true;
+    return AMBIGUOUS_FAMILY_NAMES.has(x) && AMBIGUOUS_FAMILY_NAMES.has(y);
+}
+
+/** 合併時留哪個名稱：標準品名優先，其次較長者 */
+export function pickPreferredItemName(a: string, b: string): string {
+    const ca = isCanonicalItemKeywordName(a);
+    const cb = isCanonicalItemKeywordName(b);
+    if (ca !== cb) return ca ? a : b;
+    return b.length > a.length ? b : a;
 }

@@ -3,7 +3,7 @@
 import prisma from '../src/lib/prisma';
 import type { ParsedEntry, DbContext } from './types';
 import { loadAliases } from './aliases';
-import { detectItemKeyword, isCanonicalItemKeywordName } from './itemKeywords';
+import { detectItemKeyword, isCanonicalItemKeywordName, getAmbiguousCandidates } from './itemKeywords';
 
 // 廠商自動帶入門檻（見 enrichEntry 內的說明）。
 // 近 20 筆有廠商的紀錄裡，至少要有這麼多筆樣本、且第一名要佔到這個比例。
@@ -248,8 +248,23 @@ export async function enrichEntry(entry: ParsedEntry, ctx: DbContext): Promise<P
                 // aliasedItem 找不到（品項可能已刪除），略過 alias 繼續正常比對
             }
 
-            // keyword 已命中 → 跳過 fuzzy（後面 vendor/duplicate 仍要跑）
+            // 口語名稱單獨出現（「大骨粉」沒寫 1600/1601）→ 無法確定 SKU，列候選問使用者，不自動存
+            let handledAmbiguous = false;
             if (!hitAlias && !enriched.itemId) {
+                const ambiguousNames = getAmbiguousCandidates(llmName) ?? getAmbiguousCandidates(rawName);
+                const cands = ambiguousNames ? ctx.items.filter(i => ambiguousNames.includes(i.name)) : [];
+                if (cands.length >= 2) {
+                    enriched._itemCandidates = cands.map(c => ({ id: c.id, name: c.name }));
+                    enriched._originalSearchName = searchName;
+                    enriched.confident = false;
+                    enriched.uncertainReason = `「${searchName}」有 ${cands.length} 個對應品項（${cands.map(c => c.name).join('、')}），請選擇`;
+                    console.log(`[Matcher] colloquial "${searchName}" ambiguous -> ${cands.length} candidates`);
+                    handledAmbiguous = true;
+                }
+            }
+
+            // keyword 已命中 → 跳過 fuzzy（後面 vendor/duplicate 仍要跑）
+            if (!hitAlias && !enriched.itemId && !handledAmbiguous) {
             // 收集所有分數 >= 0.5 的候選品項（llmName 和 rawName 取最高分）
             const candidates: { item: typeof ctx.items[0]; score: number }[] = [];
             for (const item of ctx.items) {

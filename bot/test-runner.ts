@@ -196,6 +196,31 @@ const testCases: TestCase[] = [
         input: '12345',
         expected: [{ price: 12345 }],  // LLM 猜 price=12345，可接受
     },
+    // ── G 組：口語 -> 標準品項（2026-10-09 大骨粉拆兩筆事故）─────────────────
+    {
+        id: 'G1',
+        desc: '大骨粉 + 1600 口語前綴 -> 單筆 大骨高湯1600（事故重現）',
+        input: '大骨粉，1600 40公斤，8200',
+        expected: [{ type: 'PURCHASE', itemName: '大骨高湯1600', price: 8200, quantity: 40 }],
+    },
+    {
+        id: 'G2',
+        desc: '味精 -> 味鮮A',
+        input: '味精 20公斤 4100',
+        expected: [{ type: 'PURCHASE', itemName: '味鮮A', price: 4100, quantity: 20 }],
+    },
+    {
+        id: 'G3',
+        desc: '大骨高湯1601 直接對上',
+        input: '大骨高湯1601 20公斤 4000',
+        expected: [{ type: 'PURCHASE', itemName: '大骨高湯1601', price: 4000, quantity: 20 }],
+    },
+    {
+        id: 'G4',
+        desc: '大骨粉單獨出現（沒寫 1600/1601）-> 不自動存，列候選確認',
+        input: '大骨粉 40公斤 8200',
+        expected: [{ type: 'PURCHASE', price: 8200, quantity: 40, confident: false, uncertainContains: '大骨高湯1600' }],
+    },
 ];
 
 // ── 比對函式 ─────────────────────────────────────────────────────────────────

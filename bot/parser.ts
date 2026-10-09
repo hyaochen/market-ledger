@@ -3,7 +3,7 @@
 
 import { z } from 'zod';
 import type { ParsedEntry, DbContext } from './types';
-import { maskKeywordsForLlm, stripCanonicalNumericNames } from './itemKeywords';
+import { maskKeywordsForLlm, stripCanonicalNumericNames, areSameItemFamily, pickPreferredItemName } from './itemKeywords';
 
 // LLM 輸出的單筆結構 — 所有欄位都可選，實務上 LLM 會漏填不常見欄位
 const RawExtractedSchema = z.object({
@@ -686,6 +686,28 @@ function fixMisclassifiedExpense(entry: RawExtracted): RawExtracted {
     return entry;
 }
 
+/**
+ * 同一則訊息被解析成多筆、品項名互為包含/同義、數量/單位/價格/廠商完全相同 → 合併成一筆。
+ * 2026-10-09 事故：「大骨粉，1600 40公斤，8200」被拆成「大骨粉」+「大骨高湯」兩筆相同數量價格。
+ */
+export function dedupeSameMessageEntries<T extends { type: string; itemName: string | null; quantity: number | null; unit: string | null; price: number; vendorName: string | null; note: string | null }>(entries: T[]): T[] {
+    const out: T[] = [];
+    for (const e of entries) {
+        const idx = e.type === 'PURCHASE' && e.price > 0
+            ? out.findIndex(o =>
+                o.type === 'PURCHASE' && o.price === e.price && o.quantity === e.quantity && o.unit === e.unit
+                && (o.vendorName ?? null) === (e.vendorName ?? null)
+                && areSameItemFamily(o.itemName, e.itemName))
+            : -1;
+        if (idx < 0) { out.push(e); continue; }
+        const kept = out[idx];
+        const name = pickPreferredItemName(kept.itemName ?? '', e.itemName ?? '');
+        console.log(`[Parser] dedupe: merge "${e.itemName}" into "${kept.itemName}" -> "${name}"`);
+        out[idx] = { ...kept, itemName: name, note: kept.note ?? e.note };
+    }
+    return out;
+}
+
 // 主要解析函式：只用快速模型，不再 fallback 到 32b
 export async function parseEntries(userText: string, ctx: DbContext, diag?: ParseDiagnostics): Promise<ParsedEntry[]> {
     const today = new Date().toLocaleDateString('zh-TW', {
@@ -755,7 +777,7 @@ export async function parseEntries(userText: string, ctx: DbContext, diag?: Pars
         .map(fixJinLiangFromRaw).map(fixNumbersFromRaw).map(normalizeUnit).map(fixExpenseAmountField).map(fixRevenueFromNote).map(fixMisclassifiedExpense).map(fixNoteFromRaw);
 
     // 轉換為 ParsedEntry（itemId/vendorId/expenseType/locationId 留給 matcher.ts 填入）
-    return result.map(entry => {
+    return dedupeSameMessageEntries(result.map(entry => {
         const type = entry.type === 'EXPENSE' ? 'EXPENSE'
             : entry.type === 'REVENUE' ? 'REVENUE'
             : 'PURCHASE';
@@ -779,5 +801,5 @@ export async function parseEntries(userText: string, ctx: DbContext, diag?: Pars
             // 而非原文 userText，post-process 才看得到正確的「大骨高湯1600」整段
             rawInput: entry.rawInput ?? maskedText,
         };
-    });
+    }));
 }

@@ -41,6 +41,8 @@ import {
 import { isQueryLike, translateQuestion } from './handlers/nlQuery';
 import { saveAlias } from './aliases';
 import { logIncoming, logOutcome, logCallback } from './messageLog';
+import { jevMatchItem, type JevItemResult } from './jev';
+import { getAmbiguousCandidates } from './itemKeywords';
 import type { SessionData, DbContext, ParsedEntry } from './types';
 
 // ── 持久化 Log（寫入 /app/data/bot.log，方便事後查閱）──────────
@@ -759,20 +761,50 @@ async function runEntryParse(
     // 離線比對「這句話本來應該解析成什麼」。
     const isDayOffBatch = rawEntries.every(e => e.isDayOff);
     const llmProvider = isDayOffBatch ? null : (diag.usedFallback ? 'ollama' : 'claude');
-    const parsedForLog = rawEntries.map(e => ({
+    // 逐筆 enrichment
+    const enrichedRaw = await Promise.all(rawEntries.map(e => enrichEntry(e, ctx)));
+
+    // Jev 品項快速判斷（2026-10-09）：只處理 PURCHASE 仍找不到品項的筆；口語模糊名（大骨粉）
+    // 不交給 Jev，一律走候選確認。任何失敗 fail-open（jev.ts 保證不拋錯），回傳原 entry。
+    const jevResults: (JevItemResult | null)[] = rawEntries.map(() => null);
+    const enrichedJev = await Promise.all(enrichedRaw.map(async (e, i) => {
+        try {
+        if (e.type !== 'PURCHASE' || e.itemId) return e;
+        const name = rawEntries[i].itemName;
+        if (!name || getAmbiguousCandidates(name)) return e;
+        const jev = await jevMatchItem(text, name, ctx.items.map(it => it.name));
+        jevResults[i] = jev;
+        if (!jev.adopted || !jev.choice) return e;
+        const item = ctx.items.find(it => it.name === jev.choice);
+        if (!item) return e;
+        // 用標準品名重跑 matcher（廠商帶入、重複偵測照舊），但一律要求使用者確認
+        const re = await enrichEntry({ ...rawEntries[i], itemName: item.name }, ctx);
+        if (!re.itemId) return e;
+        const reason = `「${name}」→「${item.name}」（AI 判斷），請確認是否正確`;
+        return {
+            ...re,
+            _originalSearchName: name,
+            confident: false,
+            uncertainReason: re.uncertainReason ? `${reason}；${re.uncertainReason}` : reason,
+        };
+        } catch (err) {
+            console.warn('[Jev] fail-open (wiring):', err instanceof Error ? err.message : err);
+            return e;
+        }
+    }));
+
+    const parsedForLog = rawEntries.map((e, i) => ({
         type: e.type, itemName: e.itemName, quantity: e.quantity, unit: e.unit,
         price: e.price, vendor: e.vendorName, note: e.note, date: e.date,
+        ...(jevResults[i] ? { jev: jevResults[i] } : {}),
     }));
     const logId = await logIncoming({
         chatId, messageId, telegramUserId, tenantId: session.tenantId, text,
         route: isDayOffBatch ? 'dayoff' : 'entry', llmProvider, parsed: parsedForLog,
     });
 
-    // 逐筆 enrichment
-    const enrichedRaw = await Promise.all(rawEntries.map(e => enrichEntry(e, ctx)));
-
     // 靜音模式：品項已知則強制 confident，跳過廠商選擇與二次確認
-    let enriched = getState(chatId).muteMode ? applyMuteMode(enrichedRaw) : enrichedRaw;
+    let enriched = getState(chatId).muteMode ? applyMuteMode(enrichedJev) : enrichedJev;
 
     // 2026-08-30：主要模型（claude-bridge）失敗退回 ollama 時，一律強制二次確認。
     // ollama 實測正確率 4/10，且 8/29 曾憑空生出一筆不存在的營收；它的輸出不能
