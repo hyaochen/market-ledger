@@ -1,5 +1,6 @@
 ﻿import MobileNav from "@/components/layout/MobileNav";
 import { requireAuth } from "@/lib/auth";
+import { canViewPos } from "@/lib/pos-access";
 import { logout, switchBackToSuperAdmin } from "@/app/actions/auth";
 import { redirect } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -55,7 +56,7 @@ export default async function ProtectedLayout({
             <main className="flex-1 p-4 max-w-md mx-auto w-full md:max-w-2xl lg:max-w-4xl pb-nav-safe">
                 {children}
             </main>
-            <MobileNav role={user.roleCode} />
+            <MobileNav role={user.roleCode} showPos={canViewPos(user)} />
         </div>
     );
 }

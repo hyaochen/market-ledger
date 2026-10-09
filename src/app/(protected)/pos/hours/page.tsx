@@ -1,17 +1,17 @@
-import Link from "next/link";
-import { resolveRange, getRevenue, hasPosData } from "@/lib/pos-queries";
+import { getHours } from "@/lib/pos-reports";
 import { requirePosAccess } from "@/lib/pos-access";
-import { fmtMoney } from "@/lib/pos-format";
+import { hasPosData, resolveRange } from "@/lib/pos-queries";
+import { fmtMoney, fmtNum } from "@/lib/pos-format";
 import { btnCls, fieldCls, numCls, tdCls, thCls } from "../ui";
 
-type SP = { from?: string; to?: string; by?: string };
+type SP = { from?: string; to?: string };
 
-export default async function DailyPage({ searchParams }: { searchParams: Promise<SP> }) {
+export default async function HoursPage({ searchParams }: { searchParams: Promise<SP> }) {
     await requirePosAccess();
     const sp = await searchParams;
     const range = resolveRange(sp.from, sp.to, 30);
-    const by = sp.by === "month" ? "month" : "day";
-    const data = getRevenue(range, by);
+    const data = getHours(range);
+    const maxTotal = data.rows.reduce((a, r) => Math.max(a, r.total), 0);
 
     return (
         <div className="space-y-4">
@@ -24,13 +24,6 @@ export default async function DailyPage({ searchParams }: { searchParams: Promis
                     迄日
                     <input type="date" name="to" defaultValue={range.to ?? ""} className={fieldCls} />
                 </label>
-                <label className="text-xs text-muted-foreground flex flex-col gap-1">
-                    彙總
-                    <select name="by" defaultValue={by} className={fieldCls}>
-                        <option value="day">按日</option>
-                        <option value="month">按月</option>
-                    </select>
-                </label>
                 <button type="submit" className={btnCls}>
                     查詢
                 </button>
@@ -40,46 +33,50 @@ export default async function DailyPage({ searchParams }: { searchParams: Promis
                 <p className="text-sm text-muted-foreground">尚未收到 POS 資料。</p>
             ) : (
                 <>
-                    <div className="grid grid-cols-3 gap-2">
-                        <Stat label="單數" value={fmtMoney(data.orders)} />
-                        <Stat label="總額" value={fmtMoney(data.total)} />
-                        <Stat label="平均客單" value={fmtMoney(data.avg)} />
-                    </div>
+                    <p className="text-sm text-muted-foreground">
+                        依結帳時間的小時統計；日期以營業日篩選。共 {fmtMoney(data.orders)} 單 /{" "}
+                        {fmtMoney(data.total)}
+                        {data.noTime > 0 ? `；另有 ${data.noTime} 單沒有結帳時間` : ""}。
+                    </p>
                     <div className="overflow-x-auto rounded-md border">
                         <table className="w-full text-sm">
                             <thead className="bg-muted/50">
                                 <tr>
-                                    <th className={thCls}>{by === "month" ? "月份" : "營業日"}</th>
+                                    <th className={thCls}>時段</th>
                                     <th className={thCls + " text-right"}>單數</th>
-                                    <th className={thCls + " text-right"}>總額</th>
-                                    <th className={thCls + " text-right"}>平均客單</th>
+                                    <th className={thCls + " text-right"}>單數占比</th>
+                                    <th className={thCls + " text-right"}>營收</th>
+                                    <th className={thCls + " text-right"}>營收占比</th>
+                                    <th className={thCls + " text-right"}>客單價</th>
+                                    <th className={thCls + " min-w-32"}>營收</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {data.rows.length === 0 && (
                                     <tr>
-                                        <td colSpan={4} className="px-2 py-6 text-center text-muted-foreground">
+                                        <td colSpan={7} className="px-2 py-6 text-center text-muted-foreground">
                                             這段期間沒有資料
                                         </td>
                                     </tr>
                                 )}
                                 {data.rows.map((r) => (
-                                    <tr key={r.key} className="border-t">
+                                    <tr key={r.hour} className="border-t">
                                         <td className={tdCls}>
-                                            {by === "day" ? (
-                                                <Link
-                                                    href={`/pos/daily/${r.key.split("/").join("-")}`}
-                                                    className="text-primary underline underline-offset-2"
-                                                >
-                                                    {r.key}
-                                                </Link>
-                                            ) : (
-                                                r.key
-                                            )}
+                                            {String(r.hour).padStart(2, "0")}:00-{String(r.hour).padStart(2, "0")}:59
                                         </td>
                                         <td className={tdCls + " " + numCls}>{fmtMoney(r.orders)}</td>
+                                        <td className={tdCls + " " + numCls}>{fmtNum(r.shareOrders * 100, 1)}%</td>
                                         <td className={tdCls + " " + numCls}>{fmtMoney(r.total)}</td>
+                                        <td className={tdCls + " " + numCls}>{fmtNum(r.shareTotal * 100, 1)}%</td>
                                         <td className={tdCls + " " + numCls}>{fmtMoney(r.avg)}</td>
+                                        <td className="px-2 py-2">
+                                            <div className="h-3 w-full rounded bg-muted">
+                                                <div
+                                                    className="h-3 rounded bg-primary"
+                                                    style={{ width: `${maxTotal ? (r.total / maxTotal) * 100 : 0}%` }}
+                                                />
+                                            </div>
+                                        </td>
                                     </tr>
                                 ))}
                             </tbody>
@@ -87,15 +84,6 @@ export default async function DailyPage({ searchParams }: { searchParams: Promis
                     </div>
                 </>
             )}
-        </div>
-    );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-    return (
-        <div className="rounded-md border p-3">
-            <div className="text-xs text-muted-foreground">{label}</div>
-            <div className="text-lg font-semibold tabular-nums">{value}</div>
         </div>
     );
 }

@@ -5,7 +5,7 @@ import { LayoutDashboard, ShoppingCart, DollarSign, Settings, PlusCircle, BarCha
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 
-export default function MobileNav({ role }: { role: string }) {
+export default function MobileNav({ role, showPos = false }: { role: string; showPos?: boolean }) {
     const pathname = usePathname();
     const router = useRouter();
 
@@ -15,7 +15,7 @@ export default function MobileNav({ role }: { role: string }) {
         { icon: PlusCircle, label: '記帳', href: '/entry/new', prominent: true },
         { icon: DollarSign, label: '營收', href: '/revenue' },
         { icon: BarChart3, label: '報表', href: '/reports' },
-        { icon: Database, label: 'POS資料', href: '/pos', requireAdmin: true },
+        { icon: Database, label: 'POS資料', href: '/pos', requirePos: true },
         { icon: Settings, label: '設定', href: '/settings', requireAdmin: true },
     ];
 
@@ -24,6 +24,7 @@ export default function MobileNav({ role }: { role: string }) {
             <div className="flex items-center justify-around h-16 px-1">
                 {navItems.map((item) => {
                     if (item.requireAdmin && role !== 'admin') return null;
+                    if ('requirePos' in item && item.requirePos && !showPos) return null;
                     const isActive = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
                     if (item.prominent) {
                         return (

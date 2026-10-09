@@ -11,7 +11,8 @@
 import { POS_TABLES, getYjcDb, isPosTable, listTableColumns } from "@/lib/yjc-db";
 
 export const PAGE_SIZE = 50;
-export const KG_PER_TAIWAN_CATTY = 0.6;
+import { KG_PER_TAIWAN_CATTY } from "./pos-constants";
+export { KG_PER_TAIWAN_CATTY };
 
 export function kgToCatty(kg: number | null | undefined): number {
     return (Number(kg) || 0) / KG_PER_TAIWAN_CATTY;
@@ -120,9 +121,13 @@ export type OrderRow = {
     m_Total: number;
     m_Checkout: number;
     itemCount: number;
+    itemSum: number | null;
 };
 
-export function searchOrders(range: DateRange, q: string, page: number) {
+/** 明細加總與單據總額差超過這個值才算不符（浮點誤差用）。 */
+export const MISMATCH_EPS = 0.5;
+
+export function searchOrders(range: DateRange, q: string, page: number, onlyDiff = false) {
     if (!tableExists("i_orders")) return { rows: [] as OrderRow[], total: 0 };
     const db = getYjcDb();
     const rc = rangeClause("m_WorkDate", range);
@@ -133,11 +138,16 @@ export function searchOrders(range: DateRange, q: string, page: number) {
         where += ` AND m_OrderNo LIKE ? ESCAPE '\\'`;
         params.push(`%${escapeLike(needle)}%`);
     }
+    // 只看「明細加總 != 單據總額」：沒有明細的單視為 0
+    if (onlyDiff) {
+        where += ` AND ABS(m_Total - COALESCE((SELECT SUM(p_Total) FROM i_items WHERE p_OrderID = i_orders.m_OrderNo), 0)) > ${MISMATCH_EPS}`;
+    }
     const total = (db.prepare(`SELECT COUNT(*) AS c FROM i_orders WHERE ${where}`).get(...params) as { c: number }).c;
     const rows = db
         .prepare(
             `SELECT m_OrderNo, m_WorkDate, m_SaleTime, m_Total, m_Checkout,
-                    (SELECT COUNT(*) FROM i_items WHERE p_OrderID = i_orders.m_OrderNo) AS itemCount
+                    (SELECT COUNT(*) FROM i_items WHERE p_OrderID = i_orders.m_OrderNo) AS itemCount,
+                    (SELECT SUM(p_Total) FROM i_items WHERE p_OrderID = i_orders.m_OrderNo) AS itemSum
              FROM i_orders WHERE ${where}
              ORDER BY m_SaleTime DESC, m_OrderNo DESC LIMIT ? OFFSET ?`
         )
@@ -189,7 +199,9 @@ export function getOrderDetail(orderNo: string) {
               .prepare(`SELECT c_serNO, c_KindName, c_Total FROM i_checks WHERE c_OrderID = ? ORDER BY c_serNO`)
               .all(orderNo) as OrderCheck[])
         : [];
-    return { order, items, checks };
+    const itemSum = items.reduce((a, i) => a + (Number(i.p_Total) || 0), 0);
+    const diff = Number(order.m_Total) - itemSum;
+    return { order, items, checks, itemSum, diff, mismatch: Math.abs(diff) > MISMATCH_EPS };
 }
 
 export const ITEM_SORTS = {
@@ -199,7 +211,7 @@ export const ITEM_SORTS = {
 } as const;
 export type ItemSort = keyof typeof ITEM_SORTS;
 
-export type ItemRankRow = { name: string; total: number; kg: number; n: number };
+export type ItemRankRow = { name: string; total: number; kg: number; n: number; ids: number; minPrice: number; maxPrice: number };
 
 export function getItemRanking(range: DateRange, sort: ItemSort) {
     if (!tableExists("i_orders") || !tableExists("i_items")) return { rows: [] as ItemRankRow[], total: 0 };
@@ -207,11 +219,13 @@ export function getItemRanking(range: DateRange, sort: ItemSort) {
     const rc = rangeClause("o.m_WorkDate", range);
     const rows = db
         .prepare(
-            `SELECT i.p_FoodName AS name, COALESCE(SUM(i.p_Total), 0) AS total,
-                    COALESCE(SUM(i.p_Weight), 0) AS kg, COUNT(*) AS n
+            `SELECT TRIM(i.p_FoodName) AS name, COALESCE(SUM(i.p_Total), 0) AS total,
+                    COALESCE(SUM(i.p_Weight), 0) AS kg, COUNT(*) AS n,
+                    COUNT(DISTINCT i.p_FoodID) AS ids,
+                    COALESCE(MIN(i.p_Price), 0) AS minPrice, COALESCE(MAX(i.p_Price), 0) AS maxPrice
              FROM i_items i JOIN i_orders o ON o.m_OrderNo = i.p_OrderID
              WHERE o.m_Checkout = 1${rc.sql}
-             GROUP BY i.p_FoodName
+             GROUP BY TRIM(i.p_FoodName)
              ORDER BY ${ITEM_SORTS[sort]}, name
              LIMIT 500`
         )

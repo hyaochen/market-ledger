@@ -19,6 +19,7 @@ type CurrentUser = {
     roleCode: RoleCode;
     tenantId: string | null;
     tenantName: string | null;
+    tenantCode: string | null;
     isSuperAdmin: boolean;
 };
 
@@ -61,14 +62,16 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
     // 超級管理者進入企業時，用 session 中的 tenantId，並給予 admin 權限
     let tenantId = user.tenantId;
     let tenantName = user.tenant?.name ?? null;
+    let tenantCode = user.tenant?.code ?? null;
     if (user.isSuperAdmin && payload.tenantId) {
         tenantId = payload.tenantId;
         roleCode = "admin";
         const tenant = await prisma.tenant.findUnique({
             where: { id: payload.tenantId },
-            select: { name: true },
+            select: { name: true, code: true },
         });
         tenantName = tenant?.name ?? null;
+        tenantCode = tenant?.code ?? null;
     }
 
     return {
@@ -79,6 +82,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
         roleCode,
         tenantId,
         tenantName,
+        tenantCode,
         isSuperAdmin: user.isSuperAdmin,
     };
 }

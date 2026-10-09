@@ -1,17 +1,20 @@
 import Link from "next/link";
-import { resolveRange, searchOrders, hasPosData } from "@/lib/pos-queries";
+import { requirePosAccess } from "@/lib/pos-access";
+import { MISMATCH_EPS, resolveRange, searchOrders, hasPosData } from "@/lib/pos-queries";
 import { fmtMoney, fmtSaleTime, parsePage } from "@/lib/pos-format";
 import { btnCls, fieldCls, numCls, tdCls, thCls } from "../ui";
 import Pager from "../Pager";
 
-type SP = { from?: string; to?: string; q?: string; page?: string };
+type SP = { from?: string; to?: string; q?: string; page?: string; diff?: string };
 
 export default async function OrdersPage({ searchParams }: { searchParams: Promise<SP> }) {
+    await requirePosAccess();
     const sp = await searchParams;
     const range = resolveRange(sp.from, sp.to, 7);
     const q = (sp.q ?? "").slice(0, 40);
     const page = parsePage(sp.page);
-    const data = searchOrders(range, q, page);
+    const onlyDiff = sp.diff === "1";
+    const data = searchOrders(range, q, page, onlyDiff);
 
     return (
         <div className="space-y-4">
@@ -28,11 +31,15 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
                     單號
                     <input type="text" name="q" defaultValue={q} placeholder="例如 261009A0040" className={fieldCls + " w-44"} />
                 </label>
+                <label className="flex h-10 items-center gap-2 text-sm">
+                    <input type="checkbox" name="diff" value="1" defaultChecked={onlyDiff} className="h-4 w-4" />
+                    只看明細與總額不符
+                </label>
                 <button type="submit" className={btnCls}>
                     查詢
                 </button>
             </form>
-            <p className="text-xs text-muted-foreground">日期欄清空代表不限日期。</p>
+            <p className="text-xs text-muted-foreground">日期欄清空代表不限日期。營業日以 POS 的營業日為準。</p>
 
             {!hasPosData() ? (
                 <p className="text-sm text-muted-foreground">尚未收到 POS 資料。</p>
@@ -47,38 +54,46 @@ export default async function OrdersPage({ searchParams }: { searchParams: Promi
                                     <th className={thCls}>開單時間</th>
                                     <th className={thCls + " text-right"}>品項數</th>
                                     <th className={thCls + " text-right"}>總額</th>
+                                    <th className={thCls}>明細差額</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {data.rows.length === 0 && (
                                     <tr>
-                                        <td colSpan={5} className="px-2 py-6 text-center text-muted-foreground">
+                                        <td colSpan={6} className="px-2 py-6 text-center text-muted-foreground">
                                             沒有符合的單據
                                         </td>
                                     </tr>
                                 )}
-                                {data.rows.map((o) => (
-                                    <tr key={o.m_OrderNo} className="border-t">
-                                        <td className={tdCls}>
-                                            <Link
-                                                href={`/pos/orders/${encodeURIComponent(o.m_OrderNo)}`}
-                                                className="text-primary underline underline-offset-2"
-                                            >
-                                                {o.m_OrderNo}
-                                            </Link>
-                                        </td>
-                                        <td className={tdCls}>{o.m_WorkDate}</td>
-                                        <td className={tdCls}>{fmtSaleTime(o.m_SaleTime)}</td>
-                                        <td className={tdCls + " " + numCls}>{o.itemCount}</td>
-                                        <td className={tdCls + " " + numCls}>{fmtMoney(o.m_Total)}</td>
-                                    </tr>
-                                ))}
+                                {data.rows.map((o) => {
+                                    const diff = Number(o.m_Total) - (Number(o.itemSum) || 0);
+                                    const bad = Math.abs(diff) > MISMATCH_EPS;
+                                    return (
+                                        <tr key={o.m_OrderNo} className={"border-t " + (bad ? "bg-red-500/10" : "")}>
+                                            <td className={tdCls}>
+                                                <Link
+                                                    href={`/pos/orders/${encodeURIComponent(o.m_OrderNo)}`}
+                                                    className="text-primary underline underline-offset-2"
+                                                >
+                                                    {o.m_OrderNo}
+                                                </Link>
+                                            </td>
+                                            <td className={tdCls}>{o.m_WorkDate}</td>
+                                            <td className={tdCls}>{fmtSaleTime(o.m_SaleTime)}</td>
+                                            <td className={tdCls + " " + numCls}>{o.itemCount}</td>
+                                            <td className={tdCls + " " + numCls}>{fmtMoney(o.m_Total)}</td>
+                                            <td className={tdCls + (bad ? " text-red-600 dark:text-red-400 font-semibold" : "")}>
+                                                {bad ? `差 ${fmtMoney(diff)}` : ""}
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>
                     <Pager
                         basePath="/pos/orders"
-                        params={{ from: range.from ?? "", to: range.to ?? "", q }}
+                        params={{ from: range.from ?? "", to: range.to ?? "", q, diff: onlyDiff ? "1" : undefined }}
                         page={page}
                         total={data.total}
                     />

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { requirePosAccess } from "@/lib/pos-access";
 import { ITEM_SORTS, type ItemSort, getItemRanking, hasPosData, kgToCatty, resolveRange } from "@/lib/pos-queries";
 import { buildQuery, fmtMoney, fmtNum } from "@/lib/pos-format";
 import { btnCls, fieldCls, numCls, tdCls, thCls } from "../ui";
@@ -6,11 +7,13 @@ import { btnCls, fieldCls, numCls, tdCls, thCls } from "../ui";
 type SP = { from?: string; to?: string; sort?: string };
 
 export default async function ItemsPage({ searchParams }: { searchParams: Promise<SP> }) {
+    await requirePosAccess();
     const sp = await searchParams;
     const range = resolveRange(sp.from, sp.to, 30);
     const sort: ItemSort = sp.sort && sp.sort in ITEM_SORTS ? (sp.sort as ItemSort) : "total";
     const data = getItemRanking(range, sort);
     const base = { from: range.from ?? "", to: range.to ?? "" };
+    const maxShare = data.rows.reduce((a, r) => Math.max(a, data.total ? r.total / data.total : 0), 0);
     const sortLink = (s: ItemSort, label: string) => (
         <Link
             href={`/pos/items${buildQuery({ ...base, sort: s })}`}
@@ -44,7 +47,8 @@ export default async function ItemsPage({ searchParams }: { searchParams: Promis
                 <>
                     <p className="text-sm text-muted-foreground">
                         區間內明細總額 {fmtMoney(data.total)}，共 {data.rows.length} 種品名
-                        {data.rows.length >= 500 ? "（僅列前 500）" : ""}。重量單位：1 台斤 = 0.6 公斤。
+                        {data.rows.length >= 500 ? "（僅列前 500）" : ""}。依品名合併（同名但不同編號、不同價格的合併成一列），
+                        營收占比以明細總額為分母。重量單位：1 台斤 = 0.6 公斤。
                     </p>
                     <div className="overflow-x-auto rounded-md border">
                         <table className="w-full text-sm">
@@ -53,33 +57,56 @@ export default async function ItemsPage({ searchParams }: { searchParams: Promis
                                     <th className={thCls}>#</th>
                                     <th className={thCls}>品名</th>
                                     <th className={thCls + " text-right"}>{sortLink("total", "銷售額")}</th>
-                                    <th className={thCls + " text-right"}>占比</th>
+                                    <th className={thCls + " text-right"}>營收占比</th>
+                                    <th className={thCls + " min-w-24"}>占比圖</th>
                                     <th className={thCls + " text-right"}>{sortLink("weight", "重量(台斤)")}</th>
                                     <th className={thCls + " text-right"}>重量(公斤)</th>
                                     <th className={thCls + " text-right"}>{sortLink("count", "筆數")}</th>
+                                    <th className={thCls + " text-right"}>單價範圍</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {data.rows.length === 0 && (
                                     <tr>
-                                        <td colSpan={7} className="px-2 py-6 text-center text-muted-foreground">
+                                        <td colSpan={9} className="px-2 py-6 text-center text-muted-foreground">
                                             這段期間沒有資料
                                         </td>
                                     </tr>
                                 )}
-                                {data.rows.map((r, idx) => (
-                                    <tr key={r.name + idx} className="border-t">
-                                        <td className={tdCls}>{idx + 1}</td>
-                                        <td className={tdCls}>{r.name}</td>
-                                        <td className={tdCls + " " + numCls}>{fmtMoney(r.total)}</td>
-                                        <td className={tdCls + " " + numCls}>
-                                            {data.total ? fmtNum((r.total / data.total) * 100, 1) + "%" : ""}
-                                        </td>
-                                        <td className={tdCls + " " + numCls}>{r.kg ? fmtNum(kgToCatty(r.kg), 1) : ""}</td>
-                                        <td className={tdCls + " " + numCls}>{r.kg ? fmtNum(r.kg, 1) : ""}</td>
-                                        <td className={tdCls + " " + numCls}>{fmtMoney(r.n)}</td>
-                                    </tr>
-                                ))}
+                                {data.rows.map((r, idx) => {
+                                    const share = data.total ? r.total / data.total : 0;
+                                    return (
+                                        <tr key={r.name + idx} className="border-t">
+                                            <td className={tdCls}>{idx + 1}</td>
+                                            <td className={tdCls}>
+                                                {r.name}
+                                                {r.ids > 1 && (
+                                                    <span className="ml-1 rounded bg-muted px-1 text-xs text-muted-foreground">
+                                                        合併 {r.ids} 個編號
+                                                    </span>
+                                                )}
+                                            </td>
+                                            <td className={tdCls + " " + numCls}>{fmtMoney(r.total)}</td>
+                                            <td className={tdCls + " " + numCls}>{fmtNum(share * 100, 1)}%</td>
+                                            <td className="px-2 py-2">
+                                                <div className="h-2.5 w-full rounded bg-muted">
+                                                    <div
+                                                        className="h-2.5 rounded bg-primary"
+                                                        style={{ width: `${maxShare ? (share / maxShare) * 100 : 0}%` }}
+                                                    />
+                                                </div>
+                                            </td>
+                                            <td className={tdCls + " " + numCls}>{r.kg ? fmtNum(kgToCatty(r.kg), 1) : ""}</td>
+                                            <td className={tdCls + " " + numCls}>{r.kg ? fmtNum(r.kg, 1) : ""}</td>
+                                            <td className={tdCls + " " + numCls}>{fmtMoney(r.n)}</td>
+                                            <td className={tdCls + " " + numCls}>
+                                                {r.minPrice === r.maxPrice
+                                                    ? fmtMoney(r.minPrice)
+                                                    : `${fmtMoney(r.minPrice)}-${fmtMoney(r.maxPrice)}`}
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>

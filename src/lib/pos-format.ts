@@ -1,7 +1,8 @@
 // POS 頁面共用的顯示格式。
 
 export function fmtMoney(n: number | null | undefined): string {
-    return (Number(n) || 0).toLocaleString("en-US", { maximumFractionDigits: 0 });
+    const v = Math.round(Number(n) || 0);
+    return (v === 0 ? 0 : v).toLocaleString("en-US", { maximumFractionDigits: 0 });
 }
 
 export function fmtNum(n: number | null | undefined, digits = 2): string {

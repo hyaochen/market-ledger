@@ -1,10 +1,12 @@
 import Link from "next/link";
+import { requirePosAccess } from "@/lib/pos-access";
 import { notFound } from "next/navigation";
 import { getOrderDetail, kgToCatty } from "@/lib/pos-queries";
 import { fmtMoney, fmtNum } from "@/lib/pos-format";
 import { numCls, tdCls, thCls } from "../../ui";
 
 export default async function OrderDetailPage({ params }: { params: Promise<{ orderNo: string }> }) {
+    await requirePosAccess();
     const { orderNo: raw } = await params;
     let orderNo = raw;
     try {
@@ -14,7 +16,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ or
     }
     const detail = getOrderDetail(orderNo);
     if (!detail) notFound();
-    const { order, items, checks } = detail;
+    const { order, items, checks, itemSum, diff, mismatch } = detail;
 
     return (
         <div className="space-y-4">
@@ -28,12 +30,27 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ or
                 <div className="text-muted-foreground">營業日</div>
                 <div>{order.m_WorkDate}</div>
                 <div className="text-muted-foreground">開單時間</div>
-                <div>{order.m_SaleTime}</div>
+                <div>{String(order.m_SaleTime ?? "").slice(0, 16)}</div>
                 <div className="text-muted-foreground">結帳</div>
                 <div>{order.m_Checkout === 1 ? "已結帳" : "未結帳"}</div>
                 <div className="text-muted-foreground">單據總額</div>
                 <div className="font-semibold tabular-nums">{fmtMoney(order.m_Total)}</div>
             </div>
+
+            {mismatch && (
+                <div
+                    className="rounded-md border-2 border-red-500 bg-red-500/10 p-3 text-sm text-red-700 dark:text-red-300"
+                    role="alert"
+                >
+                    <div className="font-semibold">明細加總與單據總額不符</div>
+                    <div>
+                        單據總額 {fmtMoney(order.m_Total)}，明細加總 {fmtMoney(itemSum)}，差額 {fmtMoney(diff)}。
+                    </div>
+                    <div className="text-xs">
+                        POS 資料原樣顯示，沒有自動修正；可能是手動改價或刪品項後沒重算，請與 POS 現場核對。
+                    </div>
+                </div>
+            )}
 
             <section className="space-y-2">
                 <h2 className="text-base font-semibold">明細</h2>

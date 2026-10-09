@@ -24,6 +24,10 @@ const tests = [
     "src/lib/session.test.ts",
     // POS 鏡像匯入（yjc.db）
     "src/lib/yjc-db.test.ts",
+    "src/lib/pos-sync.test.ts",
+    "src/lib/pos-labels.test.ts",
+    "src/lib/pos-reports.test.ts",
+    "src/lib/pos-access.test.ts",
     // T-ML-025 批 1：分析・搜尋・分類核心邏輯層
     "src/lib/analytics/dateRange.test.ts",
     "src/lib/analytics/stallInference.test.ts",
