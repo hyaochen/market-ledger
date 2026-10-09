@@ -6,8 +6,12 @@ WORKDIR /app
 # openssl MUST be present before npm ci / prisma generate,
 # otherwise prisma detects the platform as debian-openssl-1.1.x and
 # downloads mismatched engines (runtime then fails on 3.0.x lookup)
+#
+# python3/make/g++: better-sqlite3 (POS mirror yjc.db) is a native addon. It publishes
+# no prebuilt binary for Node 20 (ABI 115), so npm ci compiles it from source here.
+# Only this stage carries the toolchain; the runner stage just receives the built .node file.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends openssl ca-certificates \
+    && apt-get install -y --no-install-recommends openssl ca-certificates python3 make g++ \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json* ./
