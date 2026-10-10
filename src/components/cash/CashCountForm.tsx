@@ -410,7 +410,7 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
                                 value={note}
                                 onChange={(e) => setNote(e.target.value)}
                                 rows={3}
-                                className="w-full rounded-xl border border-stone-500 bg-white px-3 py-2.5 text-base text-stone-900 placeholder:text-stone-500"
+                                className="scroll-mb-[calc(5rem+env(safe-area-inset-bottom,0px))] scroll-mt-36 w-full rounded-xl border border-stone-500 bg-white px-3 py-2.5 text-base text-stone-900 placeholder:text-stone-500"
                                 placeholder="今天有什麼特別狀況？"
                             />
                         </div>
