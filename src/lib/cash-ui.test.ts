@@ -5,6 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
     CASH_NAV_ITEMS,
+    NOTE_EMPTY_TEXT,
     activeAdminSubKey,
     activeNavKey,
     addDaysIso,
@@ -21,6 +22,7 @@ import {
     isSameRange,
     navItemsFor,
     normalizeCashPath,
+    noteDisplay,
     quickRanges,
     resolveLocationFilter,
     roleLabel,
@@ -299,4 +301,66 @@ test("stepCount: 加一減一、不會減到負數、空白再按減號維持空
     assert.equal(stepCount("5", -1), "4");
     assert.equal(stepCount("1", -1), "0");
     assert.equal(stepCount("0", -1), "0");
+});
+
+// ── 備註顯示（T-ML-036：歷史列表與詳情，沒填也要看得到「無」）──────────
+
+// 看不見的字元一律用碼位組出來：原始碼裡直接寫全形空白或零寬字元，人眼看不出來，編輯器與工具也可能把它吃掉。
+const FULL_WIDTH_SPACE = String.fromCodePoint(0x3000);
+const NO_BREAK_SPACE = String.fromCodePoint(0x00a0);
+const ZERO_WIDTH_ONLY = String.fromCodePoint(0x200b, 0x200c, 0x200d, 0x2060, 0xfeff);
+
+test("noteDisplay: 沒有備註（null、undefined、空字串）一律顯示「無」，並標成沒填", () => {
+    assert.equal(NOTE_EMPTY_TEXT, "無");
+    assert.deepEqual(noteDisplay(null), { text: "無", isEmpty: true });
+    assert.deepEqual(noteDisplay(undefined), { text: "無", isEmpty: true });
+    assert.deepEqual(noteDisplay(""), { text: "無", isEmpty: true });
+});
+
+test("noteDisplay: 只有空白（半形、tab、換行、全形空白、不換行空白）也算沒填", () => {
+    assert.deepEqual(noteDisplay("   "), { text: "無", isEmpty: true });
+    assert.deepEqual(noteDisplay("\n\n"), { text: "無", isEmpty: true });
+    assert.deepEqual(noteDisplay("\t \r\n \t"), { text: "無", isEmpty: true });
+    assert.deepEqual(noteDisplay(FULL_WIDTH_SPACE.repeat(3)), { text: "無", isEmpty: true });
+    assert.deepEqual(noteDisplay(` ${FULL_WIDTH_SPACE}\n${NO_BREAK_SPACE}\n  `), { text: "無", isEmpty: true });
+});
+
+test("noteDisplay: 只有零寬字元（從別的 App 貼上時常夾帶）也算沒填，不然畫面上會是一格看不見的空白", () => {
+    assert.deepEqual(noteDisplay(ZERO_WIDTH_ONLY), { text: "無", isEmpty: true });
+    assert.deepEqual(noteDisplay(` ${ZERO_WIDTH_ONLY} \n`), { text: "無", isEmpty: true });
+});
+
+test("noteDisplay: 有內容就原文回傳，不顯示「無」", () => {
+    assert.deepEqual(noteDisplay("今天下雨，客人比較少"), { text: "今天下雨，客人比較少", isEmpty: false });
+    assert.deepEqual(noteDisplay("5 元硬幣不夠"), { text: "5 元硬幣不夠", isEmpty: false });
+});
+
+test("noteDisplay: 前後的空白與空行去掉，內部的換行與空白原樣保留", () => {
+    assert.equal(noteDisplay("  \n今天下雨  \n").text, "今天下雨");
+    assert.equal(noteDisplay("第一行\n\n第二行").text, "第一行\n\n第二行");
+    assert.equal(noteDisplay("  收攤晚了十分鐘  \n  瓦斯桶換新  ").text, "收攤晚了十分鐘  \n  瓦斯桶換新");
+    assert.equal(noteDisplay("上午下雨\r\n下午放晴").text, "上午下雨\r\n下午放晴");
+    assert.equal(noteDisplay("  \n今天下雨  \n").isEmpty, false);
+});
+
+test("noteDisplay: 前後的全形空白也去掉（中文輸入法常打出來）", () => {
+    assert.equal(noteDisplay(`${FULL_WIDTH_SPACE}今天下雨${FULL_WIDTH_SPACE}${FULL_WIDTH_SPACE}`).text, "今天下雨");
+});
+
+test("noteDisplay: 使用者自己寫的「無」「0」是內容，不是沒填", () => {
+    assert.deepEqual(noteDisplay("無"), { text: "無", isEmpty: false });
+    assert.deepEqual(noteDisplay("0"), { text: "0", isEmpty: false });
+});
+
+test("noteDisplay: 內容中間夾零寬字元仍是有內容，文字原樣不動", () => {
+    const withZeroWidth = `冷凍櫃${String.fromCodePoint(0x200b)}溫度偏高`;
+    assert.deepEqual(noteDisplay(withZeroWidth), { text: withZeroWidth, isEmpty: false });
+});
+
+test("noteDisplay: 超長備註與沒有斷點的長字串原樣回傳，不在這裡截斷（截斷是畫面的事）", () => {
+    const longParagraphs = "收攤前清點發現 5 元硬幣少了 12 枚，已經用備用金補回。\n".repeat(40).trim();
+    assert.equal(noteDisplay(longParagraphs).text, longParagraphs);
+    assert.equal(noteDisplay(longParagraphs).isEmpty, false);
+    const unbroken = "https://example.com/這是一個很長很長的網址/".repeat(10);
+    assert.equal(noteDisplay(unbroken).text, unbroken);
 });

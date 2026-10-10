@@ -3,7 +3,8 @@ import { ChevronRight, CircleCheck, TriangleAlert } from "lucide-react";
 import { requireCashAuth } from "@/lib/cash-auth";
 import prisma from "@/lib/prisma";
 import { listCashCounts } from "@/app/actions/cash";
-import { countFlags, formatMonthDayWeekday, formatNtd, resolveLocationFilter, todayLocalIsoDate } from "@/lib/cash-ui";
+import { countFlags, formatMonthDayWeekday, formatNtd, noteDisplay, resolveLocationFilter, todayLocalIsoDate } from "@/lib/cash-ui";
+import { cn } from "@/lib/utils";
 import { chip } from "@/components/cash/ui";
 import { InfoChip } from "@/components/cash/StatusChip";
 import LocationFilter from "@/components/cash/LocationFilter";
@@ -65,6 +66,7 @@ export default async function CashHistoryPage(props: { searchParams: Promise<Sea
                         const locationName = r.location?.name ?? "—";
                         const attendantName = r.attendant?.realName || r.attendant?.username || "—";
                         const flags = countFlags(r.cashBoxTotal, r.reserveTotal);
+                        const note = noteDisplay(r.note);
                         return (
                             <li key={r.id} className="print:break-inside-avoid">
                                 <Link
@@ -87,6 +89,19 @@ export default async function CashHistoryPage(props: { searchParams: Promise<Sea
                                             <span className="text-[13px] text-stone-600">{dateStr.slice(0, 4)} 年</span>
                                         ) : null}
                                     </div>
+
+                                    {/* 備註一律顯示：有填是內容（單行、過長以省略號截斷，整段在詳情頁），沒填是「無」。列印時改成折行完整印出 */}
+                                    <p className="mt-1.5 flex min-w-0 text-[15px] leading-snug print:text-black">
+                                        <span className="shrink-0 text-stone-600 print:text-black">備註：</span>
+                                        <span
+                                            className={cn(
+                                                "min-w-0 flex-1 truncate print:overflow-visible print:whitespace-pre-wrap print:break-words print:text-black",
+                                                note.isEmpty ? "text-stone-700" : "text-stone-800",
+                                            )}
+                                        >
+                                            {note.text}
+                                        </span>
+                                    </p>
 
                                     <div className="mt-3 flex items-center justify-between gap-2 border-t border-stone-100 pt-3">
                                         <div className="flex flex-wrap items-center gap-2">

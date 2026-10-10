@@ -317,3 +317,43 @@ export function stepCount(current: string, delta: 1 | -1): string {
     if (delta === -1 && current === "") return "";
     return String(Math.max(0, n + delta));
 }
+
+// ── 備註（歷史列表與詳情共用）────────────────────────────────
+
+/** 備註沒填時顯示的字。 */
+export const NOTE_EMPTY_TEXT = "無";
+
+export type NoteDisplay = {
+    /** 要顯示的文字：有內容時是去掉前後空白的原文（內部的換行與空白保留），沒填時固定是「無」 */
+    text: string;
+    /** true = 沒填。畫面用次要文字色顯示「無」，但對比仍要夠，不能淡到看不清楚 */
+    isEmpty: boolean;
+};
+
+/**
+ * 肉眼看不見、但不屬於空白的字元：軟連字號、零寬空白 / 連字 / 非連字、左右方向標記、字詞連接符。
+ * 從別的 App 複製文字貼進備註時常被夾帶；只有這些字元的備註在畫面上就是一格看不見的空白。
+ * 用碼位列出（不直接寫在原始碼裡），因為這些字元在編輯器裡看不到，也容易被工具吃掉。
+ */
+const INVISIBLE_CODE_POINTS: ReadonlySet<number> = new Set([0x00ad, 0x200b, 0x200c, 0x200d, 0x200e, 0x200f, 0x2060]);
+
+function isBlankUnit(ch: string): boolean {
+    const code = ch.charCodeAt(0);
+    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) return true; // 控制字元（含 tab 與換行）
+    if (INVISIBLE_CODE_POINTS.has(code)) return true;
+    // 其餘空白（半形、全形 U+3000、不換行空白、BOM…）交給 trim：與 String.prototype.trim 的定義一致
+    return ch.trim() === "";
+}
+
+/**
+ * 歷史頁的備註顯示規則：備註一律要看得到。
+ * 有填就顯示內容（去掉前後空白，內部換行保留）；沒填（null、空字串、只有空白或看不見的字元）顯示「無」。
+ * 不在這裡截斷：列表畫面用 CSS 截成一行，詳情畫面完整顯示。
+ */
+export function noteDisplay(note: string | null | undefined): NoteDisplay {
+    if (typeof note !== "string") return { text: NOTE_EMPTY_TEXT, isEmpty: true };
+    for (let i = 0; i < note.length; i++) {
+        if (!isBlankUnit(note[i])) return { text: note.trim(), isEmpty: false };
+    }
+    return { text: NOTE_EMPTY_TEXT, isEmpty: true };
+}

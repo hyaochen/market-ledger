@@ -9,7 +9,7 @@ import {
     RESERVE_TARGET_TOTAL,
     SALES_DENOMS,
 } from "@/lib/cash-constants";
-import { diffStatus, formatDateWithWeekday, formatNtd, formatTaipeiDateTime } from "@/lib/cash-ui";
+import { diffStatus, formatDateWithWeekday, formatNtd, formatTaipeiDateTime, noteDisplay } from "@/lib/cash-ui";
 import { btn, CARD } from "@/components/cash/ui";
 import { DiffChip } from "@/components/cash/StatusChip";
 import { cn } from "@/lib/utils";
@@ -46,6 +46,8 @@ export default async function CashHistoryDetailPage(props: { params: Promise<{ i
     const expenses = safeParseExpenses(cc.expensesJson);
     const locationName = cc.location?.name ?? "—";
     const attendantName = cc.attendant?.realName || cc.attendant?.username || "—";
+    // 備註一律要看得到：有填顯示內容，沒填顯示「無」
+    const note = noteDisplay(cc.note);
 
     return (
         <div className="space-y-4 px-4 pb-4 pt-4 md:pt-6 print:space-y-3 print:p-0 print:text-black">
@@ -148,28 +150,54 @@ export default async function CashHistoryDetailPage(props: { params: Promise<{ i
                 </p>
             </section>
 
-            <section className={cn(CARD, "grid grid-cols-1 gap-4 p-4 sm:grid-cols-3 print:grid-cols-3 print:break-inside-avoid print:gap-2 print:rounded-none print:border-black print:p-2 print:shadow-none")}>
-                <div>
-                    <h2 className="mb-1 text-[13px] font-semibold text-stone-600 print:text-black">清點人簽名</h2>
-                    {cc.signatureDataUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                            src={cc.signatureDataUrl}
-                            alt="清點人簽名"
-                            className="h-20 rounded-lg border border-stone-200 bg-white object-contain print:h-16 print:rounded-none print:border-0"
-                        />
-                    ) : (
-                        <p className="text-base text-stone-600 print:text-black">（沒有簽名）</p>
-                    )}
-                </div>
-                <div>
-                    <h2 className="mb-1 text-[13px] font-semibold text-stone-600 print:text-black">覆核人</h2>
-                    <p className="text-xl font-bold text-stone-900 print:text-base print:text-black">{cc.supervisorName}</p>
-                </div>
-                <div>
-                    <h2 className="mb-1 text-[13px] font-semibold text-stone-600 print:text-black">交班時間</h2>
-                    <p className="text-lg font-bold tabular-nums text-stone-900 print:text-base print:text-black">{handoverStr}</p>
-                </div>
+            {/* 簽名確認：對應表單最後一個區塊（清點人簽名、覆核人、備註）；備註沒填也顯示「無」，不再另外排在整頁最底 */}
+            <section
+                aria-labelledby="signoff-title"
+                className={cn(CARD, "overflow-hidden print:break-inside-avoid print:rounded-none print:border-black print:shadow-none")}
+            >
+                <h2
+                    id="signoff-title"
+                    className="border-b border-stone-200 bg-stone-50 px-4 py-3 text-lg font-bold text-stone-900 print:border-black print:bg-white print:px-2 print:py-1 print:text-base print:text-black"
+                >
+                    簽名確認
+                </h2>
+                <dl className="grid grid-cols-1 gap-4 p-4 sm:grid-cols-3 print:grid-cols-3 print:gap-2 print:p-2">
+                    <div>
+                        <dt className="mb-1 text-[13px] font-semibold text-stone-600 print:text-black">清點人簽名</dt>
+                        <dd>
+                            {cc.signatureDataUrl ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                    src={cc.signatureDataUrl}
+                                    alt="清點人簽名"
+                                    className="h-20 rounded-lg border border-stone-200 bg-white object-contain print:h-16 print:rounded-none print:border-0"
+                                />
+                            ) : (
+                                <span className="text-base text-stone-600 print:text-black">（沒有簽名）</span>
+                            )}
+                        </dd>
+                    </div>
+                    <div>
+                        <dt className="mb-1 text-[13px] font-semibold text-stone-600 print:text-black">覆核人</dt>
+                        <dd className="text-xl font-bold text-stone-900 print:text-base print:text-black">{cc.supervisorName}</dd>
+                    </div>
+                    <div>
+                        <dt className="mb-1 text-[13px] font-semibold text-stone-600 print:text-black">交班時間</dt>
+                        <dd className="text-lg font-bold tabular-nums text-stone-900 print:text-base print:text-black">{handoverStr}</dd>
+                    </div>
+                    <div className="border-t border-stone-200 pt-3 sm:col-span-3 print:col-span-3 print:border-black print:pt-1">
+                        <dt className="mb-1 text-[13px] font-semibold text-stone-600 print:text-black">備註</dt>
+                        {/* 保留換行；長字串（網址、連續英數）在容器邊界折行，不撐出版面 */}
+                        <dd
+                            className={cn(
+                                "whitespace-pre-wrap break-words text-base [overflow-wrap:anywhere] print:text-black",
+                                note.isEmpty ? "text-stone-700" : "text-stone-900",
+                            )}
+                        >
+                            {note.text}
+                        </dd>
+                    </div>
+                </dl>
             </section>
 
             {cc.checklistDones.length > 0 && (
@@ -196,13 +224,6 @@ export default async function CashHistoryDetailPage(props: { params: Promise<{ i
                             </li>
                         ))}
                     </ul>
-                </section>
-            )}
-
-            {cc.note && (
-                <section className={cn(CARD, "p-4 print:break-inside-avoid print:rounded-none print:border-black print:p-2 print:shadow-none")}>
-                    <h2 className="mb-1 text-base font-bold text-stone-900 print:text-black">備註</h2>
-                    <p className="whitespace-pre-wrap text-base text-stone-800 print:text-black">{cc.note}</p>
                 </section>
             )}
 
