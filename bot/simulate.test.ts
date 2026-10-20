@@ -101,7 +101,15 @@ test('offline simulation: login throttle, session revalidation, query, entry flo
             let user = '';
             try { user = JSON.parse(body).messages?.[1]?.content ?? ''; } catch { /* ignore */ }
             let content: unknown = { entries: [] };
-            if (user.includes('測試肝連')) {
+            if (user.includes('新廠商丙')) {
+                content = { entries: [{ type: 'PURCHASE', itemName: '測試肝連', quantity: 1, unit: '台斤', price: 77, vendorName: '新廠商丙', note: null, rawInput: user }] };
+            } else if (user.includes('雜支')) {
+                content = { entries: [{ type: 'EXPENSE', itemName: '雜支', quantity: null, unit: null, price: 100, vendorName: null, note: null, rawInput: user }] };
+            } else if (user.includes('胡椒粉')) {
+                content = { entries: [{ type: 'PURCHASE', itemName: '胡椒粉', quantity: 1, unit: '個', price: 30, vendorName: null, note: null, rawInput: user }] };
+            } else if (user.includes('芥末粉')) {
+                content = { entries: [{ type: 'PURCHASE', itemName: '芥末粉', quantity: 1, unit: '個', price: 40, vendorName: null, note: null, rawInput: user }] };
+            } else if (user.includes('測試肝連')) {
                 content = { entries: [{ type: 'PURCHASE', itemName: '測試肝連', quantity: 2.6, unit: '台斤', price: 218, vendorName: null, note: null, rawInput: user }] };
             } else if (user.includes('鱷梨醬')) {
                 content = { entries: [{ type: 'PURCHASE', itemName: '鱷梨醬', quantity: 3, unit: '個', price: 90, vendorName: null, note: null, rawInput: user }] };
@@ -299,6 +307,35 @@ test('offline simulation: login throttle, session revalidation, query, entry flo
     out = await say('free text during confirmation', 5003, '隨便打字');
     out = await say('yes by text', 5003, '是');
     out = await say('skip vendor by text', 5003, '略過');
+    process.env.LLM_PROVIDER = 'claude';
+
+    // 6f. 其餘狀態機分支：文字搜尋品項、分類/新廠商/支出類型子流程、新增廠商 callback
+    process.env.LLM_PROVIDER = 'ollama';
+    out = await say('unknown item, will search by text', 5003, '胡椒粉1個30');
+    out = await press('confirm', 5003, 'confirm_yes_0');
+    out = await say('retype item name (search)', 5003, '測試肝連');
+    out = await say('unknown item, new purchase + typed vendor', 5003, '芥末粉1個40');
+    out = await press('confirm', 5003, 'confirm_yes_0');
+    out = await press('new purchase item', 5003, 'new_purchase_create');
+    out = await say('text during category select', 5003, '隨便打');
+    out = await press('pick category', 5003, 'cat_select_sim-cat');
+    out = await press('vendor create prompt', 5003, 'vendor_create_prompt');
+    out = await say('typed new vendor name', 5003, '新廠商乙');
+    assert.ok(await prisma.vendor.findFirst({ where: { tenantId: TENANT, name: '新廠商乙' } }), 'vendor created from typed name');
+    out = await say('purchase with unknown vendor', 5003, '測試肝連1台斤77 新廠商丙');
+    out = await press('confirm', 5003, 'confirm_yes_0');
+    out = await press('vendor_create callback', 5003, 'vendor_create');
+    out = await say('expense without type', 5003, '雜支100');
+    out = await press('confirm', 5003, 'confirm_yes_0');
+    out = await say('text while choosing expense type', 5003, '隨便');
+    out = await press('pick expense type', 5003, 'expense_type_select_EXP001');
+    out = await say('text while confirming expense', 5003, '隨便');
+    out = await press('reselect', 5003, 'expense_reselect');
+    out = await press('pick expense type again', 5003, 'expense_type_select_EXP001');
+    out = await press('save expense', 5003, 'expense_save_confirm');
+    out = await say('reject flow', 5003, '芥末粉1個40');
+    out = await press('reject', 5003, 'confirm_no_0');
+    out = await press('stale callback', 5003, 'new_item_yes');
     process.env.LLM_PROVIDER = 'claude';
 
     // 7. 停用 / 降權 的既有 session 下一則訊息就被拒
