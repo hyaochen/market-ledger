@@ -12,7 +12,7 @@
 //
 // Run: DATABASE_URL=file:.../docker-data/dev.db npx tsx --test bot/simulate.test.ts
 //      （要輸出逐字稿：加 SIM_TRANSCRIPT_OUT=/path/to/out.jsonl）
-// 沒有註冊進 scripts/run-tests.ts（需要 dev.db 複本與較長時間），要時手動跑。
+// 列在 scripts/run-tests.ts 的 DB_TESTS（需要 dev.db 複本）：本機 npm run test 會跑，CI（TEST_SKIP_DB=1）略過。
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

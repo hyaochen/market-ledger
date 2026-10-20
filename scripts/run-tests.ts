@@ -31,6 +31,8 @@ const DB_TESTS = new Set<string>([
     "src/lib/analytics/stallProfit.test.ts",
     "src/lib/analytics/vendorCompare.test.ts",
     "src/lib/cashExpenseSync.test.ts",
+    // 讀 docker-data/dev.db 的複本（CI 沒有這個檔）
+    "bot/simulate.test.ts",
 ]);
 
 function walk(dir: string, out: string[]) {
