@@ -3,14 +3,7 @@ import { parseLocalDate, formatDateInput } from "@/lib/date";
 import { getUnitLabel } from "@/lib/units";
 import { getUnits } from "@/app/actions/catalog";
 import { getCurrentUser } from "@/lib/auth";
-
-function csvEscape(value: string | number | null | undefined) {
-    const text = `${value ?? ""}`;
-    if (/[",\n]/.test(text)) {
-        return `"${text.replace(/"/g, '""')}"`;
-    }
-    return text;
-}
+import { toCsv } from "@/lib/csv";
 
 export async function GET(request: Request) {
     const currentUser = await getCurrentUser();
@@ -52,7 +45,7 @@ export async function GET(request: Request) {
             ]),
         ];
 
-        const csv = `\ufeff${rows.map((row) => row.map(csvEscape).join(",")).join("\r\n")}`;
+        const csv = `\ufeff${toCsv(rows)}`;
         return new Response(csv, {
             headers: {
                 "Content-Type": "text/csv; charset=utf-8",
@@ -89,7 +82,7 @@ export async function GET(request: Request) {
         ]),
     ];
 
-    const csv = `\ufeff${rows.map((row) => row.map(csvEscape).join(",")).join("\r\n")}`;
+    const csv = `\ufeff${toCsv(rows)}`;
     return new Response(csv, {
         headers: {
             "Content-Type": "text/csv; charset=utf-8",
