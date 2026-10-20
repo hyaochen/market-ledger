@@ -1,59 +1,55 @@
-// 跨平台測試入口：先設好測試用環境變數，再用 tsx 跑所有 .test.ts
+// 跨平台測試入口：先設好測試用環境變數，再用 tsx 跑所有測試檔
 // 用 npm run test 呼叫，不需要 cross-env / dotenv
+//
+// T-ML-037: 測試檔改為自動探索（bot/ src/ scripts/ 底下所有 *.test.ts / *.test.js），
+// 不再維護手寫清單，避免新增測試檔忘了登記而從未被執行。
+// 環境變數 TEST_SKIP_DB=1 時，略過會用到真實 DB 的測試（CI 用，見 DB_TESTS）。
 import { spawn } from "node:child_process";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
 
 // 用 bracket access 繞開 Next.js 對 NODE_ENV 的唯讀型別限制
 const env = process.env as Record<string, string | undefined>;
 env.SESSION_SECRET = env.SESSION_SECRET || "a".repeat(40);
 env.NODE_ENV = "test";
 
-const tests = [
-    "bot/parser.test.ts",
-    "bot/parser.provider.test.ts",
-    "bot/bridgeHealth.test.ts",
-    "bot/heartbeat.test.ts",
-    "bot/handlers/query.test.ts",
-    "bot/handlers/querySpec.test.ts",
-    "bot/handlers/nlQuery.test.ts",
-    "bot/itemKeywords.test.ts",
-    "bot/jev.test.ts",
-    "bot/jevApply.test.ts",
-    // T-ML-033：bot 訊息 log（供離線評測解析器與 Jev 意圖閘門）
-    "bot/messageLog.test.ts",
-    "src/lib/password.test.ts",
-    "src/lib/session.test.ts",
-    // POS 鏡像匯入（yjc.db）
-    "src/lib/yjc-db.test.ts",
-    "src/lib/pos-sync.test.ts",
-    "src/lib/pos-labels.test.ts",
-    "src/lib/pos-reports.test.ts",
-    "src/lib/pos-access.test.ts",
-    // T-ML-025 批 1：分析・搜尋・分類核心邏輯層
-    "src/lib/analytics/dateRange.test.ts",
-    "src/lib/analytics/stallInference.test.ts",
-    "src/lib/analytics/priceNormalize.test.ts",
-    "src/lib/analytics/textMatch.test.ts",
-    "src/lib/analytics/stats.test.ts",
+const ROOTS = ["bot", "src", "scripts"];
+const SKIP_DIRS = new Set(["node_modules", ".next", "docker-data", "data"]);
+
+// 需要真實 DB（DATABASE_URL 指向有資料的 dev.db）的測試；TEST_SKIP_DB=1 時略過。
+// 清單由「DATABASE_URL 指向不存在的檔案時失敗」實測得出，新增依賴 DB 的測試請補在這裡。
+const DB_TESTS = new Set<string>([
+    "src/lib/analytics/anomalies.test.ts",
+    "src/lib/analytics/classifyExpense.test.ts",
+    "src/lib/analytics/classifyPurchase.test.ts",
+    "src/lib/analytics/classifyStall.test.ts",
+    "src/lib/analytics/fixedExpenseRules.test.ts",
     "src/lib/analytics/itemSearch.test.ts",
     "src/lib/analytics/noteSearch.test.ts",
-    "src/lib/analytics/vendorCompare.test.ts",
+    "src/lib/analytics/periodCompare.test.ts",
     "src/lib/analytics/priceTrend.test.ts",
     "src/lib/analytics/stallProfit.test.ts",
-    "src/lib/analytics/periodCompare.test.ts",
-    "src/lib/analytics/anomalies.test.ts",
-    "src/lib/analytics/classifyPurchase.test.ts",
-    "src/lib/analytics/classifyExpense.test.ts",
-    "src/lib/analytics/classifyStall.test.ts",
-    // T-ML-027：營業額自動帶固定支出 + cash 清點支出同步
-    "src/lib/analytics/fixedExpenseRules.test.ts",
-    "src/lib/fixedExpenseAutofill.test.ts",
+    "src/lib/analytics/vendorCompare.test.ts",
     "src/lib/cashExpenseSync.test.ts",
-    // T-ML-034：cash 站介面重設計的純函式（導覽 active、差額狀態、日期、區間、草稿機制）
-    "src/lib/cash-ui.test.ts",
-    "src/lib/cash-draft.test.ts",
-    "src/lib/cash-stats.test.ts",
-    "src/lib/cash-queries.test.ts",
-];
+]);
+
+function walk(dir: string, out: string[]) {
+    for (const ent of readdirSync(dir, { withFileTypes: true })) {
+        if (ent.isDirectory()) {
+            if (!SKIP_DIRS.has(ent.name)) walk(join(dir, ent.name), out);
+        } else if (/\.test\.(ts|js)$/.test(ent.name)) {
+            out.push(join(dir, ent.name).split("\\").join("/"));
+        }
+    }
+}
+
+const found: string[] = [];
+for (const r of ROOTS) {
+    try { walk(r, found); } catch { /* root missing */ }
+}
+found.sort();
+const tests = env.TEST_SKIP_DB === "1" ? found.filter((f) => !DB_TESTS.has(f)) : found;
+console.log(`[run-tests] ${tests.length} test files${env.TEST_SKIP_DB === "1" ? " (DB tests skipped)" : ""}`);
 
 const child = spawn("tsx", ["--test", ...tests], {
     stdio: "inherit",
