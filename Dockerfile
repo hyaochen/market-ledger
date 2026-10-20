@@ -36,19 +36,32 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends openssl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/.next/standalone ./
-COPY --from=builder /app/.next/static ./.next/static
-COPY --from=builder /app/public ./public
+# T-ML-037: everything is owned by the unprivileged "node" user (uid 1000) so the app can write
+# .next/cache. docker-start.sh itself starts as root only to chown the named volume, then drops
+# to node with setpriv (util-linux, present in debian slim).
+COPY --from=builder --chown=node:node /app/.next/standalone ./
+COPY --from=builder --chown=node:node /app/.next/static ./.next/static
+COPY --from=builder --chown=node:node /app/public ./public
 
-# prisma CLI + engines + generated client, for `npx prisma db push` in docker-start.sh
-COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/node_modules/.bin ./node_modules/.bin
-COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
-COPY --from=builder /app/node_modules/@prisma ./node_modules/@prisma
-COPY --from=builder /app/node_modules/prisma ./node_modules/prisma
+# prisma CLI + engines + generated client, for `prisma db push` in docker-start.sh
+COPY --from=builder --chown=node:node /app/prisma ./prisma
+COPY --from=builder --chown=node:node /app/node_modules/.bin ./node_modules/.bin
+COPY --from=builder --chown=node:node /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder --chown=node:node /app/node_modules/@prisma ./node_modules/@prisma
+COPY --from=builder --chown=node:node /app/node_modules/prisma ./node_modules/prisma
 
-COPY docker-start.sh ./
-RUN chmod +x docker-start.sh && mkdir -p /app/data
+# First-run seed (prisma/seed.ts): tsx + esbuild + get-tsconfig + bcryptjs. Before T-ML-037 the
+# .bin/tsx shim was copied without the tsx package, so the seed could never run in this image
+# (it failed and was masked by `|| true`).
+COPY --from=builder --chown=node:node /app/node_modules/tsx ./node_modules/tsx
+COPY --from=builder --chown=node:node /app/node_modules/esbuild ./node_modules/esbuild
+COPY --from=builder --chown=node:node /app/node_modules/@esbuild ./node_modules/@esbuild
+COPY --from=builder --chown=node:node /app/node_modules/get-tsconfig ./node_modules/get-tsconfig
+COPY --from=builder --chown=node:node /app/node_modules/resolve-pkg-maps ./node_modules/resolve-pkg-maps
+COPY --from=builder --chown=node:node /app/node_modules/bcryptjs ./node_modules/bcryptjs
+
+COPY --chown=node:node docker-start.sh ./
+RUN sed -i 's/$//' docker-start.sh     && chmod +x docker-start.sh     && mkdir -p /app/data     && chown node:node /app /app/data
 
 EXPOSE 3000
 
@@ -73,6 +86,8 @@ COPY bot ./bot
 # same reason the T-ML-027/028/029 backfill scripts ran via this image, not runner)
 COPY scripts ./scripts
 
-RUN mkdir -p /app/data
+COPY docker-bot-start.sh ./
+# T-ML-037: entrypoint starts as root only to chown the shared named volume, then drops to node.
+RUN sed -i 's/$//' docker-bot-start.sh     && chmod +x docker-bot-start.sh     && mkdir -p /app/data     && chown node:node /app /app/data
 
-CMD ["node_modules/.bin/tsx", "bot/index.ts"]
+CMD ["./docker-bot-start.sh"]

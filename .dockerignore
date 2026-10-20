@@ -8,6 +8,11 @@ node_modules
 backups
 docker-data
 tunnel.log
-prisma/*.db
-prisma/*.db-journal
-docker-data
+logs
+*.db
+*.db*
+# one-off backfill scripts and their internal data (real tenant data; never bake into an image)
+scripts/data
+scripts/t-ml-027-backfill.ts
+scripts/t-ml-028-backfill.ts
+scripts/t-ml-029-backfill.ts

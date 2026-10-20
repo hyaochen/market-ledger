@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client'
 import bcrypt from 'bcryptjs'
+import { randomBytes } from 'node:crypto'
 
 function hashPassword(plain: string): string {
     return bcrypt.hashSync(plain, 12)
@@ -7,7 +8,39 @@ function hashPassword(plain: string): string {
 
 const prisma = new PrismaClient()
 
+// T-ML-037: no hardcoded fallback passwords. The repo is public, so any default here is a
+// known credential. In production every seed password MUST come from the environment;
+// in dev a random one is generated and printed once.
+const IS_PRODUCTION = process.env.NODE_ENV === 'production'
+const SEED_PASSWORD_KEYS = [
+    'SUPER_ADMIN_PASSWORD',
+    'ADMIN_PASSWORD',
+    'CASH_ADMIN_PASSWORD',
+    'CASH_EMPLOYEE_PASSWORD',
+] as const
+const generatedPasswords: Array<{ key: string; value: string }> = []
+
+function seedPassword(key: (typeof SEED_PASSWORD_KEYS)[number]): string {
+    const fromEnv = process.env[key]
+    if (fromEnv) return fromEnv
+    const generated = randomBytes(12).toString('base64url')
+    generatedPasswords.push({ key, value: generated })
+    return generated
+}
+
+function assertProductionSeedEnv() {
+    if (!IS_PRODUCTION) return
+    const missing = SEED_PASSWORD_KEYS.filter((k) => !process.env[k])
+    if (missing.length > 0) {
+        console.error(`[seed] REFUSING to seed in production: missing ${missing.join(', ')}.`)
+        console.error('[seed] Set these in .env (no defaults exist), then restart the container.')
+        process.exit(2)
+    }
+}
+
 async function main() {
+    assertProductionSeedEnv()
+
     // ─── 0. 建立預設租戶 ───
     const defaultTenant = await prisma.tenant.upsert({
         where: { code: 'default' },
@@ -238,27 +271,18 @@ async function main() {
     // ─── 8. 建立超級管理員 (無 tenantId) ───
     const adminRole = await prisma.role.findUnique({ where: { code: 'admin' } })
     if (adminRole) {
-        const superAdminPassword = process.env.SUPER_ADMIN_PASSWORD || 'superadmin123'
-        if (!process.env.SUPER_ADMIN_PASSWORD) {
-            console.warn('WARNING: SUPER_ADMIN_PASSWORD not set in .env, using default "superadmin123".')
-        }
-        const hashedSuperPassword = hashPassword(superAdminPassword)
 
         // 使用 findFirst + create/update (因為 nullable tenantId 在 composite unique 中的 SQLite 限制)
         let superAdmin = await prisma.user.findFirst({
             where: { username: 'superadmin', isSuperAdmin: true },
         })
 
-        if (superAdmin) {
-            await prisma.user.update({
-                where: { id: superAdmin.id },
-                data: { password: hashedSuperPassword, status: true },
-            })
-        } else {
+        // create-only: never overwrite the password or status of an existing user
+        if (!superAdmin) {
             superAdmin = await prisma.user.create({
                 data: {
                     username: 'superadmin',
-                    password: hashedSuperPassword,
+                    password: hashPassword(seedPassword('SUPER_ADMIN_PASSWORD')),
                     realName: '超級管理員',
                     isSuperAdmin: true,
                     tenantId: null,
@@ -274,26 +298,16 @@ async function main() {
         })
 
         // ─── 9. 建立預設企業管理員 ───
-        const rawPassword = process.env.ADMIN_PASSWORD || 'admin123'
-        if (!process.env.ADMIN_PASSWORD) {
-            console.warn('WARNING: ADMIN_PASSWORD not set in .env, using default "admin123".')
-        }
-        const adminPassword = hashPassword(rawPassword)
 
         let tenantAdmin = await prisma.user.findFirst({
             where: { username: 'admin', tenantId },
         })
 
-        if (tenantAdmin) {
-            await prisma.user.update({
-                where: { id: tenantAdmin.id },
-                data: { password: adminPassword, status: true },
-            })
-        } else {
+        if (!tenantAdmin) {
             tenantAdmin = await prisma.user.create({
                 data: {
                     username: 'admin',
-                    password: adminPassword,
+                    password: hashPassword(seedPassword('ADMIN_PASSWORD')),
                     realName: '系統管理者',
                     tenantId,
                     status: true,
@@ -308,7 +322,7 @@ async function main() {
         })
 
         // ─── 10. CashCount 模組 seed（T-ML-002）──────────────────────
-        // 帳號可用 .env 覆蓋；預設為老闆要求的 mom / 1
+        // 帳號名稱可用 .env 覆蓋；密碼一律來自環境變數（見 seedPassword）
         const writeRole = await prisma.role.findUnique({ where: { code: 'write' } })
         const pingtungLocation = await prisma.location.findFirst({
             where: { name: '屏東攤位', tenantId },
@@ -316,33 +330,18 @@ async function main() {
 
         if (writeRole && pingtungLocation) {
             const momUsername = process.env.CASH_ADMIN_USERNAME || 'mom'
-            const momPassword = process.env.CASH_ADMIN_PASSWORD || 'mom123'
             const employeeUsername = process.env.CASH_EMPLOYEE_USERNAME || '1'
-            const employeePassword = process.env.CASH_EMPLOYEE_PASSWORD || '1'
-
-            if (!process.env.CASH_ADMIN_PASSWORD) {
-                console.warn('WARNING: CASH_ADMIN_PASSWORD not set, using default "mom123".')
-            }
-            if (!process.env.CASH_EMPLOYEE_PASSWORD) {
-                console.warn('WARNING: CASH_EMPLOYEE_PASSWORD not set, using default "1".')
-            }
 
             // admin: mom
             let momUser = await prisma.user.findFirst({
                 where: { username: momUsername, tenantId },
             })
-            const momHashed = hashPassword(momPassword)
-            if (momUser) {
-                await prisma.user.update({
-                    where: { id: momUser.id },
-                    data: { password: momHashed, status: true, locationId: pingtungLocation.id },
-                })
-            } else {
+            if (!momUser) {
                 momUser = await prisma.user.create({
                     data: {
                         username: momUsername,
-                        password: momHashed,
-                        realName: '洪怜俼',
+                        password: hashPassword(seedPassword('CASH_ADMIN_PASSWORD')),
+                        realName: '現金管理員',
                         tenantId,
                         locationId: pingtungLocation.id,
                         status: true,
@@ -359,17 +358,11 @@ async function main() {
             let employeeUser = await prisma.user.findFirst({
                 where: { username: employeeUsername, tenantId },
             })
-            const empHashed = hashPassword(employeePassword)
-            if (employeeUser) {
-                await prisma.user.update({
-                    where: { id: employeeUser.id },
-                    data: { password: empHashed, status: true, locationId: pingtungLocation.id },
-                })
-            } else {
+            if (!employeeUser) {
                 employeeUser = await prisma.user.create({
                     data: {
                         username: employeeUsername,
-                        password: empHashed,
+                        password: hashPassword(seedPassword('CASH_EMPLOYEE_PASSWORD')),
                         realName: '清點員',
                         tenantId,
                         locationId: pingtungLocation.id,
@@ -412,7 +405,11 @@ async function main() {
     console.log(`   Tenant: ${defaultTenant.name} (${defaultTenant.code})`)
     console.log(`   Super Admin: superadmin`)
     console.log(`   Tenant Admin: admin`)
-    console.log(`   Cash admin: mom / Cash employee: 1`)
+    console.log('   Cash admin / Cash employee: created from CASH_* env (existing users untouched)')
+    if (generatedPasswords.length > 0) {
+        console.log('   Generated dev passwords for NEWLY CREATED users (shown once, not stored anywhere else):')
+        for (const g of generatedPasswords) console.log(`     ${g.key}=${g.value}`)
+    }
 }
 
 main()
