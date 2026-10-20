@@ -5,10 +5,12 @@ import { Badge } from "@/components/ui/badge";
 import { GitPullRequest, CheckCircle2, XCircle, Clock, Lightbulb } from "lucide-react";
 import { updateEntryStatus } from "@/app/actions/workflow";
 import { getTenantId } from "@/lib/auth";
+import { requireRole } from "@/lib/auth";
 
 export const dynamic = 'force-dynamic';
 
 export default async function WorkflowPage() {
+    await requireRole("admin");
     const tenantId = await getTenantId();
     // 獲取待審核的單據
     const pendingEntries = await prisma.entry.findMany({

@@ -9,8 +9,10 @@ import { getUnitLabel } from "@/lib/units";
 import ItemActions from "./ItemActions";
 import CategoryActions from "./CategoryActions";
 import { getTenantId } from "@/lib/auth";
+import { requireRole } from "@/lib/auth";
 
 export default async function ItemsPage() {
+    await requireRole("admin");
     const tenantId = await getTenantId();
     const categories = await prisma.category.findMany({
         where: { tenantId },

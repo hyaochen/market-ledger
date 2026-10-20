@@ -15,8 +15,10 @@ import {
     Receipt
 } from "lucide-react";
 import Link from "next/link";
+import { requireRole } from "@/lib/auth";
 
-export default function SettingsPage() {
+export default async function SettingsPage() {
+    await requireRole("admin");
     const quickItems = [
         { icon: Package, label: "品項管理", desc: "肉類/菜類等品項設定", href: "/settings/items" },
         { icon: Truck, label: "廠商管理", desc: "供應商資訊維護", href: "/settings/vendors" },

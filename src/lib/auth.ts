@@ -1,7 +1,9 @@
+import { cache } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import prisma from "@/lib/prisma";
-import { verifySession, type SessionPayload } from "@/lib/session";
+import { verifySession, passwordFingerprint, type SessionPayload } from "@/lib/session";
+import { getSessionsValidAfter } from "@/lib/session-revocation";
 
 export type RoleCode = "read" | "write" | "admin";
 
@@ -42,16 +44,24 @@ export async function getSessionPayload(): Promise<SessionPayload | null> {
     return verifySession(token);
 }
 
-export async function getCurrentUser(): Promise<CurrentUser | null> {
+// 以 React cache() 包起來：同一個 request 內無論 ensureRole / getTenantId / 頁面各呼叫幾次，只查一次 DB。
+export const getCurrentUser = cache(async function getCurrentUser(): Promise<CurrentUser | null> {
     const payload = await getSessionPayload();
     if (!payload) return null;
 
-    const user = await prisma.user.findUnique({
-        where: { id: payload.userId },
-        include: { roles: { include: { role: true } }, tenant: true },
-    });
+    const [user, validAfter] = await Promise.all([
+        prisma.user.findUnique({
+            where: { id: payload.userId },
+            include: { roles: { include: { role: true } }, tenant: true },
+        }),
+        getSessionsValidAfter(payload.userId),
+    ]);
 
     if (!user || !user.status) return null;
+
+    // 伺服器端撤銷：密碼被重設（指紋對不上；沒有指紋的舊 session 一律要求重新登入）或已登出
+    if (payload.pwv !== passwordFingerprint(user.password)) return null;
+    if (payload.issuedAt < validAfter) return null;
 
     // 非 super admin 時，檢查租戶是否仍然啟用
     if (!user.isSuperAdmin && user.tenant && !user.tenant.status) return null;
@@ -85,7 +95,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
         tenantCode,
         isSuperAdmin: user.isSuperAdmin,
     };
-}
+});
 
 export async function requireAuth() {
     const user = await getCurrentUser();
@@ -98,6 +108,12 @@ export async function requireRole(minRole: RoleCode) {
     if (getRoleRank(user.roleCode) < getRoleRank(minRole)) {
         redirect("/");
     }
+    return user;
+}
+
+export async function requireSuperAdmin() {
+    const user = await requireAuth();
+    if (!user.isSuperAdmin) redirect("/");
     return user;
 }
 

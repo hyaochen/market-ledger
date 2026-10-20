@@ -2,8 +2,10 @@ import { getOperationLogs } from "@/app/actions/admin";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { format } from "date-fns";
 import { FileClock, User as UserIcon, Activity } from "lucide-react";
+import { requireRole } from "@/lib/auth";
 
 export default async function LogsPage() {
+    await requireRole("admin");
     const logs = await getOperationLogs();
 
     return (

@@ -3,8 +3,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { FolderTree, Trash2 } from "lucide-react";
 import DeptForm from "./DeptForm"; // Client Component for interaction
+import { requireRole } from "@/lib/auth";
 
 export default async function DepartmentPage() {
+    await requireRole("admin");
     const depts = await getDepartments();
 
     // Simple flatten function for table view (Real tree view is complex, using table with indentation for now)

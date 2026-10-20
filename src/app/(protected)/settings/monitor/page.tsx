@@ -1,10 +1,14 @@
 import prisma from "@/lib/prisma";
+import { requireRole } from "@/lib/auth";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Database, Server, HardDrive } from "lucide-react";
 
 export const dynamic = 'force-dynamic';
 
 export default async function MonitorPage() {
+    const viewer = await requireRole("admin");
+    // 租戶管理者只能看自己企業的統計；super admin 進入企業時看該企業，未進入任何企業時才看全部
+    const scope = viewer.tenantId ? { tenantId: viewer.tenantId } : {};
     // 簡單測量延遲
     const start = Date.now();
     await prisma.$queryRaw`SELECT 1`;
@@ -12,10 +16,10 @@ export default async function MonitorPage() {
 
     // 獲取一些統計資料
     const stats = await Promise.all([
-        prisma.user.count(),
-        prisma.entry.count(),
-        prisma.revenue.count(),
-        prisma.operationLog.count(),
+        prisma.user.count({ where: scope }),
+        prisma.entry.count({ where: scope }),
+        prisma.revenue.count({ where: scope }),
+        prisma.operationLog.count({ where: scope }),
     ]);
 
     return (

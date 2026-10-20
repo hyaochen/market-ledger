@@ -2,8 +2,10 @@ import { getRoles, syncDefaultRoles } from "@/app/actions/admin";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Shield } from "lucide-react";
+import { requireRole } from "@/lib/auth";
 
 export default async function RolesPage() {
+    await requireRole("admin");
     const roles = await getRoles();
 
     return (

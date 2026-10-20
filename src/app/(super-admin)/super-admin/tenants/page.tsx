@@ -5,10 +5,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Building2, Users, FileText, DollarSign, LogIn } from "lucide-react";
 import Link from "next/link";
+import { requireSuperAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
 export default async function TenantsPage() {
+    await requireSuperAdmin();
     const tenants = await getTenants();
 
     return (

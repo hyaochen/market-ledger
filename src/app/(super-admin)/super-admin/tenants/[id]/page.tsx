@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { Users, FileText, DollarSign, Package, Truck, MapPin, LogIn } from "lucide-react";
+import { requireSuperAdmin } from "@/lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +16,7 @@ export default async function TenantDetailPage({
 }: {
     params: Promise<{ id: string }> | { id: string };
 }) {
+    await requireSuperAdmin();
     const resolvedParams = await Promise.resolve(params);
     const tenant = await getTenantById(resolvedParams.id);
 

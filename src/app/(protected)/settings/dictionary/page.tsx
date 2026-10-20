@@ -3,8 +3,10 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { BookMarked, Trash2 } from "lucide-react";
 import DictForm from "./DictForm";
+import { requireRole } from "@/lib/auth";
 
 export default async function DictionaryPage() {
+    await requireRole("admin");
     const dictItems = await getDictionary();
 
     // Group by category

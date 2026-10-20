@@ -5,7 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { signSession, verifySession } from "./session";
+import { signSession, verifySession, passwordFingerprint } from "./session";
 
 test("signSession + verifySession: roundtrip preserves payload", () => {
     const payload = {
@@ -68,4 +68,54 @@ test("verifySession: super admin flag preserved", () => {
     const decoded = verifySession(token);
     assert.equal(decoded?.isSuperAdmin, true);
     assert.equal(decoded?.tenantId, null);
+});
+
+test("getSecret: production 沒設 SESSION_SECRET 時，每一次呼叫都 throw（不得 fail-open 改用 fallback）", () => {
+    const env = process.env as Record<string, string | undefined>;
+    const saved = { n: env.NODE_ENV, s: env.SESSION_SECRET, p: env.NEXT_PHASE };
+    try {
+        env.NODE_ENV = "production";
+        delete env.SESSION_SECRET;
+        delete env.NEXT_PHASE;
+        const payload = { userId: "u1", tenantId: null, isSuperAdmin: false, issuedAt: Date.now() };
+        for (let i = 0; i < 3; i++) {
+            assert.throws(() => signSession(payload), /SESSION_SECRET/);
+            assert.throws(() => verifySession("a.b"), /SESSION_SECRET/);
+        }
+        // secret 太短也一樣每次都擋
+        env.SESSION_SECRET = "short";
+        for (let i = 0; i < 3; i++) assert.throws(() => signSession(payload), /too short/);
+        // 公開 fallback 常數在 production 不可用
+        env.SESSION_SECRET = "dev-secret-should-be-changed";
+        assert.throws(() => signSession(payload), /development default/);
+        // 補上合法 secret 後恢復正常
+        env.SESSION_SECRET = "x".repeat(40);
+        assert.ok(signSession(payload));
+    } finally {
+        env.NODE_ENV = saved.n;
+        if (saved.s === undefined) delete env.SESSION_SECRET; else env.SESSION_SECRET = saved.s;
+        if (saved.p === undefined) delete env.NEXT_PHASE; else env.NEXT_PHASE = saved.p;
+    }
+});
+
+test("getSecret: secret 在檢查當下才讀 env（模組載入後改 env 會生效）", () => {
+    const env = process.env as Record<string, string | undefined>;
+    const saved = env.SESSION_SECRET;
+    try {
+        env.SESSION_SECRET = "k".repeat(40);
+        const token = signSession({ userId: "u1", tenantId: null, isSuperAdmin: false, issuedAt: Date.now() });
+        env.SESSION_SECRET = "z".repeat(40);
+        assert.equal(verifySession(token), null);
+        env.SESSION_SECRET = "k".repeat(40);
+        assert.equal(verifySession(token)?.userId, "u1");
+    } finally {
+        if (saved === undefined) delete env.SESSION_SECRET; else env.SESSION_SECRET = saved;
+    }
+});
+
+test("passwordFingerprint: 同 hash 穩定、不同 hash 不同、不含 hash 本身", () => {
+    const a = passwordFingerprint("hash-A");
+    assert.equal(a, passwordFingerprint("hash-A"));
+    assert.notEqual(a, passwordFingerprint("hash-B"));
+    assert.ok(!a.includes("hash-A"));
 });

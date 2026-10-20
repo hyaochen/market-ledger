@@ -4,8 +4,10 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { User, Shield, Building2 } from "lucide-react";
 import UserForm from "./UserForm";
 import UserActions from "./UserActions";
+import { requireRole } from "@/lib/auth";
 
 export default async function UsersPage() {
+    await requireRole("admin");
     const [users, depts, roles, currentUser] = await Promise.all([
         getUsers(),
         getDepartments(),

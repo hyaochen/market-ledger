@@ -65,7 +65,7 @@ export default function NewTenantPage() {
                                 </div>
                                 <div className="space-y-2">
                                     <Label>管理員密碼 *</Label>
-                                    <Input name="adminPassword" type="password" required placeholder="至少 4 個字元" />
+                                    <Input name="adminPassword" type="password" required placeholder="至少 8 個字元" minLength={8} />
                                 </div>
                             </div>
                         </div>
