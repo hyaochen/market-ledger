@@ -13,7 +13,7 @@ import {
 } from "./cash-queries";
 import { parseLocalDate } from "./date";
 
-const ADMIN = { id: "user_洪怜俼", tenantId: "tenant_洪記軒", isAdmin: true };
+const ADMIN = { id: "user_王小明", tenantId: "tenant_洪記軒", isAdmin: true };
 const STAFF = { id: "user_清點員一號", tenantId: "tenant_洪記軒", isAdmin: false };
 
 // ── 既有行為（改動前就存在，不能變）──────────────────────────
@@ -30,7 +30,7 @@ test("buildCashCountWhere: 員工一律只看自己的紀錄", () => {
 test("buildCashCountWhere: 管理者 mineOnly=true 也只看自己", () => {
     assert.deepEqual(buildCashCountWhere(ADMIN, { mineOnly: true }), {
         tenantId: "tenant_洪記軒",
-        attendantId: "user_洪怜俼",
+        attendantId: "user_王小明",
     });
 });
 
@@ -104,9 +104,9 @@ test("toSubmissionNotice: 時間是台北時間 HH:mm，姓名優先用 realName
     const withName = toSubmissionNotice({
         id: "cc_1",
         handoverTime: new Date("2026-10-06T14:41:00.000Z"),
-        attendant: { realName: "洪怜俼", username: "mom" },
+        attendant: { realName: "王小明", username: "mom" },
     });
-    assert.deepEqual(withName, { id: "cc_1", timeLabel: "22:41", byName: "洪怜俼" });
+    assert.deepEqual(withName, { id: "cc_1", timeLabel: "22:41", byName: "王小明" });
 
     const withoutName = toSubmissionNotice({
         id: "cc_2",

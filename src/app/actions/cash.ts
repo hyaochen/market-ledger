@@ -3,21 +3,30 @@
 import { z } from "zod";
 import prisma from "@/lib/prisma";
 import { revalidatePath } from "next/cache";
-import { parseLocalDate } from "@/lib/date";
+import { unstable_rethrow } from "next/navigation";
 import { requireCashAuth, requireCashAdmin } from "@/lib/cash-auth";
-import { CASH_BOX_TARGET_TOTAL, RESERVE_TARGET_TOTAL } from "@/lib/cash-constants";
+import {
+    CASH_BOX_DENOMS,
+    CASH_BOX_TARGET_TOTAL,
+    RESERVE_DENOMS,
+    RESERVE_TARGET_TOTAL,
+    SALES_DENOMS,
+} from "@/lib/cash-constants";
+import { dedupeChecklist, parseDenomMap, parseSaneCashDate } from "@/lib/cash-validate";
+import { getCashSupervisorName } from "@/lib/cash-supervisor";
 import { previewFixedExpenses, applyFixedExpenses, stallForLocation, realEntryDb } from "@/lib/fixedExpenseAutofill";
 import { syncCashExpensesToEntry } from "@/lib/cashExpenseSync";
 import { buildCashCountWhere, type CashCountFilters } from "@/lib/cash-queries";
 
 // ---------- Schema ----------
 
-const denomMapSchema = z.record(z.string(), z.number().int().nonnegative());
+// 面額與張數的細部驗證在 parseDenomMap（只認 cash-constants 定義的面額）；這裡只確認形狀。
+const denomMapSchema = z.record(z.string(), z.number());
 
 const expenseRowSchema = z.object({
     item: z.string().trim().max(120),
     note: z.string().trim().max(200).optional().default(""),
-    amount: z.number().nonnegative(),
+    amount: z.number().finite().nonnegative().max(10_000_000, "支出金額過大"),
 });
 
 const submitCashCountSchema = z.object({
@@ -25,26 +34,18 @@ const submitCashCountSchema = z.object({
     cashBox: denomMapSchema,
     reserve: denomMapSchema,
     sales: denomMapSchema,
-    expenses: z.array(expenseRowSchema),
+    expenses: z.array(expenseRowSchema).max(100),
     checklistDone: z.array(z.object({
-        id: z.string(),
+        id: z.string().min(1).max(64),
         done: z.boolean(),
-    })),
-    signatureDataUrl: z.string().regex(/^data:image\/(png|jpeg|jpg);base64,/, "簽名格式錯誤"),
-    note: z.string().optional().default(""),
+    })).max(200),
+    signatureDataUrl: z.string().max(1_500_000, "簽名檔案過大").regex(/^data:image\/(png|jpeg|jpg);base64,/, "簽名格式錯誤"),
+    note: z.string().max(1000).optional().default(""),
 });
 
 export type SubmitCashCountInput = z.infer<typeof submitCashCountSchema>;
 
 // ---------- Helpers ----------
-
-function sumDenoms(map: Record<string, number>): number {
-    return Object.entries(map).reduce((total, [denom, qty]) => {
-        const d = Number(denom);
-        const q = Number(qty) || 0;
-        return total + (Number.isFinite(d) ? d * q : 0);
-    }, 0);
-}
 
 function sumExpenses(rows: { amount: number }[]): number {
     return rows.reduce((t, r) => t + (Number(r.amount) || 0), 0);
@@ -60,6 +61,10 @@ function filterExpenses(rows: z.infer<typeof expenseRowSchema>[]) {
 export async function submitCashCount(input: SubmitCashCountInput) {
     try {
         const user = await requireCashAuth();
+        // 只有 write 以上才能寫入（read 角色登入得了 cash 站，但不能改營收／建支出）
+        if (!user.canWrite) {
+            return { success: false, error: "您的帳號沒有寫入權限，請聯絡管理員。" };
+        }
         if (!user.locationId) {
             return { success: false, error: "找不到您的攤位設定，請聯絡管理員。" };
         }
@@ -70,14 +75,33 @@ export async function submitCashCount(input: SubmitCashCountInput) {
         }
         const data = parsed.data;
 
-        const date = parseLocalDate(data.date);
+        const date = parseSaneCashDate(data.date);
         if (!date) {
-            return { success: false, error: "日期格式錯誤" };
+            return { success: false, error: "日期格式錯誤或超出允許範圍，請重新整理頁面。" };
         }
 
-        const cashBoxTotal = sumDenoms(data.cashBox);
-        const reserveTotal = sumDenoms(data.reserve);
-        const salesTotal = sumDenoms(data.sales);
+        const cashBoxParsed = parseDenomMap(data.cashBox, CASH_BOX_DENOMS, "錢盒");
+        if (!cashBoxParsed.ok) return { success: false, error: cashBoxParsed.error };
+        const reserveParsed = parseDenomMap(data.reserve, RESERVE_DENOMS, "備用金");
+        if (!reserveParsed.ok) return { success: false, error: reserveParsed.error };
+        const salesParsed = parseDenomMap(data.sales, SALES_DENOMS, "營業現金");
+        if (!salesParsed.ok) return { success: false, error: salesParsed.error };
+        const cashBoxTotal = cashBoxParsed.total;
+        const reserveTotal = reserveParsed.total;
+        const salesTotal = salesParsed.total;
+
+        // checklist id 必須都是本租戶的項目（防止塞別的租戶 / 不存在的 id）
+        const checklistDone = dedupeChecklist(data.checklistDone);
+        if (checklistDone.length > 0) {
+            const owned = await prisma.checklistItem.count({
+                where: { tenantId: user.tenantId, id: { in: checklistDone.map((c) => c.id) } },
+            });
+            if (owned !== checklistDone.length) {
+                return { success: false, error: "檢查清單項目不存在或無權限，請重新整理頁面。" };
+            }
+        }
+
+        const supervisorName = await getCashSupervisorName(user.tenantId);
         const expensesClean = filterExpenses(data.expenses);
         const expensesTotal = sumExpenses(expensesClean);
         const totalSales = salesTotal + expensesTotal;
@@ -124,12 +148,12 @@ export async function submitCashCount(input: SubmitCashCountInput) {
                 tenantId: user.tenantId,
                 locationId: user.locationId!,
                 attendantId: user.id,
-                supervisorName: "洪怜俼",
-                cashBoxJson: JSON.stringify(data.cashBox),
+                supervisorName,
+                cashBoxJson: JSON.stringify(cashBoxParsed.map),
                 cashBoxTotal,
-                reserveJson: JSON.stringify(data.reserve),
+                reserveJson: JSON.stringify(reserveParsed.map),
                 reserveTotal,
-                salesJson: JSON.stringify(data.sales),
+                salesJson: JSON.stringify(salesParsed.map),
                 salesTotal,
                 expensesJson: JSON.stringify(expensesClean),
                 expensesTotal,
@@ -156,7 +180,7 @@ export async function submitCashCount(input: SubmitCashCountInput) {
             }
 
             // 5. checklist done rows（只插 done=true 的；done=false 不插，前端可推算）
-            for (const c of data.checklistDone) {
+            for (const c of checklistDone) {
                 await tx.cashCountChecklistDone.create({
                     data: {
                         cashCountId: cashCount.id,
@@ -206,8 +230,10 @@ export async function submitCashCount(input: SubmitCashCountInput) {
         revalidatePath("/entry");
         return { success: true, ...result };
     } catch (error) {
+        // auth 的 redirect() 是用丟例外實作的，不能吞掉
+        unstable_rethrow(error);
         console.error("submitCashCount error:", error);
-        return { success: false, error: error instanceof Error ? error.message : "儲存失敗" };
+        return { success: false, error: "儲存失敗，請稍後再試" };
     }
 }
 

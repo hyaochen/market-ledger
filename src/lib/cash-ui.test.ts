@@ -43,7 +43,7 @@ test("roleLabel: 管理者與清點員，介面不得出現英文 admin", () => 
 });
 
 test("identityLine: 「姓名 · 身分」；姓名剛好等於身分名稱（員工預設姓名「清點員」）時只顯示一次", () => {
-    assert.equal(identityLine("洪怜俼", true), "洪怜俼 · 管理者");
+    assert.equal(identityLine("王小明", true), "王小明 · 管理者");
     assert.equal(identityLine("王小明", false), "王小明 · 清點員");
     assert.equal(identityLine("清點員", false), "清點員");
     assert.equal(identityLine("管理者", true), "管理者");

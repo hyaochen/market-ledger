@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import prisma from "@/lib/prisma";
-import { getCurrentUser } from "@/lib/auth";
+import { getCurrentUser, getRoleRank, type RoleCode } from "@/lib/auth";
 import type { CashShellUser } from "@/lib/cash-ui";
 
 export type CashUser = {
@@ -10,15 +10,48 @@ export type CashUser = {
     tenantId: string;
     locationId: string | null;
     isAdmin: boolean;
+    /** 清點員：角色剛好是 write（read 角色不算員工，也不能寫入） */
     isEmployee: boolean;
+    /** 可以寫入清點資料（write 以上；super admin 進入租戶時視為 admin） */
+    canWrite: boolean;
     displayName: string;
 };
+
+// 部分員工 / 管理者帳號沒有綁定攤位（User.locationId 為空）。這是整個 cash 站「唯一」的攤位
+// fallback：沒綁攤位就用這個名稱的攤位。要改預設攤位只改這一個常數。
+const DEFAULT_CASH_LOCATION_NAME = "屏東攤位";
+
+/** 解析使用者的攤位：自己綁的優先，沒綁才 fallback 到預設攤位（同租戶內）。 */
+async function resolveCashLocationId(userId: string, tenantId: string): Promise<string | null> {
+    const dbUser = await prisma.user.findUnique({
+        where: { id: userId },
+        select: { locationId: true },
+    });
+    if (dbUser?.locationId) return dbUser.locationId;
+    const fallback = await prisma.location.findFirst({
+        where: { tenantId, name: DEFAULT_CASH_LOCATION_NAME },
+        select: { id: true },
+    });
+    return fallback?.id ?? null;
+}
+
+type RoleView = { roleCode: RoleCode; isSuperAdmin: boolean };
+
+export function cashRoleFlags(user: RoleView) {
+    const isAdmin = user.roleCode === "admin" || user.isSuperAdmin;
+    const canWrite = isAdmin || getRoleRank(user.roleCode) >= getRoleRank("write");
+    return {
+        isAdmin,
+        canWrite,
+        isEmployee: !isAdmin && user.roleCode === "write",
+    };
+}
 
 /**
  * Cash PWA 專用 auth helper。
  * - 未登入 → redirect /cash/login
- * - 沒指派攤位 → 自動 fallback 到屏東攤位（員工帳號預期都綁屏東）
- * - 回傳 cash-friendly user payload
+ * - 沒指派攤位 → fallback 到預設攤位（見 resolveCashLocationId）
+ * - 回傳 cash-friendly user payload（canWrite 為 false 的帳號只能看，不能寫入）
  */
 export async function requireCashAuth(): Promise<CashUser> {
     const user = await getCurrentUser();
@@ -26,21 +59,8 @@ export async function requireCashAuth(): Promise<CashUser> {
         redirect("/cash/login");
     }
 
-    let locationId: string | null = null;
-    const dbUser = await prisma.user.findUnique({
-        where: { id: user.id },
-        select: { locationId: true },
-    });
-    locationId = dbUser?.locationId ?? null;
-
-    // 沒指派攤位 → 自動 fallback 到屏東攤位
-    if (!locationId) {
-        const pingtung = await prisma.location.findFirst({
-            where: { tenantId: user.tenantId, name: "屏東攤位" },
-            select: { id: true },
-        });
-        locationId = pingtung?.id ?? null;
-    }
+    const locationId = await resolveCashLocationId(user.id, user.tenantId);
+    const flags = cashRoleFlags(user);
 
     return {
         id: user.id,
@@ -48,8 +68,7 @@ export async function requireCashAuth(): Promise<CashUser> {
         realName: user.realName,
         tenantId: user.tenantId,
         locationId,
-        isAdmin: user.roleCode === "admin" || user.isSuperAdmin,
-        isEmployee: user.roleCode !== "admin" && !user.isSuperAdmin,
+        ...flags,
         displayName: user.realName || user.username,
     };
 }
@@ -69,25 +88,13 @@ export async function requireCashAdmin(): Promise<CashUser> {
  * layout 若用會 redirect 的 requireCashAuth，未登入時會一直導向登入頁、無限迴圈。
  *
  * - 未登入（或沒有租戶）→ null，layout 就只渲染 children、不顯示任何導覽
- * - 攤位 fallback 規則與 requireCashAuth 一致：沒指派攤位 → 屏東攤位
- * - 只做加法：requireCashAuth / requireCashAdmin 的行為完全沒動
+ * - 攤位 fallback 規則與 requireCashAuth 一致（同一個 resolveCashLocationId）
  */
 export async function getCashUserOrNull(): Promise<CashShellUser | null> {
     const user = await getCurrentUser();
     if (!user || !user.tenantId) return null;
 
-    const dbUser = await prisma.user.findUnique({
-        where: { id: user.id },
-        select: { locationId: true },
-    });
-    let locationId = dbUser?.locationId ?? null;
-    if (!locationId) {
-        const pingtung = await prisma.location.findFirst({
-            where: { tenantId: user.tenantId, name: "屏東攤位" },
-            select: { id: true },
-        });
-        locationId = pingtung?.id ?? null;
-    }
+    const locationId = await resolveCashLocationId(user.id, user.tenantId);
 
     let locationName: string | null = null;
     if (locationId) {
@@ -101,7 +108,7 @@ export async function getCashUserOrNull(): Promise<CashShellUser | null> {
     return {
         displayName: user.realName || user.username,
         username: user.username,
-        isAdmin: user.roleCode === "admin" || user.isSuperAdmin,
+        isAdmin: cashRoleFlags(user).isAdmin,
         locationName,
     };
 }
