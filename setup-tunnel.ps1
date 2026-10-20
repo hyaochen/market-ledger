@@ -40,7 +40,8 @@ $tunnelId = $tunnel.id
 Write-Host "Tunnel ID: $tunnelId" -ForegroundColor Green
 
 # 4. Route DNS
-$domain = "hongjixuan-market-ledger.com"
+$domain = $env:TUNNEL_HOSTNAME_MAIN
+if (-not $domain) { Write-Error "Set env TUNNEL_HOSTNAME_MAIN (public hostname) before running."; exit 1 }
 Write-Host "Routing DNS for $domain..." -ForegroundColor Cyan
 & $cloudflaredPath tunnel route dns $tunnelName $domain
 

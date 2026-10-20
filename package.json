@@ -14,7 +14,7 @@
     "backup:cleanup-report": "tsx scripts/backup-db.ts --cleanup-report",
     "prune:logs": "tsx scripts/prune-logs.ts",
     "test": "tsx scripts/run-tests.ts",
-    "lint": "next lint",
+    "lint": "eslint .",
     "bot": "tsx bot/index.ts",
     "bot:test": "tsx bot/test-runner.ts",
     "claude-bridge": "node scripts/claude-bridge/bridge.js",
@@ -40,7 +40,7 @@
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "lucide-react": "^0.562.0",
-    "next": "16.1.1",
+    "next": "16.4.2",
     "node-telegram-bot-api": "^0.66.0",
     "prisma": "^5.22.0",
     "react": "19.2.3",
@@ -52,7 +52,9 @@
     "zod": "^4.3.6"
   },
   "overrides": {
-    "form-data": "^4.0.6"
+    "form-data": "^4.0.6",
+    "qs": "^6.16.1",
+    "tough-cookie": "^4.1.4"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
@@ -64,7 +66,7 @@
     "autoprefixer": "^10.4.23",
     "dotenv": "^17.2.3",
     "eslint": "^9",
-    "eslint-config-next": "16.1.1",
+    "eslint-config-next": "16.4.2",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.13",
     "tsx": "^4.21.0",

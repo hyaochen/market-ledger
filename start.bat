@@ -43,8 +43,8 @@ echo  ============================================
 echo   Started successfully.
 echo.
 echo   App    : http://localhost:3000
-echo   Bot    : Telegram @market_ledger_bot
-echo   Tunnel : https://hongjixuan-market-ledger.com
+echo   Bot    : Telegram bot (see .env)
+echo   Tunnel : see TUNNEL_HOSTNAME_MAIN in .env
 echo.
 echo   Note: Cloudflare tunnel runs separately.
 echo         Use stop.bat to stop the app.

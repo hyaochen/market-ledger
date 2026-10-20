@@ -28,6 +28,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 
 // ── 設定 ──────────────────────────────────────────────────────────────
@@ -40,6 +41,52 @@ const MAX_CONCURRENT = Number(process.env.CLAUDE_BRIDGE_MAX_CONCURRENT) || 2;
 // 的 30s fetch timeout，讓 bridge 有機會回一個乾淨的錯誤 JSON，而不是被呼叫端
 // AbortSignal 直接掐斷、bridge 這邊的 subprocess 變成孤兒繼續跑。
 const REQUEST_BUDGET_MS = Number(process.env.CLAUDE_BRIDGE_TIMEOUT_MS) || 25000;
+
+// ── 認證（T-ML-037）────────────────────────────────────────────────────
+// 綁 127.0.0.1 擋得住區網，但擋不住「本機任何程式」以及「使用者瀏覽器裡任何網頁的
+// 跨站 POST」（瀏覽器可以對 http://127.0.0.1:5055 發 text/plain POST，不需 CORS 預檢，
+// 伺服器照單全收就會燒掉 owner 的訂閱額度）。所以：
+//   1. CLAUDE_BRIDGE_TOKEN 有設 -> /chat 必須帶 `Authorization: Bearer <token>`（constant-time 比對）
+//   2. 帶 Origin header 的請求一律拒絕（瀏覽器發的請求一定有 Origin；bot 的 Node fetch 沒有）
+// token 來源：環境變數，或 repo 根目錄 .env 的 CLAUDE_BRIDGE_TOKEN（見 README）。
+function readEnvFileKey(key, envPath) {
+    try {
+        const text = fs.readFileSync(envPath || path.join(__dirname, '..', '..', '.env'), 'utf8');
+        for (const line of text.split(/\r?\n/)) {
+            const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
+            if (m && m[1] === key) return m[2].replace(/^(['"])(.*)\1$/, '$2');
+        }
+    } catch { /* no .env: fine */ }
+    return '';
+}
+const AUTH_TOKEN = process.env.CLAUDE_BRIDGE_TOKEN || readEnvFileKey('CLAUDE_BRIDGE_TOKEN');
+
+// model 白名單：請求內的 model 欄位會直接變成 `claude --model <值>`，不能讓呼叫端任意指定。
+const ALLOWED_MODELS = new Set(
+    (process.env.CLAUDE_BRIDGE_ALLOWED_MODELS || 'sonnet,haiku,opus')
+        .split(',').map((m) => m.trim()).filter(Boolean),
+);
+ALLOWED_MODELS.add(MODEL);
+
+function tokensEqual(provided, expected) {
+    const a = crypto.createHash('sha256').update(String(provided)).digest();
+    const b = crypto.createHash('sha256').update(String(expected)).digest();
+    return crypto.timingSafeEqual(a, b); // 先雜湊成等長，避免 length 洩漏與 timingSafeEqual 長度例外
+}
+
+/** 回傳 null 表示放行，否則 { status, errorType, error }。token 以參數傳入，方便測試。 */
+function checkRequestAuth(req, token) {
+    if (req.headers['origin'] !== undefined) {
+        return { status: 403, errorType: 'forbidden_origin', error: 'requests with an Origin header are rejected' };
+    }
+    if (token) {
+        const m = /^Bearer (.+)$/.exec(req.headers['authorization'] || '');
+        if (!m || !tokensEqual(m[1], token)) {
+            return { status: 401, errorType: 'unauthorized', error: 'missing or invalid bearer token' };
+        }
+    }
+    return null;
+}
 
 // ── 找出真正可以 shell:false 直接 spawn 的 claude 執行檔 ─────────────────
 // [重要] 踩坑記錄（T-ML-024）：Windows 上 `claude` 在 PATH 裡是 claude.cmd（批次檔）。
@@ -235,11 +282,18 @@ function respond(res, status, obj) {
 function handleChat(req, res) {
     const startedAt = Date.now();
     let body = '';
+    let tooLarge = false;
     req.on('data', (chunk) => {
+        if (tooLarge) return;
         body += chunk;
-        if (body.length > 2_000_000) req.destroy(); // 2MB 上限防呆
+        if (body.length > 2_000_000) { // 2MB 上限防呆
+            tooLarge = true;
+            body = '';
+            req.destroy();
+        }
     });
     req.on('end', async () => {
+        if (tooLarge) return; // 連線已被 destroy，不要再處理（以前會繼續 JSON.parse 截斷內容）
         let payload;
         try {
             payload = JSON.parse(body || '{}');
@@ -250,6 +304,11 @@ function handleChat(req, res) {
         const system = typeof payload.system === 'string' ? payload.system : '';
         const user = typeof payload.user === 'string' ? payload.user : '';
         const model = typeof payload.model === 'string' && payload.model ? payload.model : MODEL;
+        if (!ALLOWED_MODELS.has(model)) {
+            log('request_rejected', { reason: 'model_not_allowed', model: model.slice(0, 40) });
+            respond(res, 400, { ok: false, errorType: 'bad_request', error: `model not allowed (allowed: ${[...ALLOWED_MODELS].join(', ')})` });
+            return;
+        }
         if (!user) {
             respond(res, 400, { ok: false, errorType: 'bad_request', error: 'missing "user" field' });
             return;
@@ -300,7 +359,15 @@ function handleChat(req, res) {
 }
 
 const server = http.createServer((req, res) => {
-    if (req.method === 'GET' && req.url === '/health') {
+    const denied = checkRequestAuth(req, AUTH_TOKEN);
+    // /health 不需 token（bot 的 bridgeHealth 與 watchdog 探測用，不含敏感資訊），但仍擋 Origin。
+    const isHealth = req.method === 'GET' && req.url === '/health';
+    if (denied && (denied.errorType === 'forbidden_origin' || !isHealth)) {
+        log('request_rejected', { reason: denied.errorType, method: req.method, url: String(req.url).slice(0, 40) });
+        respond(res, denied.status, { ok: false, errorType: denied.errorType, error: denied.error });
+        return;
+    }
+    if (isHealth) {
         respond(res, 200, {
             ok: true,
             model: MODEL,
@@ -319,32 +386,46 @@ const server = http.createServer((req, res) => {
     respond(res, 404, { ok: false, errorType: 'not_found', error: `no route for ${req.method} ${req.url}` });
 });
 
-server.listen(PORT, BIND, () => {
-    log('startup', {
-        bind: BIND,
-        port: PORT,
-        model: MODEL,
-        maxConcurrent: MAX_CONCURRENT,
-        requestBudgetMs: REQUEST_BUDGET_MS,
-        claudeBin: CLAUDE_BIN,
-        claudeShell: CLAUDE_SHELL,
-        pid: process.pid,
-    });
-    console.log(`[claude-bridge] listening on http://${BIND}:${PORT} (pid ${process.pid}, model=${MODEL})`);
-    console.log(`[claude-bridge] claude bin: ${CLAUDE_BIN} (shell=${CLAUDE_SHELL})`);
+function main() {
     if (RESOLVED_BIN.unsafe) {
-        console.warn('[claude-bridge] WARNING: could not locate claude.exe under a PATH dir\'s claude.cmd shim.');
-        console.warn('[claude-bridge] Falling back to "claude.cmd" via shell:true — Windows cmd.exe does NOT');
-        console.warn('[claude-bridge] escape array args, so prompts with spaces/CJK/JSON WILL get corrupted.');
-        console.warn('[claude-bridge] Fix: set CLAUDE_BRIDGE_BIN to the real claude.exe path.');
+        console.error('[claude-bridge] FATAL: could not locate claude.exe under a PATH dir claude.cmd shim.');
+        console.error('[claude-bridge] The only fallback is "claude.cmd" via shell:true. Windows cmd.exe does NOT');
+        console.error('[claude-bridge] escape array args, so prompts with spaces/CJK/JSON would be corrupted and');
+        console.error('[claude-bridge] request text would reach a shell. Refusing to start.');
+        console.error('[claude-bridge] Fix: set CLAUDE_BRIDGE_BIN to the real claude.exe path.');
+        process.exit(1);
     }
-    console.log('[claude-bridge] Ctrl+C to stop');
-});
+    server.listen(PORT, BIND, () => {
+        log('startup', {
+            bind: BIND,
+            port: PORT,
+            model: MODEL,
+            maxConcurrent: MAX_CONCURRENT,
+            requestBudgetMs: REQUEST_BUDGET_MS,
+            claudeBin: CLAUDE_BIN,
+            claudeShell: CLAUDE_SHELL,
+            authRequired: Boolean(AUTH_TOKEN),
+            pid: process.pid,
+        });
+        console.log(`[claude-bridge] listening on http://${BIND}:${PORT} (pid ${process.pid}, model=${MODEL})`);
+        console.log(`[claude-bridge] claude bin: ${CLAUDE_BIN} (shell=${CLAUDE_SHELL})`);
+        if (!AUTH_TOKEN) {
+            console.warn('[claude-bridge] WARNING: CLAUDE_BRIDGE_TOKEN is not set -- /chat accepts any local caller.');
+            console.warn('[claude-bridge] Set CLAUDE_BRIDGE_TOKEN in the repo .env (see README.md).');
+        }
+        console.log('[claude-bridge] Ctrl+C to stop');
+    });
+    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+}
 
 function shutdown(signal) {
     log('shutdown', { signal, pid: process.pid });
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 2000).unref();
 }
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
+if (require.main === module) {
+    main();
+}
+
+module.exports = { checkRequestAuth, tokensEqual, readEnvFileKey, ALLOWED_MODELS, server };

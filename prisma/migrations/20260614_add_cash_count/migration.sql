@@ -7,7 +7,7 @@ CREATE TABLE "CashCount" (
     "tenantId" TEXT NOT NULL,
     "locationId" TEXT NOT NULL,
     "attendantId" TEXT NOT NULL,
-    "supervisorName" TEXT NOT NULL DEFAULT '洪怜俼',
+    "supervisorName" TEXT NOT NULL DEFAULT '',
     "cashBoxJson" TEXT NOT NULL,
     "cashBoxTotal" REAL NOT NULL,
     "reserveJson" TEXT NOT NULL,

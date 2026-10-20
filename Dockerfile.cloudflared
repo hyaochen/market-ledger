@@ -1,3 +1,6 @@
+# DEPRECATED / UNUSED (T-ML-037): docker-compose.yml runs the official, version-pinned
+# cloudflare/cloudflared image instead. Do not build or deploy this file: it downloads
+# releases/latest with no checksum or signature verification.
 FROM mcr.microsoft.com/devcontainers/base:debian-12
 
 RUN apt-get update \

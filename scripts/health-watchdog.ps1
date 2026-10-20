@@ -40,7 +40,10 @@ $BotContainerName = "market-ledger-bot"   # T-ML-031: checked via `docker inspec
 $FailThreshold = 3          # consecutive failures required before restarting (unchanged by T-ML-031)
 $ThrottleMinutes = 30        # minimum gap between automatic restarts (unchanged by T-ML-031)
 $Containers = @("market-ledger", "market-ledger-bot")
-$AttentionPath = "C:\Users\a0927\vault\ops\attention.md"
+# Optional notification file: set env WATCHDOG_ATTENTION_PATH to an existing file to enable.
+# The neutral default lives in the repo logs dir and is skipped with a WARN when it does not exist.
+$AttentionPath = $env:WATCHDOG_ATTENTION_PATH
+if (-not $AttentionPath) { $AttentionPath = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "logs") "attention.md" }
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $LogDir = Join-Path $RepoRoot "logs"
@@ -237,7 +240,7 @@ $entry = @"
 - Status: $statusWord (unattended, triggered by scripts\health-watchdog.ps1)
 - Detected: $FailThreshold consecutive combined-health failures before $((Get-Date -Format "yyyy-MM-dd HH:mm:ss")) (web=$webWord bot=$botStatus at time of trigger; either check failing counts toward the same threshold)
 - Action: docker restart market-ledger market-ledger-bot
-- Detail log: C:\Users\a0927\Desktop\t_web\logs\health-watchdog.log
+- Detail log: $LogFile
 "@
 
 Add-AttentionEntry -Body $entry

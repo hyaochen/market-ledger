@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      # dummy values only; nothing here is a real secret
+      SESSION_SECRET: "ci-dummy-session-secret-0123456789abcdef"
+      DATABASE_URL: "file:./ci-nonexistent.db"
+      TEST_SKIP_DB: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npx tsc --noEmit
+      - run: npm run lint
+      # Fails the build on critical advisories in production dependencies. High/moderate items that
+      # remain (tailwind v3 build chain, node-telegram-bot-api request chain) need major upgrades.
+      - run: npm audit --omit=dev --audit-level=critical
+      # Unit tests that do not need the real dev.db (DB tests are listed in scripts/run-tests.ts)
+      - run: npm run test
