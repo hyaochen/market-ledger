@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { decideCashRoute } from "@/lib/cash-host";
 
 /**
  * Host-based routing for the cash.* subdomain (T-ML-002).
@@ -9,30 +10,14 @@ import { NextRequest, NextResponse } from "next/server";
  * Apex domain (hongjixuan-market-ledger.com) 走原本的 /* routes，不影響。
  */
 
-const CASH_HOST_PATTERNS = [
-    "cash.hongjixuan-market-ledger.com",
-    // 開發 / preview 也支援（用 X-Forwarded-Host 或本機 hosts 條目）
-    "cash.localhost",
-    "cash.local",
-];
-
-function isCashHost(host: string | null): boolean {
-    if (!host) return false;
-    const lower = host.toLowerCase().split(":")[0];
-    return CASH_HOST_PATTERNS.includes(lower);
-}
-
 export function middleware(req: NextRequest) {
     const host = req.headers.get("host");
     const url = req.nextUrl;
 
-    if (isCashHost(host)) {
-        // 已經是 /cash/* 不重複 rewrite
-        if (url.pathname.startsWith("/cash")) {
-            return NextResponse.next();
-        }
+    const decision = decideCashRoute(host, url.pathname);
+    if (decision.action === "rewrite") {
         const rewritten = url.clone();
-        rewritten.pathname = `/cash${url.pathname === "/" ? "" : url.pathname}`;
+        rewritten.pathname = decision.pathname;
         return NextResponse.rewrite(rewritten);
     }
 

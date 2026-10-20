@@ -3,7 +3,7 @@
 //   GET  /status  -> { ok, running, last_run, last_push, pending_batches }
 //   POST /sync    -> 同步 + 推送跑完才回（約 10 秒，上限 300 秒）；正在跑回 409
 //
-// 驗證：Authorization: Bearer <POS_IMPORT_TOKEN>（與匯入 API 同一把）。
+// 驗證：Authorization: Bearer <POS_SYNC_TOKEN>；沒設就退回 POS_IMPORT_TOKEN（與匯入 API 同一把，舊部署相容）。
 // 這個檔案只放「呼叫」與「把回應翻成給人看的摘要」；摘要函式是純函式，有單元測試。
 
 export type SyncGroup = {
@@ -52,7 +52,7 @@ function baseUrl(): string {
 }
 
 function authHeaders(): Record<string, string> {
-    const t = process.env.POS_IMPORT_TOKEN;
+    const t = process.env.POS_SYNC_TOKEN || process.env.POS_IMPORT_TOKEN;
     return t ? { Authorization: `Bearer ${t}` } : {};
 }
 
@@ -226,4 +226,11 @@ export function describeLastRun(s: SyncStatus | null): { text: string; tone: Syn
         return { text: `最近一次同步 ${when}：連不到 POS（關機、熱點或 VPN 未連線）`, tone: "bad" };
     }
     return { text: `最近一次同步 ${when}：失敗${run.error ? `（${run.error}）` : ""}`, tone: "bad" };
+}
+
+/** 「立即同步」冷卻：距離上次觸發不到 cooldownMs 就回還要等幾秒，否則回 0。純函式。 */
+export function syncCooldownRemainingSeconds(nowMs: number, lastMs: number | null, cooldownMs = 60_000): number {
+    if (lastMs === null) return 0;
+    const left = cooldownMs - (nowMs - lastMs);
+    return left > 0 ? Math.ceil(left / 1000) : 0;
 }

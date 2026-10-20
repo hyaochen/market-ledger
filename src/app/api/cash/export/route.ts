@@ -1,16 +1,15 @@
 import { NextResponse } from "next/server";
 import { listCashCounts } from "@/app/actions/cash";
+import { getCurrentUser } from "@/lib/auth";
+import { toCsv } from "@/lib/csv";
 import { CASH_BOX_TARGET_TOTAL, RESERVE_TARGET_TOTAL } from "@/lib/cash-constants";
 
-function csvEscape(v: unknown): string {
-    const s = v === null || v === undefined ? "" : String(v);
-    if (/[",\n\r]/.test(s)) {
-        return `"${s.replace(/"/g, '""')}"`;
-    }
-    return s;
-}
-
 export async function GET(req: Request) {
+    // 未登入直接回 401（requireCashAuth 的 redirect() 在 route handler 裡會被 catch 吞成 500）
+    const me = await getCurrentUser();
+    if (!me || !me.tenantId) {
+        return NextResponse.json({ error: "請先登入" }, { status: 401 });
+    }
     try {
         const url = new URL(req.url);
         const from = url.searchParams.get("from") || undefined;
@@ -24,7 +23,7 @@ export async function GET(req: Request) {
             "錢盒合計", "備用金合計", "營業現金合計", "支出合計", "今日營業額",
             "錢盒差額", "備用金差額", "備註", "建立時間",
         ];
-        const lines = [header.join(",")];
+        const lines: unknown[][] = [header];
         for (const r of rows) {
             const dateStr = r.date.toISOString().slice(0, 10);
             const createdAt = r.createdAt.toISOString().slice(0, 19).replace("T", " ");
@@ -41,10 +40,11 @@ export async function GET(req: Request) {
                 r.reserveTotal - RESERVE_TARGET_TOTAL,
                 r.note ?? "",
                 createdAt,
-            ].map(csvEscape).join(","));
+            ]);
         }
-        const csv = "﻿" + lines.join("\n"); // BOM for Excel UTF-8 detection
-        const filename = `cash-counts_${from ?? "all"}_${to ?? "now"}.csv`;
+        const csv = "﻿" + toCsv(lines, "\n"); // BOM for Excel UTF-8 detection
+        const safe = (v?: string) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined);
+        const filename = `cash-counts_${safe(from) ?? "all"}_${safe(to) ?? "now"}.csv`;
         return new NextResponse(csv, {
             headers: {
                 "Content-Type": "text/csv; charset=utf-8",
@@ -52,6 +52,10 @@ export async function GET(req: Request) {
             },
         });
     } catch (e) {
+        const digest = (e as { digest?: unknown } | null)?.digest;
+        if (typeof digest === "string" && digest.startsWith("NEXT_REDIRECT")) {
+            return NextResponse.json({ error: "請先登入" }, { status: 401 });
+        }
         console.error("cash export error", e);
         return NextResponse.json({ error: "匯出失敗" }, { status: 500 });
     }

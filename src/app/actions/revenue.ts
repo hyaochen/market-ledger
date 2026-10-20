@@ -4,6 +4,7 @@ import prisma from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
 import { parseLocalDate } from '@/lib/date';
 import { ensureRole, getTenantId } from '@/lib/auth';
+import { tenantOwns } from '@/lib/tenant-guard';
 import {
     previewFixedExpenses,
     applyFixedExpenses,
@@ -21,6 +22,7 @@ export async function getFixedExpensePreview(date: string, locationId: string): 
     const auth = await ensureRole('write');
     if (!auth.ok) return null;
     const tenantId = await getTenantId();
+    if (!(await tenantOwns('location', locationId, tenantId))) return null;
     const targetDate = parseLocalDate(date) ?? new Date();
     return previewFixedExpenses(tenantId, targetDate, locationId);
 }
@@ -40,6 +42,10 @@ export async function recordRevenue(
         // Server-side 雙保險：沒勾休假但金額 <= 0 → 擋下，避免「漏記休假」變成髒資料
         if (!isDayOff && (!Number.isFinite(amount) || amount <= 0)) {
             return { success: false, error: '若是休假請勾選「今日休假」；若有營業請填正確金額。' };
+        }
+
+        if (!(await tenantOwns('location', locationId, tenantId))) {
+            return { success: false, error: '找不到地點或無權限' };
         }
 
         const targetDate = parseLocalDate(date) ?? new Date();

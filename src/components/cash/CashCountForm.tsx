@@ -46,6 +46,8 @@ type Props = {
     today: string; // YYYY-MM-DD
     attendantId: string;
     attendantName: string;
+    /** 覆核人姓名（每個租戶自己的設定；空字串代表尚未設定） */
+    supervisorName: string;
     locationName: string;
     checklistItems: ChecklistItemDef[];
     /** 今天這個攤位已經提交過的紀錄（只用來提醒「再提交會覆蓋」，不會預填內容） */
@@ -79,7 +81,8 @@ function sumDenoms(map: Record<string, string>): number {
  * - beforeunload 防呆（有內容且尚未提交成功才攔）
  * - submitCashCount 呼叫、錯誤處理、成功後 1.2 秒導向 /cash/history
  */
-export default function CashCountForm({ today, attendantId, attendantName, locationName, checklistItems, existing = null }: Props) {
+export default function CashCountForm({ today, attendantId, attendantName, supervisorName, locationName, checklistItems, existing = null }: Props) {
+    const supervisorLabel = supervisorName.trim() || "未設定";
     const router = useRouter();
     const [cashBox, setCashBox] = useState<Record<string, string>>(emptyDenomState(CASH_BOX_DENOMS));
     const [reserve, setReserve] = useState<Record<string, string>>(emptyDenomState(RESERVE_DENOMS));
@@ -311,7 +314,7 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
                         </div>
                         <div>
                             <dt className="text-[13px] text-stone-600">覆核人（固定）</dt>
-                            <dd className="font-bold text-stone-900">洪怜俼</dd>
+                            <dd className="font-bold text-stone-900">{supervisorLabel}</dd>
                         </div>
                     </dl>
                 </section>
@@ -378,7 +381,7 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
                 <SectionCard
                     step={6}
                     title="簽名確認"
-                    description="請清點人簽名；覆核人固定是洪怜俼。"
+                    description={`請清點人簽名；覆核人固定是${supervisorLabel}。`}
                     status={
                         signature ? (
                             <InfoChip tone="ok" icon={CircleCheck}>已簽名</InfoChip>
@@ -396,7 +399,7 @@ export default function CashCountForm({ today, attendantId, attendantName, locat
                                     <span className="text-[13px] text-stone-600">固定</span>
                                 </div>
                                 <div className="flex h-28 items-center justify-center rounded-xl border-2 border-stone-300 bg-stone-50">
-                                    <span className="text-xl font-bold text-stone-900">洪怜俼</span>
+                                    <span className="text-xl font-bold text-stone-900">{supervisorLabel}</span>
                                 </div>
                             </div>
                         </div>

@@ -4,6 +4,8 @@ import prisma from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
 import { UNITS, type UnitDef, parseUnitMeta } from '@/lib/units';
 import { ensureRole, getTenantId } from '@/lib/auth';
+import { checkTenantRefs } from '@/lib/tenant-guard';
+import { nextExpenseCode } from '@/lib/catalog-codes';
 
 const UNIT_CATEGORY = 'unit';
 const EXPENSE_CATEGORY = 'expense_type';
@@ -71,6 +73,9 @@ export async function createItem(formData: FormData) {
         if (!name || !categoryId) {
             return { success: false, error: '請填寫品項與類別' };
         }
+
+        const refError = await checkTenantRefs(tenantId, [['category', categoryId]]);
+        if (refError) return { success: false, error: refError };
 
         const item = await prisma.item.upsert({
             where: { name_categoryId_tenantId: { name, categoryId, tenantId } },
@@ -176,16 +181,16 @@ export async function createExpenseType(formData: FormData) {
             return { success: false, error: '請填寫支出名稱' };
         }
 
-        // 自動產生序號代碼
-        const count = await prisma.dictionary.count({
+        // 自動產生序號代碼：取現有最大編號 + 1（不能用筆數 + 1，刪除過項目後會撞到既有代碼）。
+        // 用 create 而不是 upsert：萬一仍然撞號（兩人同時新增）就讓它失敗，不要覆蓋別人的項目。
+        const existing = await prisma.dictionary.findMany({
             where: { category: EXPENSE_CATEGORY, tenantId },
+            select: { value: true },
         });
-        const value = `EXP${String(count + 1).padStart(3, '0')}`;
+        const value = nextExpenseCode(existing.map((e) => e.value));
 
-        const item = await prisma.dictionary.upsert({
-            where: { category_value_tenantId: { category: EXPENSE_CATEGORY, value, tenantId } },
-            update: { label, sortOrder, isActive: true },
-            create: { category: EXPENSE_CATEGORY, label, value, sortOrder, isActive: true, tenantId },
+        const item = await prisma.dictionary.create({
+            data: { category: EXPENSE_CATEGORY, label, value, sortOrder, isActive: true, tenantId },
         });
 
         revalidatePath('/settings/dictionary');
@@ -282,6 +287,9 @@ export async function updateItem(id: string, formData: FormData) {
         if (!name || !categoryId) {
             return { success: false, error: '請填寫品項與類別' };
         }
+
+        const refError = await checkTenantRefs(tenantId, [['category', categoryId]]);
+        if (refError) return { success: false, error: refError };
 
         await prisma.item.update({
             where: { id },

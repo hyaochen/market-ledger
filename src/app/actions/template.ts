@@ -4,6 +4,7 @@ import prisma from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
 import type { Prisma } from '@prisma/client';
 import { ensureRole, getTenantId } from '@/lib/auth';
+import { checkTenantRefs } from '@/lib/tenant-guard';
 
 export async function createTemplate(formData: FormData) {
     try {
@@ -33,6 +34,9 @@ export async function createTemplate(formData: FormData) {
             const weight = formData.get('weight') as string;
             const unit = formData.get('unit') as string;
             const price = formData.get('price') as string;
+
+            const refError = await checkTenantRefs(tenantId, [['item', itemId], ['vendor', vendorId === 'none' ? null : vendorId]]);
+            if (refError) return { success: false, message: refError };
 
             data.itemId = itemId || null;
             data.vendorId = (!vendorId || vendorId === 'none') ? null : vendorId;

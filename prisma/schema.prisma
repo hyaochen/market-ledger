@@ -41,7 +41,7 @@ model Tenant {
 model User {
   id           String  @id @default(cuid())
   username     String
-  password     String // SHA-256 加密
+  password     String // bcrypt 雜湊（舊帳號可能仍是 SHA-256，驗證時相容）
   realName     String? // 真實姓名
   email        String?
   phone        String?
@@ -354,9 +354,9 @@ model CashCount {
   id                    String   @id @default(cuid())
   date                  DateTime // 該天日期（純日期、不含時分）
   tenantId              String
-  locationId            String   // 預設屏東攤位
+  locationId            String   // 清點的攤位
   attendantId           String   // 清點人 user.id
-  supervisorName        String   @default("洪怜俼")
+  supervisorName        String   @default("")
   cashBoxJson           String   // JSON: {"500":n,"100":n,"50":n,"10":n,"5":n}
   cashBoxTotal          Float
   reserveJson           String   // JSON: 同上

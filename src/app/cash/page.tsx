@@ -3,13 +3,14 @@ import prisma from "@/lib/prisma";
 import { listActiveChecklistItems } from "@/app/actions/cash";
 import CashCountForm from "@/components/cash/CashCountForm";
 import { todayLocalIsoDate } from "@/lib/cash-ui";
+import { getCashSupervisorName } from "@/lib/cash-supervisor";
 import { submissionLookupWhere, toSubmissionNotice } from "@/lib/cash-queries";
 
 export default async function CashEntryPage() {
     const user = await requireCashAuth();
     const today = todayLocalIsoDate();
 
-    let locationName = "屏東攤位";
+    let locationName = "未指定攤位";
     if (user.locationId) {
         const loc = await prisma.location.findUnique({ where: { id: user.locationId }, select: { name: true } });
         if (loc) locationName = loc.name;
@@ -35,12 +36,14 @@ export default async function CashEntryPage() {
     }
 
     const checklistItems = await listActiveChecklistItems();
+    const supervisorName = await getCashSupervisorName(user.tenantId);
 
     return (
         <CashCountForm
             today={today}
             attendantId={user.id}
             attendantName={user.displayName}
+            supervisorName={supervisorName}
             locationName={locationName}
             checklistItems={checklistItems.map((c) => ({ id: c.id, name: c.name }))}
             existing={existing}

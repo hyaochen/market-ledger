@@ -179,7 +179,7 @@ export default async function CashHistoryDetailPage(props: { params: Promise<{ i
                     </div>
                     <div>
                         <dt className="mb-1 text-[13px] font-semibold text-stone-600 print:text-black">覆核人</dt>
-                        <dd className="text-xl font-bold text-stone-900 print:text-base print:text-black">{cc.supervisorName}</dd>
+                        <dd className="text-xl font-bold text-stone-900 print:text-base print:text-black">{cc.supervisorName || "未設定"}</dd>
                     </div>
                     <div>
                         <dt className="mb-1 text-[13px] font-semibold text-stone-600 print:text-black">交班時間</dt>
