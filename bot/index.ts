@@ -1,7 +1,5 @@
 // Telegram Bot 主入口（polling 模式）
 import 'dotenv/config';
-import fs from 'fs';
-import path from 'path';
 import TelegramBot from 'node-telegram-bot-api';
 import prisma from '../src/lib/prisma';
 import {
@@ -40,18 +38,11 @@ import {
 } from './handlers/querySpec';
 import { isQueryLike, translateQuestion } from './handlers/nlQuery';
 import { saveAlias } from './aliases';
+import { logLine, redactLoginText } from './botLog';
+import { loginThrottle, formatWait } from './loginThrottle';
 import { logIncoming, logOutcome, logCallback } from './messageLog';
 import { applyJevMatch } from './jevApply';
 import type { SessionData, DbContext, ParsedEntry } from './types';
-
-// ── 持久化 Log（寫入 /app/data/bot.log，方便事後查閱）──────────
-const LOG_FILE = path.join(process.env.BOT_DATA_DIR ?? '/app/data', 'bot.log');
-function logLine(tag: string, chatId: number | string, msg: string) {
-    const ts = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei' });
-    const line = `[${ts}] [${tag}] (${chatId}) ${msg}\n`;
-    try { fs.appendFileSync(LOG_FILE, line); } catch { /* ignore write errors */ }
-    console.log(line.trimEnd());
-}
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 if (!TOKEN) {
@@ -841,7 +832,12 @@ bot.on('message', async (msg) => {
 
     if (!telegramId || !text) return;
 
-    logLine('IN', chatId, `[${msg.from?.username ?? telegramId}] ${text.slice(0, 120)}`);
+    // 安全：還不知道有沒有 session 之前，只有已知的純指令文字能原文落地。
+    // 其他文字可能是「帳號 密碼」明文，等 session 檢查之後再決定怎麼記（見下方）。
+    const who = msg.from?.username ?? telegramId;
+    if (COMMAND_TEXTS.has(text)) {
+        logLine('IN', chatId, `[${who}] ${text.slice(0, 120)}`);
+    }
 
     // T-ML-033：指令類文字一律 route='command'（fire-and-forget，不影響後續分派）
     if (COMMAND_TEXTS.has(text)) {
@@ -919,6 +915,11 @@ bot.on('message', async (msg) => {
     const state = getState(chatId);
     let session = await getSession(telegramId);
 
+    // 有 session 才能原文記 log；沒 session 的文字走登入路徑，永遠只記遮蔽後的版本
+    if (!COMMAND_TEXTS.has(text)) {
+        logLine('IN', chatId, `[${who}] ${session ? text.slice(0, 120) : redactLoginText(text)}`);
+    }
+
     // 若在 awaiting_auth 狀態 or 無 session → 嘗試登入
     if (!session) {
         const credentials = parseLoginInput(text);
@@ -946,16 +947,45 @@ bot.on('message', async (msg) => {
             return;
         }
 
-        await bot.sendMessage(chatId, '驗證中...');
-        const newSession = await verifyLogin(credentials.username, credentials.password);
+        // 登入嘗試（無論成敗）都把含密碼的那則訊息從 Telegram 對話刪掉
+        const deleteLoginMessage = async (): Promise<boolean> => {
+            try { await bot.deleteMessage(chatId, msg.message_id); return true; } catch { return false; }
+        };
+        const throttleKeys = { telegramId, username: credentials.username };
 
-        if (!newSession) {
-            await bot.sendMessage(chatId, '帳號或密碼錯誤，請再試一次。');
+        const lock = await loginThrottle.check(throttleKeys);
+        if (lock.locked) {
+            const deleted = await deleteLoginMessage();
+            logLine('AUTH', chatId, `locked user=${credentials.username} wait=${formatWait(lock.retryAfterMs)}`);
+            await bot.sendMessage(chatId,
+                `登入嘗試太多次，請等 ${formatWait(lock.retryAfterMs)} 後再試。${deleted ? '\n（你剛才傳的訊息已刪除。）' : ''}`);
             return;
         }
 
+        await bot.sendMessage(chatId, '驗證中...');
+        const newSession = await verifyLogin(credentials.username, credentials.password);
+        const deleted = await deleteLoginMessage();
+        const deletedNote = deleted
+            ? '\n（為了安全，你剛才傳的登入訊息已自動刪除。）'
+            : '\n（請自行刪除剛才含密碼的那則訊息。）';
+
+        if (!newSession) {
+            const after = await loginThrottle.recordFailure(throttleKeys);
+            logLine('AUTH', chatId, `failed user=${credentials.username}${after.locked ? ' (now locked)' : ''}`);
+            if (after.locked) {
+                await bot.sendMessage(chatId,
+                    `帳號或密碼錯誤次數太多，已暫時鎖定，請等 ${formatWait(after.retryAfterMs)} 後再試。${deletedNote}`);
+            } else {
+                await bot.sendMessage(chatId, `帳號或密碼錯誤，請再試一次。${deletedNote}`);
+            }
+            return;
+        }
+
+        // 密碼正確：清掉失敗計數（唯讀帳號也算密碼正確，不算暴力破解）
+        await loginThrottle.recordSuccess(throttleKeys);
+
         if (newSession.roleCode === 'read') {
-            await bot.sendMessage(chatId, '此帳號為唯讀權限，無法新增記錄。');
+            await bot.sendMessage(chatId, `此帳號為唯讀權限，無法新增記錄。${deletedNote}`);
             return;
         }
 
@@ -967,7 +997,7 @@ bot.on('message', async (msg) => {
         setState(chatId, { phase: 'idle', pendingReplayText: null });
 
         await bot.sendMessage(chatId,
-            `登入成功，歡迎 ${newSession.realName || newSession.username}！\n帳戶：${newSession.tenantName}（${newSession.roleCode === 'admin' ? '管理員' : '一般'}）\n登入有效期 90 天。\n\n直接輸入記帳內容開始記錄。\n查資料就傳 /menu 叫出按鈕選單。`);
+            `登入成功，歡迎 ${newSession.realName || newSession.username}！\n帳戶：${newSession.tenantName}（${newSession.roleCode === 'admin' ? '管理員' : '一般'}）\n登入有效期 90 天。${deletedNote}\n\n直接輸入記帳內容開始記錄。\n查資料就傳 /menu 叫出按鈕選單。`);
 
         // 把 session 過期時被擋下的那則訊息補送回自己，使用者不用重打。
         // 用 re-emit 而不是遞迴呼叫：這時 session 已存在，不會再走進上面這個分支，
