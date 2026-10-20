@@ -48,19 +48,15 @@
     container_name: market-ledger-bot
     mem_limit: 512m
     restart: unless-stopped
-    # T-ML-037: the bot no longer loads the whole .env (it has no use for the admin/seed
-    # passwords, POS token, tunnel settings). Only the keys below reach it. A bare key name
-    # is resolved from .env by compose and stays unset when absent from .env.
+    # T-ML-037: secrets come from env_file, NOT from bare `- KEY` pass-through entries.
+    # Compose resolves a bare key from the SHELL first and .env only as a fallback, so a
+    # stale TELEGRAM_BOT_TOKEN in the deploying shell would silently point the bot at a
+    # different Telegram bot (seen during T-ML-037 pre-flight). env_file is read as-is.
+    env_file:
+      - .env
     environment:
       - NODE_ENV=production
       - DATABASE_URL=file:/app/data/dev.db
-      - TELEGRAM_BOT_TOKEN
-      - OLLAMA_MODEL
-      - TYPESAFE_API_KEY
-      - JEV_TIMEOUT_MS
-      - JEV_MIN_CONFIDENCE
-      - CLAUDE_BRIDGE_TOKEN
-      - CLAUDE_BRIDGE_TIMEOUT_MS
       # 容器內連到 host 的 Ollama（Windows/Mac 用 host.docker.internal）
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
       # T-ML-024：LLM provider 切換。claude 走 owner 的 Pro/Max 訂閱額度（透過 host 上的
