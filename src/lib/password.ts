@@ -15,6 +15,11 @@ export function hashPassword(plain: string): string {
     return bcrypt.hashSync(plain, BCRYPT_COST);
 }
 
+// 非同步版：不阻塞 event loop（cost 12 的 bcrypt 約 250ms，同步版會卡住所有並發請求）
+export function hashPasswordAsync(plain: string): Promise<string> {
+    return bcrypt.hash(plain, BCRYPT_COST);
+}
+
 export interface VerifyResult {
     ok: boolean;
     needsRehash: boolean;
@@ -22,12 +27,12 @@ export interface VerifyResult {
 
 // 驗證密碼：自動偵測是 bcrypt ($2...) 還是 legacy SHA-256。
 // legacy 驗證通過 → needsRehash=true，呼叫端請用 hashPassword() 升級後寫回 DB。
-export function verifyPassword(plain: string, stored: string): VerifyResult {
+export async function verifyPassword(plain: string, stored: string): Promise<VerifyResult> {
     if (!stored) return { ok: false, needsRehash: false };
 
     if (isBcryptHash(stored)) {
         try {
-            return { ok: bcrypt.compareSync(plain, stored), needsRehash: false };
+            return { ok: await bcrypt.compare(plain, stored), needsRehash: false };
         } catch {
             return { ok: false, needsRehash: false };
         }

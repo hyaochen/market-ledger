@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { hashPassword, verifyPassword } from "./password";
+import { hashPassword, hashPasswordAsync, verifyPassword } from "./password";
 
 test("hashPassword: produces bcrypt hash", () => {
     const h = hashPassword("secret123");
@@ -12,56 +12,65 @@ test("hashPassword: produces bcrypt hash", () => {
     assert.notEqual(h, "secret123");
 });
 
-test("verifyPassword: bcrypt roundtrip, no rehash needed", () => {
+test("verifyPassword: bcrypt roundtrip, no rehash needed", async () => {
     const h = hashPassword("hunter2");
-    const r = verifyPassword("hunter2", h);
+    const r = await verifyPassword("hunter2", h);
     assert.equal(r.ok, true);
     assert.equal(r.needsRehash, false);
 });
 
-test("verifyPassword: bcrypt wrong password rejected", () => {
+test("verifyPassword: bcrypt wrong password rejected", async () => {
     const h = hashPassword("correct");
-    const r = verifyPassword("wrong", h);
+    const r = await verifyPassword("wrong", h);
     assert.equal(r.ok, false);
     assert.equal(r.needsRehash, false);
 });
 
-test("verifyPassword: legacy SHA-256 validates + needsRehash=true", () => {
+test("verifyPassword: legacy SHA-256 validates + needsRehash=true", async () => {
     const legacy = createHash("sha256").update("old-pass").digest("hex");
-    const r = verifyPassword("old-pass", legacy);
+    const r = await verifyPassword("old-pass", legacy);
     assert.equal(r.ok, true, "legacy SHA-256 should verify");
     assert.equal(r.needsRehash, true, "legacy hash must flag for upgrade");
 });
 
-test("verifyPassword: legacy SHA-256 wrong password rejected", () => {
+test("verifyPassword: legacy SHA-256 wrong password rejected", async () => {
     const legacy = createHash("sha256").update("real").digest("hex");
-    const r = verifyPassword("fake", legacy);
+    const r = await verifyPassword("fake", legacy);
     assert.equal(r.ok, false);
     assert.equal(r.needsRehash, false);
 });
 
-test("verifyPassword: empty stored hash rejects", () => {
-    const r = verifyPassword("anything", "");
+test("verifyPassword: empty stored hash rejects", async () => {
+    const r = await verifyPassword("anything", "");
     assert.equal(r.ok, false);
 });
 
-test("verifyPassword: garbage stored hash rejects cleanly", () => {
-    const r = verifyPassword("anything", "not-a-hash");
+test("verifyPassword: garbage stored hash rejects cleanly", async () => {
+    const r = await verifyPassword("anything", "not-a-hash");
     assert.equal(r.ok, false);
     assert.equal(r.needsRehash, false);
 });
 
-test("verifyPassword: stored hash wrong length SHA-256 rejects", () => {
+test("verifyPassword: stored hash wrong length SHA-256 rejects", async () => {
     // 63 chars instead of 64 — shouldn't match isSha256Hex
-    const r = verifyPassword("anything", "a".repeat(63));
+    const r = await verifyPassword("anything", "a".repeat(63));
     assert.equal(r.ok, false);
 });
 
-test("hashPassword: different salts produce different hashes for same input", () => {
+test("hashPassword: different salts produce different hashes for same input", async () => {
     const a = hashPassword("same");
     const b = hashPassword("same");
     assert.notEqual(a, b, "bcrypt should salt randomly");
     // both should still verify
-    assert.equal(verifyPassword("same", a).ok, true);
-    assert.equal(verifyPassword("same", b).ok, true);
+    assert.equal((await verifyPassword("same", a)).ok, true);
+    assert.equal((await verifyPassword("same", b)).ok, true);
+});
+
+test("verifyPassword: 回傳 Promise，且 hashPasswordAsync 產出可驗證的 bcrypt", async () => {
+    const h = await hashPasswordAsync("中文密碼-abc123");
+    assert.ok(h.startsWith("$2"));
+    const p = verifyPassword("中文密碼-abc123", h);
+    assert.ok(p instanceof Promise);
+    assert.equal((await p).ok, true);
+    assert.equal((await verifyPassword("別的密碼", h)).ok, false);
 });
