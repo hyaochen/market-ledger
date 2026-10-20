@@ -10,23 +10,75 @@ const SESSION_KEY_PREFIX = 'tg_session_';
 // 這是家用 bot，身分本來就綁在 Telegram 帳號上，7 天的安全收益遠低於它造成的損失。
 const SESSION_DAYS = 90;
 
-// 從 DB 讀取 Telegram 會話
+// 取最高角色（跟登入時同一套規則）
+export function resolveRoleCode(roleCodes: string[]): string {
+    if (roleCodes.includes('admin')) return 'admin';
+    if (roleCodes.includes('write')) return 'write';
+    return 'read';
+}
+
+type SessionUserRow = {
+    status: boolean;
+    tenantId: string | null;
+    username: string;
+    realName: string | null;
+    roles: { role: { code: string } }[];
+    tenant: { status: boolean; name: string } | null;
+} | null;
+
+// 用目前 DB 裡的使用者資料重新驗證一個既有 session（純函式，方便測試）。
+// 回傳 null = 這個 session 不能再用（停用 / 刪除 / 換租戶 / 租戶停用 / 降成唯讀）；
+// 否則回傳「角色與顯示名稱已刷新」的 session（到期日不變，維持 90 天）。
+export function revalidateSession(session: SessionData, user: SessionUserRow): SessionData | null {
+    if (!user || !user.status) return null;
+    if (!user.tenantId || user.tenantId !== session.tenantId) return null;
+    if (user.tenant && !user.tenant.status) return null;
+    const roleCode = resolveRoleCode(user.roles.map(r => r.role.code));
+    // 登入時唯讀帳號會被拒絕；被降成唯讀的既有 session 同樣不能再寫入
+    if (roleCode === 'read') return null;
+    return {
+        ...session,
+        username: user.username,
+        realName: user.realName,
+        roleCode,
+        tenantName: user.tenant?.name ?? session.tenantName,
+    };
+}
+
+// 從 DB 讀取 Telegram 會話；每次使用都重新驗證使用者（一個 query）
 export async function getSession(telegramId: number): Promise<SessionData | null> {
     try {
+        const key = `${SESSION_KEY_PREFIX}${telegramId}`;
         const config = await prisma.systemConfig.findFirst({
-            where: { key: `${SESSION_KEY_PREFIX}${telegramId}`, tenantId: null },
+            where: { key, tenantId: null },
         });
         if (!config) return null;
 
         const data: SessionData = JSON.parse(config.value);
         if (new Date(data.expires) < new Date()) {
             // 過期，刪除
-            await prisma.systemConfig.deleteMany({
-                where: { key: `${SESSION_KEY_PREFIX}${telegramId}`, tenantId: null },
-            });
+            await prisma.systemConfig.deleteMany({ where: { key, tenantId: null } });
             return null;
         }
-        return data;
+
+        const user = await prisma.user.findUnique({
+            where: { id: data.userId },
+            select: {
+                status: true, tenantId: true, username: true, realName: true,
+                roles: { select: { role: { select: { code: true } } } },
+                tenant: { select: { status: true, name: true } },
+            },
+        });
+        const fresh = revalidateSession(data, user);
+        if (!fresh) {
+            await prisma.systemConfig.deleteMany({ where: { key, tenantId: null } });
+            return null;
+        }
+        if (fresh.roleCode !== data.roleCode || fresh.username !== data.username
+            || fresh.realName !== data.realName || fresh.tenantName !== data.tenantName) {
+            await prisma.systemConfig.update({ where: { id: config.id }, data: { value: JSON.stringify(fresh) } });
+        }
+        return fresh;
     } catch {
         return null;
     }
@@ -74,8 +126,10 @@ export function parseLoginInput(text: string): { username: string; password: str
 // 登入驗證，成功回傳 SessionData，失敗回傳 null
 export async function verifyLogin(username: string, password: string): Promise<SessionData | null> {
     // 以 username 查（不再用 password 當 WHERE 條件，改由 verifyPassword 比對）
+    // orderBy：username 只在租戶內唯一，同名時要有確定的結果（最早建立者優先）
     const user = await prisma.user.findFirst({
         where: { username, status: true },
+        orderBy: { createdAt: 'asc' },
         include: {
             roles: { include: { role: true } },
             tenant: true,
@@ -85,7 +139,8 @@ export async function verifyLogin(username: string, password: string): Promise<S
     if (!user || !user.tenantId) return null;
     if (user.tenant && !user.tenant.status) return null;
 
-    const check = verifyPassword(password, user.password);
+    // verifyPassword 即將改為 async（bcrypt 不再卡 event loop）；await 對現行同步版本無害
+    const check = await verifyPassword(password, user.password);
     if (!check.ok) return null;
 
     // Lazy rehash：舊 SHA-256 通過 → 升級為 bcrypt
@@ -101,10 +156,7 @@ export async function verifyLogin(username: string, password: string): Promise<S
     }
 
     // 取最高角色
-    const roleCodes = user.roles.map(r => r.role.code);
-    let roleCode = 'read';
-    if (roleCodes.includes('admin')) roleCode = 'admin';
-    else if (roleCodes.includes('write')) roleCode = 'write';
+    const roleCode = resolveRoleCode(user.roles.map(r => r.role.code));
 
     const expires = new Date();
     expires.setDate(expires.getDate() + SESSION_DAYS);
