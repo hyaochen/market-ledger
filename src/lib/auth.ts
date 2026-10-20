@@ -61,7 +61,7 @@ export const getCurrentUser = cache(async function getCurrentUser(): Promise<Cur
 
     // 伺服器端撤銷：密碼被重設（指紋對不上；沒有指紋的舊 session 一律要求重新登入）或已登出
     if (payload.pwv !== passwordFingerprint(user.password)) return null;
-    if (payload.issuedAt < validAfter) return null;
+    if (payload.issuedAt <= validAfter) return null; // 同一毫秒簽發的也算已撤銷
 
     // 非 super admin 時，檢查租戶是否仍然啟用
     if (!user.isSuperAdmin && user.tenant && !user.tenant.status) return null;

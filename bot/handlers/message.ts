@@ -33,6 +33,9 @@ import { finalizeEntries, handleAcceptedEntry, sendUncertainPrompt } from './flo
 import type { SessionData, ChatState, ChatPhase, ParsedEntry } from '../types';
 import type { Bot } from './botTypes';
 
+// CJK 統一表意文字（U+4E00..U+9FFF）；用碼位建構，避免原始碼裡出現跳脫被工具解成真字元
+const HAS_CJK = new RegExp(`[${String.fromCharCode(0x4e00)}-${String.fromCharCode(0x9fff)}]`);
+
 // T-ML-033：純指令類文字（無需解析），訊息進來時一律 route='command'
 export const COMMAND_TEXTS = new Set(['/start', '/help', '/logout', '/menu', '/查詢', '選單', '/mute', '/today']);
 
@@ -57,7 +60,7 @@ async function handleCommand(c: MsgCtx): Promise<boolean> {
             await bot.sendMessage(chatId,
                 `你好，${session.realName || session.username}！已登入（${session.tenantName}）\n\n直接輸入記帳內容開始記錄。\n查資料就傳 /menu（按鈕選單），或 /help 看完整說明。`);
         } else {
-            await bot.sendMessage(chatId, '歡迎！請先登入。\n格式：`帳號 密碼`\n例如：`mom mom123`', { parse_mode: 'Markdown' });
+            await bot.sendMessage(chatId, '歡迎！請先登入。\n格式：`帳號 密碼`\n例如：`wang abcd1234`', { parse_mode: 'Markdown' });
             setState(chatId, { phase: 'awaiting_auth', session: null });
         }
         return true;
@@ -133,15 +136,17 @@ async function handleLogin(c: MsgCtx): Promise<void> {
         // 2026-08-30：session 過期時這則訊息原本被直接丟掉，使用者登入後必須重打
         // （log 分析：33 次重新登入造成 41 則訊息被迫重打）。改成暫存下來，
         // 登入成功後自動重播。指令不暫存（重播 /help 沒有意義）。
-        const worthReplaying = !text.startsWith('/');
+        // 只暫存含中文的訊息（記帳內容都是中文）：打錯格式的登入訊息（例如密碼裡有空格）
+        // 是純 ASCII，暫存會讓密碼落進 SystemConfig。
+        const worthReplaying = !text.startsWith('/') && HAS_CJK.test(text);
         if (worthReplaying) {
             setState(chatId, { phase: 'awaiting_auth', pendingReplayText: text });
             await bot.sendMessage(chatId,
-                '登入已過期，請先登入。\n格式：`帳號 密碼`\n例如：`mom mom123`\n\n_登入後我會自動幫你送出剛才那則，不用重打。_',
+                '登入已過期，請先登入。\n格式：`帳號 密碼`\n例如：`wang abcd1234`\n\n_登入後我會自動幫你送出剛才那則，不用重打。_',
                 { parse_mode: 'Markdown' });
         } else {
             setState(chatId, { phase: 'awaiting_auth' });
-            await bot.sendMessage(chatId, '請先登入。\n格式：`帳號 密碼`\n例如：`mom mom123`', { parse_mode: 'Markdown' });
+            await bot.sendMessage(chatId, '請先登入。\n格式：`帳號 密碼`\n例如：`wang abcd1234`', { parse_mode: 'Markdown' });
         }
         return;
     }

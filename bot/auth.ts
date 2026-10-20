@@ -104,7 +104,7 @@ export async function clearSession(telegramId: number): Promise<void> {
     });
 }
 
-// 解析登入格式：支援 "mom mom123" / "mom/mom123" / "帳號mom 密碼mom123" 等
+// 解析登入格式：支援 "wang abcd1234" / "wang/abcd1234" / "帳號wang 密碼abcd1234" 等
 export function parseLoginInput(text: string): { username: string; password: string } | null {
     const t = text.trim();
 
@@ -112,11 +112,11 @@ export function parseLoginInput(text: string): { username: string; password: str
     const zhMatch = t.match(/帳號\s*(\S+)\s+密碼\s*(\S+)/);
     if (zhMatch) return { username: zhMatch[1], password: zhMatch[2] };
 
-    // mom/mom123
+    // wang/abcd1234
     const slashMatch = t.match(/^(\S+)\/(\S+)$/);
     if (slashMatch) return { username: slashMatch[1], password: slashMatch[2] };
 
-    // mom mom123（空格分隔，只有兩個 token）
+    // wang abcd1234（空格分隔，只有兩個 token）
     const parts = t.split(/\s+/);
     if (parts.length === 2) return { username: parts[0], password: parts[1] };
 

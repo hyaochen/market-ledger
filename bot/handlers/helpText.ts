@@ -3,7 +3,7 @@
 export const HELP_TEXT = `*使用說明*
 
 *登入*：
-• \`mom mom123\`  或  \`mom/mom123\`
+• \`wang abcd1234\`  或  \`wang/abcd1234\`
 
 *進貨記錄*（可多行一次輸入）：
 • \`肝連2.6台斤218\`
