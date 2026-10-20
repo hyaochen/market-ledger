@@ -23,7 +23,7 @@ Host 端的小 HTTP service，把 `claude -p`（走 owner 的 Claude Pro/Max **�
 ### 手動前景執行（除錯用）
 
 ```powershell
-cd C:\Users\a0927\Desktop\t_web
+cd <repo root>
 npm run claude-bridge
 # 或直接：node scripts/claude-bridge/bridge.js
 ```
@@ -91,9 +91,9 @@ curl http://127.0.0.1:5055/health
 ```
 [claude-bridge] claude bin: C:\Users\...\node_modules\@anthropic-ai\claude-code\bin\claude.exe (shell=false)
 ```
-如果看到 `shell=true` 且緊接著一大段 WARNING，代表沒找到底層 `.exe`、退回了有 quoting 風險的
-`claude.cmd` 路徑（見下方「已知踩坑」），這時中文/JSON prompt 可能會被 cmd.exe 切爛，
-應該設定 `CLAUDE_BRIDGE_BIN` 環境變數指到正確的 `claude.exe`。
+T-ML-037 起：如果找不到底層 `.exe`（只剩有 quoting 風險的 `claude.cmd` + `shell:true`），bridge
+會印 FATAL 並**拒絕啟動**（exit 1），不再只是警告。這時請設定 `CLAUDE_BRIDGE_BIN` 環境變數指到
+正確的 `claude.exe`（見下方「已知踩坑」）。
 
 ## 停止
 
@@ -122,12 +122,12 @@ process 層級的 `alreadyAlertedThisProcess` flag 防重複告警（純防禦�
 `User.isSuperAdmin === true` 的那一筆，用它的 key 尾碼（= Telegram 私聊時的 chat id）當收件人。
 **沒有寫死 chat id，也沒有讀 `.env`**——完全沿用 bot 既有的登入機制。
 
-[重要] **已知落地缺口（2026-08-07 實測發現）**：目前 DB 裡 `isSuperAdmin=true` 的帳號（`chen` /
+[重要] **已知落地缺口（2026-08-07 實測發現）**：目前 DB 裡 `isSuperAdmin=true` 的帳號（超級管理員帳號，如
 `superadmin`）**從來沒有透過 Telegram 登入過這個 bot**——只有 `mom` 這個非 admin 帳號在用。
 也就是說現在告警機制程式碼正確、也真的跑過（見下方驗證記錄），但**目前沒有地方可以送**：
 `findOwnerChatId()` 會正確回傳 `null`，log 一行警告，bot 正常繼續 polling，不會壞掉，但 owner
 收不到任何 Telegram 訊息。**要讓這個機制真的能通知到人，owner 需要自己用 Telegram 傳一次
-`chen <密碼>` 或 `superadmin <密碼>` 給這支 bot 完成登入**（7 天效期，過期要再登入一次）。
+`superadmin <密碼>`（或你的 admin 帳號）給這支 bot 完成登入**（7 天效期，過期要再登入一次）。
 
 ---
 
@@ -140,9 +140,47 @@ process 層級的 `alreadyAlertedThisProcess` flag 防重複告警（純防禦�
 | `CLAUDE_BRIDGE_MAX_CONCURRENT` | `2` | 同時最多跑幾個 `claude -p` process（並發保護，見下方） |
 | `CLAUDE_BRIDGE_TIMEOUT_MS` | `25000` | 單一請求的總預算（排隊等待 + 執行時間）。刻意小於 `parser.ts` 呼叫端的 30s fetch timeout，讓 bridge 有機會先回一個乾淨的錯誤 JSON |
 | `CLAUDE_BRIDGE_BIN` | 自動偵測 | 手動指定 claude 執行檔路徑（遇到自動偵測失敗時用，見下方踩坑記錄）|
+| `CLAUDE_BRIDGE_TOKEN` | 無（**強烈建議設**）| T-ML-037：設了之後 `/chat` 必須帶 `Authorization: Bearer <token>`，見下方「認證」|
+| `CLAUDE_BRIDGE_ALLOWED_MODELS` | `sonnet,haiku,opus` | T-ML-037：請求 `model` 欄位的白名單（逗號分隔；預設模型一定允許）|
 
 [重要] **`CLAUDE_BRIDGE_BIND`（或任何形式的「讓它聽 0.0.0.0」）刻意沒有實作** —— bind 寫死在程式碼裡
 是 `127.0.0.1`，不接受環境變數覆寫。見下方「為什麼一定要 127.0.0.1」。
+
+---
+
+## 認證（T-ML-037）
+
+只綁 `127.0.0.1` 擋得住區網，擋不住「本機任何程式」和「瀏覽器裡任何網頁的跨站 POST」
+（瀏覽器能對 `http://127.0.0.1:5055` 發 `text/plain` POST，不需要 CORS 預檢，伺服器照收就會燒
+訂閱額度）。所以 bridge 現在多兩道門：
+
+1. **Origin 一律拒絕**：任何帶 `Origin` header 的請求回 403（瀏覽器發的請求一定帶；bot 的 Node
+   `fetch` 不帶）。`/health` 也擋 Origin。
+2. **Bearer token**：設了 `CLAUDE_BRIDGE_TOKEN` 之後，`POST /chat` 沒帶或帶錯
+   `Authorization: Bearer <token>` 回 401（constant-time 比對）。`GET /health` 不需 token
+   （bot 啟動健康檢查與 watchdog 用，不含敏感資訊）。
+3. `model` 欄位必須在白名單內，否則 400。
+
+### 怎麼設定 token（owner 要做的事）
+
+token 用**同一個 `.env` key** 同時給 host 的 bridge 和 bot 容器：
+
+1. 產生一把隨機 token（PowerShell）：
+   `[Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 }) -as [byte[]])`
+   （只用英數字元最保險：`-replace '[^A-Za-z0-9]',''`）
+2. 在 repo 根目錄 `.env`（與 docker compose 讀的是同一個檔）加一行：
+   `CLAUDE_BRIDGE_TOKEN=<上面那串>`
+3. **host 端**：bridge 啟動時若環境變數沒有 `CLAUDE_BRIDGE_TOKEN`，會自己從 repo 根目錄 `.env`
+   讀這一個 key（只讀這一個，不載入其他 key）。排程任務 / `run-hidden.bat` 不需要改。
+   讓新設定生效：先 `npm run claude-bridge:stop`（會連 `run-hidden.bat` 重啟迴圈一起關），再
+   `schtasks /run /tn market-ledger-claude-bridge`（或登出再登入）重新拉起。啟動 log 的 `startup` 事件會有 `authRequired:true`。
+4. **bot 端**：`docker-compose.yml` 已把 `CLAUDE_BRIDGE_TOKEN` 傳給 `market-ledger-bot`；bot 程式端要送
+   `Authorization: Bearer` header（由 bot 群組實作）。改完 `.env` 後需重建/重啟 bot 容器
+   （`docker compose up -d market-ledger-bot`）才吃到新環境變數。
+5. **順序**：bot 的 header 支援先上線，再在 `.env` 設 token（或同時）。若先讓 bridge 要求 token
+   而 bot 還沒送，bot 會收到 401 並退回 Ollama（功能不壞，只是不走 Claude）。
+
+自我檢查：`node --test scripts/claude-bridge/bridge.test.js`（也包含在 `npm run test`）。
 
 ---
 
@@ -183,8 +221,8 @@ agent 的行為（反問使用者「你要我做什麼」），而且明顯變�
 一個轉呼叫。`bridge.js` 的 `resolveClaudeBin()` 會去讀 PATH 上的 `claude.cmd`，解析出裡面真正的
 `.exe` 路徑，直接 `spawn(那個.exe, args, {shell:false})` —— 跳過 cmd.exe 整個環節，Node 對
 非 shell spawn 的 Windows 參數跳脫是正確且有測試覆蓋的行為，中文/空白/JSON 都不會被咬。
-如果自動偵測失敗（例如 claude 用別的方式安裝，PATH 上找不到 `claude.cmd`），會退回
-`claude.cmd + shell:true`（一樣有 quoting 風險）並在啟動時印警告 —— 這時應該設定
+如果自動偵測失敗（例如 claude 用別的方式安裝，PATH 上找不到 `claude.cmd`），只剩
+`claude.cmd + shell:true`（有 quoting 風險）；T-ML-037 起 bridge 此時**直接拒絕啟動**，必須設定
 `CLAUDE_BRIDGE_BIN` 手動指到正確的 `claude.exe`。
 
 ### 2. 一定要加 `--safe-mode`，否則 CLAUDE.md / auto-memory 會外洩進 bot 的解析結果
