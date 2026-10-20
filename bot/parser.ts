@@ -35,6 +35,13 @@ function getLlmProvider(): 'claude' | 'ollama' {
 function getClaudeBridgeUrl(): string {
     return process.env.CLAUDE_BRIDGE_URL ?? 'http://host.docker.internal:5055';
 }
+// 共用密鑰：bridge 端設了 CLAUDE_BRIDGE_TOKEN 就要求 Authorization: Bearer；bot 端有設才帶。
+function getBridgeHeaders(): Record<string, string> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const token = process.env.CLAUDE_BRIDGE_TOKEN;
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    return headers;
+}
 function getClaudeBridgeTimeoutMs(): number {
     const v = Number(process.env.CLAUDE_BRIDGE_TIMEOUT_MS);
     return Number.isFinite(v) && v > 0 ? v : 30000; // 建議 30 秒，需 > bridge 端自己的 budget（預設 25s）
@@ -211,7 +218,7 @@ async function callClaudeBridge(systemPrompt: string, userText: string): Promise
     try {
         response = await fetch(`${bridgeUrl}/chat`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getBridgeHeaders(),
             body: JSON.stringify({ system: systemPrompt, user: userText }),
             signal: AbortSignal.timeout(timeoutMs),
         });
@@ -319,7 +326,7 @@ async function fetchBridgeContent(systemPrompt: string, userText: string): Promi
     try {
         response = await fetch(`${bridgeUrl}/chat`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getBridgeHeaders(),
             body: JSON.stringify({ system: systemPrompt, user: userText }),
             signal: AbortSignal.timeout(timeoutMs),
         });
