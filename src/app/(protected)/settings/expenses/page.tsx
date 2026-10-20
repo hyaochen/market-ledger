@@ -4,8 +4,10 @@ import { Receipt } from "lucide-react";
 import ExpenseForm from "./ExpenseForm";
 import ExpenseActions from "./ExpenseActions";
 import { getTenantId } from "@/lib/auth";
+import { requireRole } from "@/lib/auth";
 
 export default async function ExpensesPage() {
+    await requireRole("admin");
     const tenantId = await getTenantId();
     const expenseTypes = await prisma.dictionary.findMany({
         where: { tenantId, category: "expense_type" },

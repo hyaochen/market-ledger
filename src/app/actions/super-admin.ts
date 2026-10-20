@@ -2,8 +2,9 @@
 
 import prisma from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
-import { hashPassword } from '@/lib/password';
+import { hashPasswordAsync } from '@/lib/password';
 import { getCurrentUser } from '@/lib/auth';
+import { usernameTaken, validateNewPassword, validateUsername } from '@/lib/username';
 
 async function requireSuperAdmin() {
     const user = await getCurrentUser();
@@ -60,9 +61,10 @@ export async function createTenant(formData: FormData) {
             return { success: false, error: '請填寫所有必填欄位' };
         }
 
-        if (adminPassword.length < 4) {
-            return { success: false, error: '密碼至少需要 4 個字元' };
-        }
+        const pwErr = validateNewPassword(adminPassword);
+        if (pwErr) return { success: false, error: pwErr };
+        const nameErr = validateUsername(adminUsername);
+        if (nameErr) return { success: false, error: nameErr };
 
         // Check code uniqueness
         const existing = await prisma.tenant.findUnique({ where: { code } });
@@ -70,7 +72,12 @@ export async function createTenant(formData: FormData) {
             return { success: false, error: '企業代碼已存在' };
         }
 
-        const hashedPassword = hashPassword(adminPassword);
+        // 登入是全域查帳號，管理者帳號名稱不可與任何租戶重複（不分大小寫）
+        if (await usernameTaken(adminUsername)) {
+            return { success: false, error: '此帳號名稱已被使用' };
+        }
+
+        const hashedPassword = await hashPasswordAsync(adminPassword);
 
         // Find the admin role
         const adminRole = await prisma.role.findFirst({ where: { code: 'admin' } });
@@ -159,12 +166,15 @@ export async function resetUserPassword(userId: string, newPassword: string) {
         const auth = await requireSuperAdmin();
         if (!auth.ok) return { success: false, error: auth.error };
 
-        if (!newPassword || newPassword.length < 4) {
-            return { success: false, error: '密碼至少需要 4 個字元' };
-        }
+        const pwErr = validateNewPassword(newPassword);
+        if (pwErr) return { success: false, error: pwErr };
 
-        const hashedPassword = hashPassword(newPassword);
+        const target = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
+        if (!target) return { success: false, error: '使用者不存在' };
 
+        const hashedPassword = await hashPasswordAsync(newPassword);
+
+        // 密碼 hash 一變，session 內的密碼指紋就對不上，該使用者所有舊 session 立即失效
         await prisma.user.update({
             where: { id: userId },
             data: { password: hashedPassword },

@@ -5,8 +5,10 @@ import { Scale } from "lucide-react";
 import UnitForm from "./UnitForm";
 import { parseUnitMeta } from "@/lib/units";
 import { toggleDictionaryStatus } from "@/app/actions/catalog";
+import { requireRole } from "@/lib/auth";
 
 export default async function UnitsPage() {
+    await requireRole("admin");
     const { getTenantId } = await import("@/lib/auth");
     const tenantId = await getTenantId();
     const unitRows = await prisma.dictionary.findMany({

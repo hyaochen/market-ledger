@@ -66,7 +66,7 @@ export default function UserForm({ departments, roles }: { departments: any[], r
 
                     <div className="space-y-2">
                         <Label>密碼</Label>
-                        <Input name="password" type="password" required />
+                        <Input name="password" type="password" required minLength={8} placeholder="至少 8 個字元" />
                     </div>
 
                     <div className="space-y-2">

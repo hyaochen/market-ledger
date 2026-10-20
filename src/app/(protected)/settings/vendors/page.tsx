@@ -6,8 +6,10 @@ import VendorForm from "./VendorForm";
 import { toggleVendorStatus } from "@/app/actions/catalog";
 import VendorActions from "./VendorActions";
 import { getTenantId } from "@/lib/auth";
+import { requireRole } from "@/lib/auth";
 
 export default async function VendorsPage() {
+    await requireRole("admin");
     const tenantId = await getTenantId();
     const vendors = await prisma.vendor.findMany({
         where: { tenantId },

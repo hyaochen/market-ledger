@@ -5,10 +5,12 @@ import { Button } from "@/components/ui/button";
 import { MapPin, Store, Trash2 } from "lucide-react";
 import RegionForm from "./RegionForm";
 import LocationForm from "./LocationForm";
+import { requireRole } from "@/lib/auth";
 
 export const dynamic = 'force-dynamic';
 
 export default async function RegionPage() {
+    await requireRole("admin");
     const regions = await getRegions();
 
     return (

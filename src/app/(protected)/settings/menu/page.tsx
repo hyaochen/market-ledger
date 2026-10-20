@@ -2,9 +2,11 @@ import { getPermissions } from "@/app/actions/admin";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { LayoutGrid } from "lucide-react";
 import MenuForm from "./MenuForm";
+import { requireRole, getCurrentUser } from "@/lib/auth";
 
 export default async function MenuPage() {
-    const permissions = await getPermissions();
+    await requireRole("admin");
+    const [permissions, viewer] = await Promise.all([getPermissions(), getCurrentUser()]);
 
     return (
         <div className="space-y-6 pb-20">
@@ -13,7 +15,8 @@ export default async function MenuPage() {
                     <h1 className="text-2xl font-bold tracking-tight">功能表管理</h1>
                     <p className="text-muted-foreground text-sm">配置系統菜單與權限標識</p>
                 </div>
-                <MenuForm permissions={permissions} />
+                {/* 功能表是全域資料，只有 super admin 可新增 */}
+                {viewer?.isSuperAdmin && <MenuForm permissions={permissions} />}
             </header>
 
             <Card>
