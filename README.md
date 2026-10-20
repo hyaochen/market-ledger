@@ -417,7 +417,7 @@ docker compose logs -f market-ledger
 
 web 與 bot 容器都以非 root 的 `node` 使用者執行。entrypoint（`docker-start.sh` / `docker-bot-start.sh`）
 先以 root 啟動，只為了把 named volume `market-ledger-data` 內既有（root 擁有）的檔案 chown 給 `node`，
-然後用 `setpriv` 降權後 re-exec。bot 容器只拿到它需要的環境變數，不再載入整個 `.env`。
+然後用 `setpriv` 降權後 re-exec。bot 容器用 `env_file: .env` 讀設定（不用 compose 的裸 key 直傳：那種寫法會優先採用部署 shell 裡的同名變數）。
 
 ### Cloudflare tunnel
 
