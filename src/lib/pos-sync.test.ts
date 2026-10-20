@@ -1,7 +1,7 @@
 // Unit tests for the sync-trigger summary (pure functions). Run: npm test
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { describeLastRun, describePush, describeRoute, summarizeSync, type SyncStatus } from "./pos-sync";
+import { describeLastRun, describePush, describeRoute, summarizeSync, syncCooldownRemainingSeconds, type SyncStatus } from "./pos-sync";
 
 const okStatus: SyncStatus = {
     ok: true,
@@ -69,4 +69,12 @@ test("describeRoute and describeLastRun", () => {
     assert.match(describeLastRun(null).text, /未連上/);
     assert.match(describeLastRun({ running: true }).text, /進行中/);
     assert.match(describeLastRun({ last_run: { status: "unreachable", finished_at: "x" } }).text, /連不到 POS/);
+});
+
+test("syncCooldownRemainingSeconds: 第一次不用等，冷卻內回剩餘秒數，過了就放行", () => {
+    assert.equal(syncCooldownRemainingSeconds(1_000_000, null), 0);
+    assert.equal(syncCooldownRemainingSeconds(1_000_000, 1_000_000 - 10_000), 50);
+    assert.equal(syncCooldownRemainingSeconds(1_000_000, 1_000_000 - 59_500), 1);
+    assert.equal(syncCooldownRemainingSeconds(1_000_000, 1_000_000 - 60_000), 0);
+    assert.equal(syncCooldownRemainingSeconds(1_000_000, 1_000_000 - 90_000), 0);
 });

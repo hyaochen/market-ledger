@@ -15,6 +15,7 @@ export const runtime = "nodejs";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { PosImportError, applyOps, parseOps } from "@/lib/yjc-db";
+import { readBodyCapped } from "@/lib/read-body-capped";
 
 const MAX_BODY_BYTES = 64 * 1024 * 1024;
 
@@ -44,9 +45,15 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: false, error: "payload too large" }, { status: 413 });
     }
 
+    // Content-Length 可以被省略或說謊（chunked），所以邊讀邊數 byte，超過上限就中止
+    const read = await readBodyCapped(req, MAX_BODY_BYTES);
+    if (read === "too_large") {
+        return NextResponse.json({ ok: false, error: "payload too large" }, { status: 413 });
+    }
+
     let body: unknown;
     try {
-        body = await req.json();
+        body = JSON.parse(read);
     } catch {
         return NextResponse.json({ ok: false, error: "invalid json" }, { status: 400 });
     }
