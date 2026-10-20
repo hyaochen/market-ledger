@@ -6,6 +6,7 @@ import type { Prisma } from '@prisma/client';
 import { convertToKg, parseUnitMeta, type UnitDef, UNITS } from '@/lib/units';
 import { parseLocalDate } from '@/lib/date';
 import { ensureRole, getTenantId } from '@/lib/auth';
+import { checkTenantRefs } from '@/lib/tenant-guard';
 
 export interface CreateEntryState {
     success?: boolean;
@@ -52,6 +53,9 @@ export async function createEntry(_prevState: CreateEntryState | null, formData:
             if (!itemId || !Number.isFinite(weight) || !Number.isFinite(price) || weight <= 0 || price < 0) {
                 return { success: false, message: '請填寫完整進貨資訊' };
             }
+
+            const refError = await checkTenantRefs(tenantId, [['item', itemId], ['vendor', vendorId === 'none' ? null : vendorId]]);
+            if (refError) return { success: false, message: refError };
 
             const unitRow = await prisma.dictionary.findFirst({
                 where: { category: 'unit', value: unit, tenantId },
@@ -201,6 +205,9 @@ export async function updateEntry(id: string, formData: FormData) {
             if (!itemId || !Number.isFinite(weight) || !Number.isFinite(price) || weight <= 0 || price < 0) {
                 return { success: false, message: '請填寫完整進貨資訊' };
             }
+
+            const refError = await checkTenantRefs(tenantId, [['item', itemId], ['vendor', vendorId === 'none' ? null : vendorId]]);
+            if (refError) return { success: false, message: refError };
 
             const unitRow = await prisma.dictionary.findFirst({
                 where: { category: 'unit', value: unit, tenantId },
