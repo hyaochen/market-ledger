@@ -371,8 +371,11 @@ test("login：錯誤密碼寫 FAIL log（含 IP、不含密碼）；同 IP 第 6
     // 即使此時帶對密碼，同 IP 同帳號仍被鎖
     assert.equal((await authActions.login(form({ username: "writeA", password: "brand-new-pass-1" }))).success, false);
 
-    const logs = await prisma.operationLog.findMany({ where: { action: "LOGIN", status: "FAIL", target: "writeA" } });
-    assert.ok(logs.length >= 6, "失敗與鎖定都要記錄");
+    const fails = await prisma.operationLog.findMany({ where: { action: "LOGIN", status: "FAIL", target: "writeA" } });
+    assert.ok(fails.length >= 5, "每次密碼錯誤都要記錄");
+    const lockedLogs = await prisma.operationLog.findMany({ where: { action: "LOGIN", status: "LOCKED", ip: "203.0.113.7" } });
+    assert.ok(lockedLogs.length >= 1, "鎖定要用 LOCKED 狀態記錄");
+    const logs = [...fails, ...lockedLogs];
     assert.ok(logs.every((l: any) => l.ip === "203.0.113.7"));
     assert.ok(logs.every((l: any) => !(l.details ?? "").includes(secret)));
 
@@ -399,5 +402,7 @@ test("login：不存在的帳號回應與密碼錯誤相同，且也有記錄", 
     assert.equal(r.success, false);
     assert.equal(r.message, "帳號或密碼錯誤");
     assert.ok(Date.now() - t0 >= 500, "失敗回應有最小延遲");
-    assert.equal(await prisma.operationLog.count({ where: { action: "LOGIN", status: "FAIL", target: "ghost-user", ip: "192.0.2.55" } }), 1);
+    assert.equal(await prisma.operationLog.count({ where: { action: "LOGIN", status: "FAIL", target: "(unknown user)", ip: "192.0.2.55" } }), 1);
+    // 不存在的帳號不記原字串（可能是打錯欄位的密碼）
+    assert.equal(await prisma.operationLog.count({ where: { target: "ghost-user" } }), 0);
 });

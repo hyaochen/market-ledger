@@ -179,6 +179,10 @@ export async function resetUserPassword(userId: string, newPassword: string) {
             where: { id: userId },
             data: { password: hashedPassword },
         });
+        // Telegram bot 的 session 不帶密碼指紋，要另外刪掉（存成 JSON，見 bot/auth.ts saveSession）
+        await prisma.systemConfig.deleteMany({
+            where: { key: { startsWith: 'tg_session_' }, value: { contains: `"userId":"${userId}"` } },
+        });
 
         revalidatePath('/super-admin');
         return { success: true };

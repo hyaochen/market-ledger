@@ -12,7 +12,7 @@
 // 搬出來，全程不需要 host process 碰 live dev.db 或它所在的 bind mount。
 //
 // 執行方式（host 端 backup-db.ts 會自動呼叫，不需要手動跑）：
-//   docker exec market-ledger-bot npx tsx scripts/backup-snapshot.ts /tmp/<檔名>.db
+//   docker exec -u node market-ledger-bot npx tsx scripts/backup-snapshot.ts /tmp/<檔名>.db
 
 import fs from "node:fs";
 import prisma from "../src/lib/prisma";

@@ -1,5 +1,5 @@
 // 自動化測試腳本 - 測試 Parser + Matcher 邏輯
-// 使用方式：docker exec market-ledger-bot npx tsx bot/test-runner.ts
+// 使用方式：docker exec -u node market-ledger-bot npx tsx bot/test-runner.ts
 // 特性：不寫入 DB（只讀），直接呼叫 Ollama + Matcher，印出 Pass/Fail 報告
 
 import { parseEntries } from './parser';

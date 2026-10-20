@@ -3,12 +3,18 @@
 // 同時以「Telegram user id」與「嘗試的帳號名稱」兩把 key 計數：
 //   - 只鎖 telegram id：攻擊者開多個 Telegram 帳號就繞過去
 //   - 只鎖帳號名稱：攻擊者可故意鎖死 mom（repo 是 public，帳號名稱人盡皆知），所以
-//     兩把 key 任一被鎖都擋，但鎖定只影響「新登入」，已存在的 session 不受影響
+//     帳號名稱的門檻放寬（MAX_USERNAME_FAILURES），telegram id 維持嚴格；兩把 key 任一
+//     被鎖都擋，但鎖定只影響「新登入」，已存在的 session 不受影響
 // 計數存在 SystemConfig（跟 session / 對話狀態同一張表），bot 重啟不會歸零。
 
+import { createHash } from 'node:crypto';
 import prisma from '../src/lib/prisma';
 
 export const MAX_FAILURES = 5;
+// 帳號名稱跨所有 Telegram 帳號累計：門檻放寬，避免陌生人傳 5 次就把媽媽鎖在門外
+export const MAX_USERNAME_FAILURES = 20;
+// 超過這麼久沒更新的節流紀錄在 bot 啟動時清掉，避免攻擊者灌的帳號名稱一直留在表裡
+export const STALE_MS = 2 * 24 * 60 * 60 * 1000;
 export const WINDOW_MS = 15 * 60 * 1000;
 export const BASE_LOCK_MS = 15 * 60 * 1000;
 export const MAX_LOCK_MS = 24 * 60 * 60 * 1000;
@@ -35,8 +41,21 @@ export function telegramKey(telegramId: number | string): string {
     return `${KEY_PREFIX}tg_${telegramId}`;
 }
 export function usernameKey(username: string): string {
-    // 小寫 + 截斷：攻擊者可塞任意字串，限制 key 長度避免灌爆表
-    return `${KEY_PREFIX}u_${username.trim().toLowerCase().slice(0, 64)}`;
+    // 存雜湊不存原字串：帳密順序打反時「帳號」其實是密碼，不能明文落進 SystemConfig；
+    // 固定長度也讓攻擊者塞的任意字串不會把 key 撐大
+    const digest = createHash('sha256').update(username.trim().toLowerCase()).digest('hex').slice(0, 32);
+    return `${KEY_PREFIX}u_${digest}`;
+}
+
+// 同一個 key 的讀-改-寫在本 process 內排隊，避免同時多筆失敗互相覆蓋（計數變少、永遠不鎖）
+const keyLocks = new Map<string, Promise<unknown>>();
+function withKeyLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const prev = keyLocks.get(key) ?? Promise.resolve();
+    const run = prev.then(fn, fn);
+    const tail = run.catch(() => {});
+    keyLocks.set(key, tail);
+    void tail.then(() => { if (keyLocks.get(key) === tail) keyLocks.delete(key); });
+    return run;
 }
 
 export const prismaThrottleStore: ThrottleStore = {
@@ -55,6 +74,14 @@ export const prismaThrottleStore: ThrottleStore = {
         await prisma.systemConfig.deleteMany({ where: { key, tenantId: null } });
     },
 };
+
+/** bot 啟動時呼叫：清掉兩天沒動過的節流紀錄（鎖定上限 24 小時，兩天前的紀錄必然已失效）。 */
+export async function pruneStaleThrottleRows(now: number = Date.now()): Promise<number> {
+    const res = await prisma.systemConfig.deleteMany({
+        where: { key: { startsWith: KEY_PREFIX }, tenantId: null, updatedAt: { lt: new Date(now - STALE_MS) } },
+    });
+    return res.count;
+}
 
 export type LockStatus = { locked: false } | { locked: true; retryAfterMs: number };
 
@@ -94,21 +121,27 @@ export class LoginThrottle {
     async recordFailure(keys: ThrottleKeys): Promise<LockStatus> {
         const t = this.now();
         let worst = 0;
-        for (const key of [telegramKey(keys.telegramId), usernameKey(keys.username)]) {
+        const limits: Array<[string, number]> = [
+            [telegramKey(keys.telegramId), MAX_FAILURES],
+            [usernameKey(keys.username), MAX_USERNAME_FAILURES],
+        ];
+        for (const [key, max] of limits) {
             try {
-                const rec = (await this.store.get(key)) ?? { failures: [], lockUntil: 0, lockCount: 0, lastLockAt: 0 };
-                if (rec.lastLockAt && t - rec.lastLockAt > LOCK_MEMORY_MS) rec.lockCount = 0;
-                rec.failures = rec.failures.filter(ts => t - ts < WINDOW_MS);
-                rec.failures.push(t);
-                if (rec.failures.length >= MAX_FAILURES) {
-                    const dur = lockDuration(rec.lockCount);
-                    rec.lockUntil = t + dur;
-                    rec.lockCount += 1;
-                    rec.lastLockAt = t;
-                    rec.failures = [];
-                    worst = Math.max(worst, dur);
-                }
-                await this.store.set(key, rec);
+                await withKeyLock(key, async () => {
+                    const rec = (await this.store.get(key)) ?? { failures: [], lockUntil: 0, lockCount: 0, lastLockAt: 0 };
+                    if (rec.lastLockAt && t - rec.lastLockAt > LOCK_MEMORY_MS) rec.lockCount = 0;
+                    rec.failures = rec.failures.filter(ts => t - ts < WINDOW_MS);
+                    rec.failures.push(t);
+                    if (rec.failures.length >= max) {
+                        const dur = lockDuration(rec.lockCount);
+                        rec.lockUntil = t + dur;
+                        rec.lockCount += 1;
+                        rec.lastLockAt = t;
+                        rec.failures = [];
+                        worst = Math.max(worst, dur);
+                    }
+                    await this.store.set(key, rec);
+                });
             } catch { /* fail-open */ }
         }
         return worst > 0 ? { locked: true, retryAfterMs: worst } : { locked: false };

@@ -1,7 +1,7 @@
 // 會話管理 + 登入驗證
 
 import prisma from '../src/lib/prisma';
-import { hashPassword, verifyPassword } from '../src/lib/password';
+import { hashPasswordAsync, verifyPassword } from '../src/lib/password';
 import type { SessionData } from './types';
 
 const SESSION_KEY_PREFIX = 'tg_session_';
@@ -139,7 +139,6 @@ export async function verifyLogin(username: string, password: string): Promise<S
     if (!user || !user.tenantId) return null;
     if (user.tenant && !user.tenant.status) return null;
 
-    // verifyPassword 即將改為 async（bcrypt 不再卡 event loop）；await 對現行同步版本無害
     const check = await verifyPassword(password, user.password);
     if (!check.ok) return null;
 
@@ -148,7 +147,7 @@ export async function verifyLogin(username: string, password: string): Promise<S
         try {
             await prisma.user.update({
                 where: { id: user.id },
-                data: { password: hashPassword(password) },
+                data: { password: await hashPasswordAsync(password) },
             });
         } catch (err) {
             console.error('[bot/auth] lazy rehash failed:', err);

@@ -284,8 +284,11 @@ async function ensureDefaultRoles() {
     const have = new Set(existing.map((r) => r.code));
     for (const role of DEFAULT_ROLES) {
         if (have.has(role.code)) continue;
-        await prisma.role.create({
-            data: { name: role.name, code: role.code, description: role.description, status: true },
+        // upsert + 空 update：兩個請求同時第一次讀角色時不會因 unique 衝突而丟錯，也不覆寫既有角色
+        await prisma.role.upsert({
+            where: { code: role.code },
+            update: {},
+            create: { name: role.name, code: role.code, description: role.description, status: true },
         });
     }
 }

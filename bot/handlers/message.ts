@@ -121,10 +121,25 @@ async function handleCommand(c: MsgCtx): Promise<boolean> {
 }
 
 // ── 登入（沒有 session 時）──────────────────────────────────────
-async function handleLogin(c: MsgCtx): Promise<void> {
+// 同一個 Telegram 帳號的登入嘗試排隊處理：節流是「先查、驗證完才記失敗」，
+// 不排隊的話一次灌一批訊息會全部通過檢查（check-then-act race）。
+const loginQueues = new Map<number, Promise<void>>();
+function handleLogin(c: MsgCtx): Promise<void> {
+    const prev = loginQueues.get(c.telegramId) ?? Promise.resolve();
+    const run = prev.then(() => handleLoginOnce(c), () => handleLoginOnce(c));
+    const tail = run.catch(() => {});
+    loginQueues.set(c.telegramId, tail);
+    void tail.then(() => { if (loginQueues.get(c.telegramId) === tail) loginQueues.delete(c.telegramId); });
+    return run;
+}
+
+async function handleLoginOnce(c: MsgCtx): Promise<void> {
     const { bot, msg, chatId, telegramId, text } = c;
 
-    const credentials = parseLoginInput(text);
+    // 含中文的兩段式訊息（例如「大腸 500」）是記帳內容不是帳密：帳號密碼都是英數。
+    // 不當成登入嘗試，才不會被刪訊息、算進鎖定次數，並能在登入後自動重播。
+    const parsed = parseLoginInput(text);
+    const credentials = parsed && !HAS_CJK.test(parsed.username + parsed.password) ? parsed : null;
     // T-ML-033：route='auth'。絕對不存原始文字——這裡的 text 可能是「帳號 密碼」
     // 明文，只存使用者名稱（沒解析出來就存一個固定佔位字串），密碼永遠不落地。
     void logIncoming({

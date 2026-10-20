@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import {
     LoginThrottle, ThrottleStore, ThrottleRecord, formatWait,
-    MAX_FAILURES, WINDOW_MS, BASE_LOCK_MS,
+    MAX_FAILURES, MAX_USERNAME_FAILURES, WINDOW_MS, BASE_LOCK_MS,
 } from "./loginThrottle";
 import { rotateIfNeeded, redactLoginText } from "./botLog";
 import { revalidateSession, resolveRoleCode } from "./auth";
@@ -74,17 +74,25 @@ test("重複鎖定指數退避：15 -> 30 -> 60 分鐘", async () => {
     assert.deepEqual(waits, [BASE_LOCK_MS, BASE_LOCK_MS * 2, BASE_LOCK_MS * 4]);
 });
 
-test("換 Telegram 帳號但同一個帳號名稱，仍被鎖（反之亦然）", async () => {
+test("單一 Telegram 帳號打錯 5 次只鎖它自己，不會把真正的帳號主人鎖在門外", async () => {
     const { th } = setup();
     for (let i = 0; i < MAX_FAILURES; i++) await th.recordFailure({ telegramId: 1, username: "mom" });
-    assert.equal((await th.check({ telegramId: 2, username: "mom" })).locked, true);
     assert.equal((await th.check({ telegramId: 1, username: "other" })).locked, true);
+    assert.equal((await th.check({ telegramId: 2, username: "mom" })).locked, false);
+});
+
+test("帳號名稱跨多個 Telegram 帳號累計到門檻才鎖", async () => {
+    const { th } = setup();
+    for (let i = 0; i < MAX_USERNAME_FAILURES - 1; i++) await th.recordFailure({ telegramId: 100 + i, username: "mom" });
+    assert.equal((await th.check({ telegramId: 2, username: "mom" })).locked, false);
+    await th.recordFailure({ telegramId: 999, username: "mom" });
+    assert.equal((await th.check({ telegramId: 2, username: "mom" })).locked, true);
     assert.equal((await th.check({ telegramId: 3, username: "other" })).locked, false);
 });
 
 test("帳號名稱大小寫不影響計數", async () => {
     const { th } = setup();
-    for (let i = 0; i < MAX_FAILURES; i++) await th.recordFailure({ telegramId: i + 10, username: i % 2 ? "MOM" : "mom" });
+    for (let i = 0; i < MAX_USERNAME_FAILURES; i++) await th.recordFailure({ telegramId: i + 10, username: i % 2 ? "MOM" : "mom" });
     assert.equal((await th.check({ telegramId: 99, username: "Mom" })).locked, true);
 });
 

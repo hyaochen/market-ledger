@@ -119,7 +119,7 @@
       # Only this tunnel's credentials json is mounted. Before T-ML-037 the whole
       # ~/.cloudflared dir was mounted, which also exposed the account-wide cert.pem
       # (can create/delete tunnels and DNS routes) to the container.
-      - ${CLOUDFLARED_DIR:-}/${TUNNEL_ID:-}.json:/etc/cloudflared/${TUNNEL_ID:-}.json:ro
+      - ${CLOUDFLARED_DIR:?set CLOUDFLARED_DIR in .env}/${TUNNEL_ID:?set TUNNEL_ID in .env}.json:/etc/cloudflared/${TUNNEL_ID}.json:ro
 
 # Tunnel ingress is generated from .env so the tunnel UUID and public hostnames are not tracked
 # in the (public) repo. Required .env keys: TUNNEL_ID, CLOUDFLARED_DIR, TUNNEL_HOSTNAME_MAIN,
@@ -127,12 +127,12 @@
 configs:
   cloudflared_config:
     content: |
-      tunnel: ${TUNNEL_ID:-}
-      credentials-file: /etc/cloudflared/${TUNNEL_ID:-}.json
+      tunnel: ${TUNNEL_ID:?set TUNNEL_ID in .env}
+      credentials-file: /etc/cloudflared/${TUNNEL_ID}.json
       ingress:
-        - hostname: ${TUNNEL_HOSTNAME_CASH:-}
+        - hostname: ${TUNNEL_HOSTNAME_CASH:?set TUNNEL_HOSTNAME_CASH in .env}
           service: http://market-ledger:3000
-        - hostname: ${TUNNEL_HOSTNAME_MAIN:-}
+        - hostname: ${TUNNEL_HOSTNAME_MAIN:?set TUNNEL_HOSTNAME_MAIN in .env}
           service: http://market-ledger:3000
         - service: http_status:404
 

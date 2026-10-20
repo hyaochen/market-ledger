@@ -237,11 +237,13 @@ test('offline simulation: login throttle, session revalidation, query, entry flo
     assert.ok(lockTexts[lockTexts.length - 1].includes('請等'), 'sixth attempt gets a plain wait message');
     assert.ok(lockTexts.some((x) => x.includes('已暫時鎖定')), 'fifth failure announces the lockout');
 
-    // 3. 另一個 telegram 帳號對同一帳號名稱 -> 也被鎖；對正確密碼同樣擋
-    out = await say('other telegram id, locked username, correct password', 5002, `sim-victim ${PASSWORDS.victim}`);
-    assert.ok(texts(out).some((x) => x.includes('請等')), 'username lock applies across telegram ids');
-    const victimSession = await prisma.systemConfig.findFirst({ where: { key: 'tg_session_5002' } });
-    assert.equal(victimSession, null, 'locked login must not create a session');
+    // 3. 攻擊者的 telegram 帳號被鎖，不影響帳號主人用自己的 telegram 帳號登入
+    //    （帳號名稱門檻 MAX_USERNAME_FAILURES 比單一 telegram 帳號寬）
+    out = await say('owner telegram id, same username, correct password', 5002, `sim-victim ${PASSWORDS.victim}`);
+    assert.ok(texts(out).some((x) => x.includes('登入成功')), 'one attacker id cannot lock the real owner out');
+    // 清掉這個 session，讓後面的步驟維持原本的起始狀態
+    await prisma.systemConfig.deleteMany({ where: { key: 'tg_session_5002' } });
+    await say('owner logs out of sim state', 5002, '/logout');
 
     // 4. 正確登入 -> session + 訊息被刪
     bot.failDelete = true;
@@ -375,8 +377,9 @@ test('offline simulation: login throttle, session revalidation, query, entry flo
     for (const s of secrets) assert.ok(!dbLogs.includes(s), 'BotMessageLog must not contain a password');
     const states = JSON.stringify(await prisma.systemConfig.findMany({ where: { key: { startsWith: 'tg_state_' } } }));
     for (const s of secrets) assert.ok(!states.includes(s), 'persisted chat state must not contain a password');
-    const throttleRows = await prisma.systemConfig.count({ where: { key: { startsWith: 'login_throttle_' } } });
-    assert.ok(throttleRows >= 2, 'throttle counters persisted in SystemConfig');
+    // 攻擊者那個 telegram 帳號的計數留著；帳號名稱的計數在主人登入成功時清掉
+    const attackerRow = await prisma.systemConfig.count({ where: { key: 'login_throttle_tg_5001' } });
+    assert.equal(attackerRow, 1, 'throttle counters persisted in SystemConfig');
 
     t.diagnostic(`transcript lines: ${transcript.length}`);
 

@@ -53,10 +53,11 @@ async function logLoginEvent(args: {
                 userId: args.userId ?? null,
                 action: "LOGIN",
                 module: "SYSTEM",
-                target: args.username.slice(0, MAX_USERNAME_LEN),
+                // 不存在的帳號不記原字串：使用者常把密碼打進帳號欄
+                target: args.userId ? args.username.slice(0, MAX_USERNAME_LEN) : "(unknown user)",
                 details: JSON.stringify({ reason: args.reason }),
                 ip: args.ip,
-                status: "FAIL",
+                status: args.status,
                 tenantId: args.tenantId ?? null,
             },
         });

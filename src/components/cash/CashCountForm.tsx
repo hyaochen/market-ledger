@@ -60,6 +60,14 @@ function emptyDenomState(denoms: readonly number[]): Record<string, string> {
     return Object.fromEntries(denoms.map((d) => [String(d), ""])) as Record<string, string>;
 }
 
+function restoreDenoms(denoms: readonly number[], saved: Record<string, string> | undefined): Record<string, string> {
+    const out = emptyDenomState(denoms);
+    for (const k of Object.keys(out)) {
+        if (saved && typeof saved[k] === "string") out[k] = saved[k];
+    }
+    return out;
+}
+
 function emptyExpenses(): ExpenseRow[] {
     return Array.from({ length: INITIAL_EXPENSE_ROWS }, () => ({ item: "", note: "", amount: "" }));
 }
@@ -105,9 +113,10 @@ export default function CashCountForm({ today, attendantId, attendantName, super
     useEffect(() => {
         const draft = readDraft(key);
         if (draft && draftHasContent(draft)) {
-            setCashBox({ ...emptyDenomState(CASH_BOX_DENOMS), ...draft.cashBox });
-            setReserve({ ...emptyDenomState(RESERVE_DENOMS), ...draft.reserve });
-            setSales({ ...emptyDenomState(SALES_DENOMS), ...draft.sales });
+            // 只還原目前有的面額：舊草稿可能帶著已移除的面額，送出時會被伺服器拒絕
+            setCashBox(restoreDenoms(CASH_BOX_DENOMS, draft.cashBox));
+            setReserve(restoreDenoms(RESERVE_DENOMS, draft.reserve));
+            setSales(restoreDenoms(SALES_DENOMS, draft.sales));
             if (Array.isArray(draft.expenses) && draft.expenses.length > 0) {
                 setExpenses(draft.expenses);
             }

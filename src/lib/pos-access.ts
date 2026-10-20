@@ -19,11 +19,17 @@ export function posTenantAllowlist(raw: string | undefined = process.env.POS_TEN
         .filter((c) => c.length > 0);
 }
 
+let warnedEmpty = false;
+
 export function canViewPos(
     user: { tenantId: string | null; tenantCode: string | null } | null,
     allowlist: string[] = posTenantAllowlist(),
 ): boolean {
     if (!user || !user.tenantId || !user.tenantCode) return false;
+    if (allowlist.length === 0 && !warnedEmpty) {
+        warnedEmpty = true;
+        console.warn("[pos] POS_TENANT_CODES is not set: POS pages are closed to every tenant.");
+    }
     return allowlist.includes(user.tenantCode.trim().toLowerCase());
 }
 

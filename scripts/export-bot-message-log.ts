@@ -1,7 +1,7 @@
 // T-ML-033 — 匯出 BotMessageLog 成 JSONL，供離線評測解析器與 Jev 意圖閘門用。
 //
 // 用法（容器內執行——DB 只在 named volume 裡，host 端連不到）：
-//   docker exec market-ledger-bot npx tsx scripts/export-bot-message-log.ts --since 2026-09-20 > out.jsonl
+//   docker exec -u node market-ledger-bot npx tsx scripts/export-bot-message-log.ts --since 2026-09-20 > out.jsonl
 //
 // 參數：
 //   --since YYYY-MM-DD   必填，只匯出這天 00:00（含，本機時區）之後建立的紀錄

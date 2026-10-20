@@ -9,8 +9,9 @@ backups
 docker-data
 tunnel.log
 logs
-*.db
-*.db*
+**/*.db
+**/*.db-*
+**/*.sqlite*
 # one-off backfill scripts and their internal data (real tenant data; never bake into an image)
 scripts/data
 scripts/t-ml-027-backfill.ts

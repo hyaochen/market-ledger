@@ -142,7 +142,7 @@ flowchart TD
     C --> D[帳號 密碼]
     D --> E{bcrypt 密碼驗證}
     E --失敗--> C
-    E --成功--> F[登入成功\n7天有效 存入 SystemConfig]
+    E --成功--> F[登入成功\n90天有效 存入 SystemConfig]
     F --> G
 
     B --是--> G{訊息類型}
@@ -471,7 +471,13 @@ Telegram bot 透過 host 上的 `scripts/claude-bridge`（只綁 127.0.0.1）呼
 | `OLLAMA_MODEL` | 使用的 LLM 模型 | `qwen2.5:7b` |
 | `SUPER_ADMIN_PASSWORD` / `ADMIN_PASSWORD` / `CASH_ADMIN_PASSWORD` / `CASH_EMPLOYEE_PASSWORD` | 首次 seed 的帳號密碼（正式環境必填，無預設值）| 隨機字串 |
 | `CLAUDE_BRIDGE_TOKEN` | host 端 claude-bridge 與 bot 共用的 Bearer token | 隨機字串 |
-| `TUNNEL_ID` / `TUNNEL_HOSTNAME_MAIN` / `TUNNEL_HOSTNAME_CASH` | Cloudflare 隧道設定（見上方）| — |
+| `TUNNEL_ID` / `TUNNEL_HOSTNAME_MAIN` / `TUNNEL_HOSTNAME_CASH` | Cloudflare 隧道設定（見上方；缺任何一個 `docker compose` 會直接報錯）| — |
+| `POS_TENANT_CODES` | 可以看 POS 資料的租戶代碼（逗號分隔）。**沒設＝沒有人看得到 POS 頁** | `default` |
+| `CASH_SUPERVISOR_NAMES` | 現金清點的覆核人姓名，`租戶代碼=姓名`，多個用逗號分隔。沒設時改用該租戶最早的 admin 姓名 | `default=王小明` |
+| `POS_SYNC_TOKEN` | （選填）網站呼叫 host 端同步服務用的 token；沒設時沿用 `POS_IMPORT_TOKEN` | 隨機字串 |
+| `POS_IMPORT_TOKEN` | POS 匯入 API 的 Bearer token | 隨機字串 |
+
+完整範本見 `.env.example`（只有 key 與佔位值，沒有真實內容）。
 
 > **注意**：請將 `.env` 加入 `.gitignore`，切勿將 Token 或 Secret 提交至版本控制。
 

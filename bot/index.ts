@@ -6,6 +6,7 @@ import { runStartupBridgeHealthCheck } from './bridgeHealth';
 import { startHeartbeat } from './heartbeat';
 import { handleMessage } from './handlers/message';
 import { handleCallback } from './handlers/callback';
+import { pruneStaleThrottleRows } from './loginThrottle';
 
 const TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 if (!TOKEN) {
@@ -38,6 +39,11 @@ console.log('Bot 啟動中...');
     await runStartupBridgeHealthCheck({
         sendAlert: async (chatId, text) => { await bot.sendMessage(chatId, text); },
     });
+    // 清掉過期的登入節流紀錄；失敗不影響啟動
+    await pruneStaleThrottleRows().then(
+        (n) => { if (n) console.log(`[bot] pruned ${n} stale login throttle rows`); },
+        (err) => console.error('[bot] throttle prune failed:', err),
+    );
     await bot.startPolling();
     console.log('Bot polling started');
 })().catch((err) => {

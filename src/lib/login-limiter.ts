@@ -1,11 +1,14 @@
 // 登入失敗次數限制（in-memory，單一 Node process）。
-// 兩層：
+// 三層：
 //   1. IP + 帳號：連續 5 次就鎖 15 分鐘 —— 擋同一來源猜同一帳號
-//   2. 帳號本身：寬鬆得多（50 次），避免攻擊者換 IP 猜密碼，但不會因為一個 IP 就把老闆鎖在門外
+//   2. IP 本身：30 次 —— 擋同一來源輪流猜所有帳號（password spraying），也限制每次失敗
+//      都要跑一次 bcrypt 的 CPU 消耗
+//   3. 帳號本身：寬鬆得多（50 次），避免攻擊者換 IP 猜密碼，但不會因為一個 IP 就把老闆鎖在門外
 // 「先預約再驗證」：reserveLoginAttempt 在任何 await 之前同步把次數 +1，
 // 所以同時湧入的一波請求不可能都看到 count = 0。登入成功才 releaseLoginAttempt 還回去。
 
 export const MAX_ATTEMPTS_PER_IP_USER = 5;
+export const MAX_ATTEMPTS_PER_IP = 30;
 export const MAX_ATTEMPTS_PER_USER = 50;
 export const LOCKOUT_MS = 15 * 60 * 1000;
 export const MAX_TRACKED_KEYS = 10000;
@@ -13,11 +16,12 @@ export const MAX_TRACKED_KEYS = 10000;
 type Entry = { count: number; last: number; lockLogged: boolean };
 
 const ipUserMap = new Map<string, Entry>();
+const ipMap = new Map<string, Entry>();
 const userMap = new Map<string, Entry>();
 
 export type ReserveResult =
     | { allowed: true }
-    | { allowed: false; retryMinutes: number; scope: "ip-user" | "user"; shouldLog: boolean };
+    | { allowed: false; retryMinutes: number; scope: "ip-user" | "ip" | "user"; shouldLog: boolean };
 
 function normUser(username: string) {
     return username.trim().toLowerCase().slice(0, 64);
@@ -58,20 +62,24 @@ export function reserveLoginAttempt(ip: string, username: string, now: number = 
     const ipUserKey = `${ip}|${u}`;
     const a = fresh(ipUserMap, ipUserKey, now);
     const b = fresh(userMap, u, now);
+    const c = fresh(ipMap, ip, now);
 
     const lockedA = !!a && a.count >= MAX_ATTEMPTS_PER_IP_USER;
+    const lockedC = !!c && c.count >= MAX_ATTEMPTS_PER_IP;
     const lockedB = !!b && b.count >= MAX_ATTEMPTS_PER_USER;
-    if (lockedA || lockedB) {
-        const e = (lockedA ? a : b)!;
+    if (lockedA || lockedC || lockedB) {
+        const e = (lockedA ? a : lockedC ? c : b)!;
         const retryMinutes = Math.max(1, Math.ceil((LOCKOUT_MS - (now - e.last)) / 60000));
         const shouldLog = !e.lockLogged; // 每個鎖定視窗只記一筆，避免攻擊時把 OperationLog 灌爆
         e.lockLogged = true;
-        return { allowed: false, retryMinutes, scope: lockedA ? "ip-user" : "user", shouldLog };
+        return { allowed: false, retryMinutes, scope: lockedA ? "ip-user" : lockedC ? "ip" : "user", shouldLog };
     }
 
     prune(ipUserMap, now);
+    prune(ipMap, now);
     prune(userMap, now);
     bump(ipUserMap, ipUserKey, now);
+    bump(ipMap, ip, now);
     bump(userMap, u, now);
     return { allowed: true };
 }
@@ -80,20 +88,23 @@ export function reserveLoginAttempt(ip: string, username: string, now: number = 
 export function releaseLoginAttempt(ip: string, username: string) {
     const u = normUser(username);
     ipUserMap.delete(`${ip}|${u}`);
-    const b = userMap.get(u);
-    if (b) {
-        b.count = Math.max(0, b.count - 1);
-        if (b.count === 0) userMap.delete(u);
+    for (const [map, key] of [[userMap, u], [ipMap, ip]] as const) {
+        const e = map.get(key);
+        if (e) {
+            e.count = Math.max(0, e.count - 1);
+            if (e.count === 0) map.delete(key);
+        }
     }
 }
 
 export function _resetLoginLimiterForTest() {
     ipUserMap.clear();
+    ipMap.clear();
     userMap.clear();
 }
 
 export function _limiterSizesForTest() {
-    return { ipUser: ipUserMap.size, user: userMap.size };
+    return { ipUser: ipUserMap.size, ip: ipMap.size, user: userMap.size };
 }
 
 /** 從 request headers 取得 client IP：Cloudflare 的 cf-connecting-ip → x-forwarded-for 第一段 → unknown。 */

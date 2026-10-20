@@ -3,6 +3,7 @@ import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import {
     LOCKOUT_MS,
+    MAX_ATTEMPTS_PER_IP,
     MAX_ATTEMPTS_PER_IP_USER,
     MAX_ATTEMPTS_PER_USER,
     MAX_TRACKED_KEYS,
@@ -94,4 +95,16 @@ test("clientIpFromHeaders：cf-connecting-ip 優先，其次 x-forwarded-for 第
     assert.equal(clientIpFromHeaders(h({ "cf-connecting-ip": "1.2.3.4", "x-forwarded-for": "9.9.9.9" })), "1.2.3.4");
     assert.equal(clientIpFromHeaders(h({ "x-forwarded-for": "7.7.7.7, 8.8.8.8" })), "7.7.7.7");
     assert.equal(clientIpFromHeaders(h({})), "unknown");
+});
+
+test("同一個 IP 輪流猜不同帳號（password spraying）：累計到 MAX_ATTEMPTS_PER_IP 就擋，換 IP 不受影響", () => {
+    _resetLoginLimiterForTest();
+    const t0 = 1_000_000;
+    for (let i = 0; i < MAX_ATTEMPTS_PER_IP; i++) {
+        assert.equal(reserveLoginAttempt("203.0.113.9", `帳號${i}`, t0).allowed, true);
+    }
+    const r = reserveLoginAttempt("203.0.113.9", "另一個帳號", t0);
+    assert.equal(r.allowed, false);
+    if (!r.allowed) assert.equal(r.scope, "ip");
+    assert.equal(reserveLoginAttempt("198.51.100.1", "另一個帳號", t0).allowed, true);
 });
