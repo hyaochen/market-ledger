@@ -84,6 +84,15 @@ export function verifySession(token?: string | null): SessionPayload | null {
 }
 
 /**
+ * 依用途衍生的 HMAC（與 session 簽章分開用途：固定前綴字串＋用途名稱）。
+ * 例：已知裝置 cookie 用 "known-device-v1"，拿它的簽章去冒充 session 驗不過。
+ */
+export function signForPurpose(purpose: string, data: string): Buffer {
+    const derivedKey = createHmac("sha256", getSecret()).update(`purpose:${purpose}`).digest();
+    return createHmac("sha256", derivedKey).update(data).digest();
+}
+
+/**
  * 密碼指紋：由「目前存在 DB 的密碼 hash」衍生的短 HMAC。
  * 簽進 session 後，密碼被重設（hash 改變）時舊 session 立刻失效；不用改 schema。
  * 不含密碼明文，也無法反推 hash（有 secret 參與）。
