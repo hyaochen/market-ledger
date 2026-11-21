@@ -12,17 +12,18 @@ import type TelegramBot from 'node-telegram-bot-api';
 import prisma from '../../src/lib/prisma';
 import {
     getSession, saveSession, clearSession,
-    parseLoginInput, verifyLogin,
+    parseLoginInput, verifyLogin, usernameExists,
 } from '../auth';
 import { loadDbContext, enrichEntry } from '../matcher';
 import {
-    getState, setState, setSession, resetToIdle,
+    getState, setState, setStateIfChanged, setSession, resetToIdle,
     acceptCurrent, rejectCurrent, addToConfirmed, exitNewItemFlow,
 } from '../state';
 import { queryByDate, classifyQueryIntent } from './query';
 import { isQueryLike } from './nlQuery';
 import { logIncoming } from '../messageLog';
-import { logLine, redactLoginText } from '../botLog';
+import { logLine, redactLoginText, usernameTag } from '../botLog';
+import { unauthMessageLimiter, UNAUTH_RATE_TEXT } from '../rateLimit';
 import { loginThrottle, formatWait } from '../loginThrottle';
 import { HELP_TEXT } from './helpText';
 import { INTENT_CLARIFY_KEYBOARD, UNKNOWN_ITEM_KEYBOARD } from './keyboards';
@@ -61,7 +62,7 @@ async function handleCommand(c: MsgCtx): Promise<boolean> {
                 `你好，${session.realName || session.username}！已登入（${session.tenantName}）\n\n直接輸入記帳內容開始記錄。\n查資料就傳 /menu（按鈕選單），或 /help 看完整說明。`);
         } else {
             await bot.sendMessage(chatId, '歡迎！請先登入。\n格式：`帳號 密碼`\n例如：`wang abcd1234`', { parse_mode: 'Markdown' });
-            setState(chatId, { phase: 'awaiting_auth', session: null });
+            setStateIfChanged(chatId, { phase: 'awaiting_auth', session: null });
         }
         return true;
     }
@@ -136,15 +137,20 @@ function handleLogin(c: MsgCtx): Promise<void> {
 async function handleLoginOnce(c: MsgCtx): Promise<void> {
     const { bot, msg, chatId, telegramId, text } = c;
 
-    // 含中文的兩段式訊息（例如「大腸 500」）是記帳內容不是帳密：帳號密碼都是英數。
+    // 含中文的兩段式訊息（例如「大腸 500」）預設是記帳內容不是帳密：帳號密碼多半是英數。
     // 不當成登入嘗試，才不會被刪訊息、算進鎖定次數，並能在登入後自動重播。
+    // 例外：第一段剛好是資料庫裡真實存在的帳號名稱（帳號或密碼含中文的人）就當成憑證，
+    // 不然整串（含密碼）會被暫存進 SystemConfig 並在登入後回顯進聊天。
+    // 查詢失敗（DB 錯誤）usernameExists 回 false，行為等同沒有這道例外。
     const parsed = parseLoginInput(text);
-    const credentials = parsed && !HAS_CJK.test(parsed.username + parsed.password) ? parsed : null;
-    // T-ML-033：route='auth'。絕對不存原始文字——這裡的 text 可能是「帳號 密碼」
-    // 明文，只存使用者名稱（沒解析出來就存一個固定佔位字串），密碼永遠不落地。
+    const credentials = parsed && (!HAS_CJK.test(parsed.username + parsed.password) || await usernameExists(parsed.username))
+        ? parsed : null;
+    // T-ML-033：route='auth'。絕對不存原始文字——這裡的 text 可能是「帳號 密碼」明文
+    // （帳密順序打反時，被當成帳號的那段其實是密碼），所以連帳號名稱也只存雜湊標記，
+    // 沒解析出來就存一個固定佔位字串，密碼永遠不落地。
     void logIncoming({
         chatId, messageId: msg.message_id, telegramUserId: telegramId,
-        text: credentials ? `${credentials.username} [password redacted]` : '[unrecognized login format]',
+        text: credentials ? `${usernameTag(credentials.username)} [password redacted]` : '[unrecognized login format]',
         route: 'auth',
     });
     if (!credentials) {
@@ -155,12 +161,12 @@ async function handleLoginOnce(c: MsgCtx): Promise<void> {
         // 是純 ASCII，暫存會讓密碼落進 SystemConfig。
         const worthReplaying = !text.startsWith('/') && HAS_CJK.test(text);
         if (worthReplaying) {
-            setState(chatId, { phase: 'awaiting_auth', pendingReplayText: text });
+            setStateIfChanged(chatId, { phase: 'awaiting_auth', pendingReplayText: text });
             await bot.sendMessage(chatId,
                 '登入已過期，請先登入。\n格式：`帳號 密碼`\n例如：`wang abcd1234`\n\n_登入後我會自動幫你送出剛才那則，不用重打。_',
                 { parse_mode: 'Markdown' });
         } else {
-            setState(chatId, { phase: 'awaiting_auth' });
+            setStateIfChanged(chatId, { phase: 'awaiting_auth' });
             await bot.sendMessage(chatId, '請先登入。\n格式：`帳號 密碼`\n例如：`wang abcd1234`', { parse_mode: 'Markdown' });
         }
         return;
@@ -175,7 +181,7 @@ async function handleLoginOnce(c: MsgCtx): Promise<void> {
     const lock = await loginThrottle.check(throttleKeys);
     if (lock.locked) {
         const deleted = await deleteLoginMessage();
-        logLine('AUTH', chatId, `locked user=${credentials.username} wait=${formatWait(lock.retryAfterMs)}`);
+        logLine('AUTH', chatId, `locked user=${usernameTag(credentials.username)} wait=${formatWait(lock.retryAfterMs)}`);
         await bot.sendMessage(chatId,
             `登入嘗試太多次，請等 ${formatWait(lock.retryAfterMs)} 後再試。${deleted ? '\n（你剛才傳的訊息已刪除。）' : ''}`);
         return;
@@ -190,7 +196,7 @@ async function handleLoginOnce(c: MsgCtx): Promise<void> {
 
     if (!newSession) {
         const after = await loginThrottle.recordFailure(throttleKeys);
-        logLine('AUTH', chatId, `failed user=${credentials.username}${after.locked ? ' (now locked)' : ''}`);
+        logLine('AUTH', chatId, `failed user=${usernameTag(credentials.username)}${after.locked ? ' (now locked)' : ''}`);
         if (after.locked) {
             await bot.sendMessage(chatId,
                 `帳號或密碼錯誤次數太多，已暫時鎖定，請等 ${formatWait(after.retryAfterMs)} 後再試。${deletedNote}`);
@@ -200,9 +206,9 @@ async function handleLoginOnce(c: MsgCtx): Promise<void> {
         return;
     }
 
-    // 密碼正確：清掉失敗計數（唯讀帳號也算密碼正確，不算暴力破解）
-    await loginThrottle.recordSuccess(throttleKeys);
-
+    // 唯讀帳號密碼正確：不算失敗，但也不能清任何計數。唯讀帳號的帳密是公開的，
+    // 如果在這裡 recordSuccess，攻擊者每失敗 4 次就「成功」一次清掉自己的計數，
+    // 單一 Telegram 帳號就能把別人的帳號名稱打到鎖定。
     if (newSession.roleCode === 'read') {
         await bot.sendMessage(chatId, `此帳號為唯讀權限，無法新增記錄。${deletedNote}`);
         return;
@@ -210,6 +216,8 @@ async function handleLoginOnce(c: MsgCtx): Promise<void> {
 
     await saveSession(telegramId, newSession);
     setSession(chatId, newSession);
+    // 真的建立了 session 才清失敗計數，並把這個 telegram id 記成該帳號的已知裝置
+    await loginThrottle.recordSuccess(throttleKeys);
 
     const replayText = getState(chatId).pendingReplayText;
     setState(chatId, { phase: 'idle', pendingReplayText: null });
@@ -227,6 +235,22 @@ async function handleLoginOnce(c: MsgCtx): Promise<void> {
         (bot as unknown as NodeJS.EventEmitter).emit('message', { ...msg, text: replayText });
     }
     return;
+}
+
+// ── 已登入的人又傳了「帳號 密碼」（想換帳號）──────────────────────
+// 不走登入流程、也不能進解析與 LLM：訊息刪掉，log 與 BotMessageLog 只留雜湊標記。
+async function handleCredentialsWhileLoggedIn(c: MsgCtx, session: SessionData, username: string): Promise<void> {
+    const { bot, msg, chatId, telegramId } = c;
+    void logIncoming({
+        chatId, messageId: msg.message_id, telegramUserId: telegramId, tenantId: session.tenantId,
+        text: `${usernameTag(username)} [password redacted]`, route: 'auth',
+    });
+    let deleted = false;
+    try { await bot.deleteMessage(chatId, msg.message_id); deleted = true; } catch { /* 刪不掉就提醒自己刪 */ }
+    const note = deleted
+        ? '\n（為了安全，你剛才傳的訊息已自動刪除。）'
+        : '\n（請自行刪除剛才含密碼的那則訊息。）';
+    await bot.sendMessage(chatId, `你已經登入了。要換帳號請先傳 /logout。${note}`);
 }
 
 // ── 對話狀態機：各 phase 的文字回覆 ─────────────────────────────
@@ -495,27 +519,49 @@ export async function handleMessage(bot: Bot, msg: TelegramBot.Message): Promise
 
     if (!telegramId || !text) return;
 
-    // 安全：還不知道有沒有 session 之前，只有已知的純指令文字能原文落地。
-    // 其他文字可能是「帳號 密碼」明文，等 session 檢查之後再決定怎麼記（見下方）。
     const who = msg.from?.username ?? telegramId;
-    if (COMMAND_TEXTS.has(text)) {
-        logLine('IN', chatId, `[${who}] ${text.slice(0, 120)}`);
-    }
-
-    // T-ML-033：指令類文字一律 route='command'（fire-and-forget，不影響後續分派）
-    if (COMMAND_TEXTS.has(text)) {
-        void logIncoming({ chatId, messageId: msg.message_id, telegramUserId: telegramId, text, route: 'command' });
-    }
-
     const c: MsgCtx = { bot, msg, chatId, telegramId, text, who };
 
     try {
+        // ── 取得或驗證 session ──
+        const session = await getSession(telegramId);
+
+        // 沒有 session 的人（任何 Telegram 使用者都能私訊這個 bot）：頻率限制放在所有 DB 寫入
+        // （BotMessageLog、對話狀態、節流計數）與密碼驗證之前；超過直接丟棄，每個視窗只回一次提示。
+        // 指令對未登入者也算進同一個限制。有 session 的使用者不受影響。
+        if (!session) {
+            const decision = unauthMessageLimiter.tryConsume(String(telegramId));
+            if (!decision.allowed) {
+                if (decision.notify) {
+                    try { await bot.sendMessage(chatId, UNAUTH_RATE_TEXT); } catch { /* ignore */ }
+                }
+                return;
+            }
+        }
+
+        // 安全：還不知道有沒有 session 之前，只有已知的純指令文字能原文落地。
+        // 其他文字可能是「帳號 密碼」明文，等 session 檢查之後再決定怎麼記（見下方）。
+        if (COMMAND_TEXTS.has(text)) {
+            logLine('IN', chatId, `[${who}] ${text.slice(0, 120)}`);
+            // T-ML-033：指令類文字一律 route='command'（fire-and-forget，不影響後續分派）
+            void logIncoming({ chatId, messageId: msg.message_id, telegramUserId: telegramId, text, route: 'command' });
+        }
+
         // 指令處理
         if (await handleCommand(c)) return;
 
-        // ── 取得或驗證 session ──
         const state = getState(chatId);
-        const session = await getSession(telegramId);
+
+        // 已登入的人傳來符合登入格式、且第一段是真實帳號名稱的訊息：當成憑證處理
+        // （不分大小寫；不存在的帳號名稱照原本流程當記帳內容，例如「1234 500」不會被誤擋）
+        if (session) {
+            const parsed = parseLoginInput(text);
+            if (parsed && await usernameExists(parsed.username)) {
+                logLine('IN', chatId, `[${who}] ${redactLoginText(text)}`);
+                await handleCredentialsWhileLoggedIn(c, session, parsed.username);
+                return;
+            }
+        }
 
         // 有 session 才能原文記 log；沒 session 的文字走登入路徑，永遠只記遮蔽後的版本
         if (!COMMAND_TEXTS.has(text)) {

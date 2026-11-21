@@ -97,6 +97,19 @@ export function setState(chatId: number, update: Partial<ChatState>): void {
     persistAsync(chatId, next);
 }
 
+/**
+ * 只有欄位值真的改變時才更新並持久化（用 === 比對，物件/陣列一律視為有變）。
+ * 給「沒有 session 的人」的登入提示路徑用：同一個人連傳幾則不合格式的訊息時，
+ * 狀態早就是 awaiting_auth，不需要每則都再寫一次共用的 SQLite。
+ */
+export function setStateIfChanged(chatId: number, update: Partial<ChatState>): boolean {
+    const current = getState(chatId) as unknown as Record<string, unknown>;
+    const changed = Object.entries(update).some(([k, v]) => current[k] !== v);
+    if (!changed) return false;
+    setState(chatId, update);
+    return true;
+}
+
 export function setSession(chatId: number, session: SessionData | null): void {
     setState(chatId, { session });
 }

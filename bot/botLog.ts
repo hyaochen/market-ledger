@@ -5,6 +5,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { createHash } from 'crypto';
 import { parseLoginInput } from './auth';
 
 export const LOG_MAX_BYTES = 5 * 1024 * 1024;
@@ -47,8 +48,15 @@ export function logLine(tag: string, chatId: number | string, msg: string): void
     console.log(line.trimEnd());
 }
 
-// 登入路徑專用：永遠不回傳密碼。解析不出登入格式就給固定佔位字串。
+// 登入路徑的「帳號名稱」標記：log 與 BotMessageLog 一律不寫帳號名稱原文。
+// 帳密順序打反時被當成帳號的那段其實是密碼，所以連帳號名稱也只留雜湊：
+// `u#` + 小寫帳號名稱 sha256 的前 8 個十六進位字元（同一個帳號永遠同一個標記，方便對帳）。
+export function usernameTag(username: string): string {
+    return `u#${createHash('sha256').update(username.trim().toLowerCase()).digest('hex').slice(0, 8)}`;
+}
+
+// 登入路徑專用：永遠不回傳密碼與帳號名稱原文。解析不出登入格式就給固定佔位字串。
 export function redactLoginText(text: string): string {
     const credentials = parseLoginInput(text);
-    return credentials ? `${credentials.username} [password redacted]` : '[unrecognized login format]';
+    return credentials ? `${usernameTag(credentials.username)} [password redacted]` : '[unrecognized login format]';
 }
