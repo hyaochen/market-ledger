@@ -12,7 +12,16 @@ import {
     RESERVE_TARGET_TOTAL,
     SALES_DENOMS,
 } from "@/lib/cash-constants";
-import { dedupeChecklist, parseDenomMap, parseSaneCashDate } from "@/lib/cash-validate";
+import {
+    checkCashTotalLimits,
+    checkExpenseLimits,
+    checkTotalSalesPositive,
+    dedupeChecklist,
+    parseDenomMap,
+    parseSaneCashDate,
+    validateSignatureDataUrl,
+} from "@/lib/cash-validate";
+import { persistCashCount, type CashTx } from "@/lib/cash-submit";
 import { getCashSupervisorName } from "@/lib/cash-supervisor";
 import { previewFixedExpenses, applyFixedExpenses, stallForLocation, realEntryDb } from "@/lib/fixedExpenseAutofill";
 import { syncCashExpensesToEntry } from "@/lib/cashExpenseSync";
@@ -26,7 +35,7 @@ const denomMapSchema = z.record(z.string(), z.number());
 const expenseRowSchema = z.object({
     item: z.string().trim().max(120),
     note: z.string().trim().max(200).optional().default(""),
-    amount: z.number().finite().nonnegative().max(10_000_000, "支出金額過大"),
+    amount: z.number().finite().nonnegative().max(10_000_000, "支出金額過大"), // 合理上限由 checkExpenseLimits 檢查（訊息較清楚）
 });
 
 const submitCashCountSchema = z.object({
@@ -34,12 +43,12 @@ const submitCashCountSchema = z.object({
     cashBox: denomMapSchema,
     reserve: denomMapSchema,
     sales: denomMapSchema,
-    expenses: z.array(expenseRowSchema).max(100),
+    expenses: z.array(expenseRowSchema).max(200), // 列數上限 EXPENSE_ROWS_MAX 由 checkExpenseLimits 檢查
     checklistDone: z.array(z.object({
         id: z.string().min(1).max(64),
         done: z.boolean(),
     })).max(200),
-    signatureDataUrl: z.string().max(1_500_000, "簽名檔案過大").regex(/^data:image\/(png|jpeg|jpg);base64,/, "簽名格式錯誤"),
+    signatureDataUrl: z.string(), // 長度與內容由 validateSignatureDataUrl 檢查
     note: z.string().max(1000).optional().default(""),
 });
 
@@ -80,6 +89,11 @@ export async function submitCashCount(input: SubmitCashCountInput) {
             return { success: false, error: "日期格式錯誤或超出允許範圍，請重新整理頁面。" };
         }
 
+        const sigCheck = validateSignatureDataUrl(data.signatureDataUrl);
+        if (!sigCheck.ok) return { success: false, error: sigCheck.error };
+        const expenseLimitError = checkExpenseLimits(data.expenses);
+        if (expenseLimitError) return { success: false, error: expenseLimitError };
+
         const cashBoxParsed = parseDenomMap(data.cashBox, CASH_BOX_DENOMS, "錢盒");
         if (!cashBoxParsed.ok) return { success: false, error: cashBoxParsed.error };
         const reserveParsed = parseDenomMap(data.reserve, RESERVE_DENOMS, "備用金");
@@ -101,97 +115,34 @@ export async function submitCashCount(input: SubmitCashCountInput) {
             }
         }
 
+        const totalLimitError = checkCashTotalLimits({ cashBoxTotal, reserveTotal, salesTotal });
+        if (totalLimitError) return { success: false, error: totalLimitError };
+
         const supervisorName = await getCashSupervisorName(user.tenantId);
         const expensesClean = filterExpenses(data.expenses);
         const expensesTotal = sumExpenses(expensesClean);
         const totalSales = salesTotal + expensesTotal;
+        const positiveError = checkTotalSalesPositive(totalSales);
+        if (positiveError) return { success: false, error: positiveError };
 
-        const result = await prisma.$transaction(async (tx) => {
-            // 1. 同日同 location 已存在 CashCount？ → 更新；否則新增
-            const existingCount = await tx.cashCount.findFirst({
-                where: { date, locationId: user.locationId!, tenantId: user.tenantId },
-                select: { id: true, revenueId: true },
-            });
-
-            // 2. 同日同 location 已存在 Revenue？
-            const existingRevenue = await tx.revenue.findFirst({
-                where: { date, locationId: user.locationId!, tenantId: user.tenantId },
-            });
-
-            // 3. upsert Revenue（用 totalSales 寫入 / 修正）
-            let revenue;
-            if (existingRevenue) {
-                revenue = await tx.revenue.update({
-                    where: { id: existingRevenue.id },
-                    data: {
-                        amount: totalSales,
-                        isDayOff: false,
-                        note: (existingRevenue.note ? existingRevenue.note + " | " : "") + `cash 清點修正 (${user.username})`,
-                    },
-                });
-            } else {
-                revenue = await tx.revenue.create({
-                    data: {
-                        date,
-                        locationId: user.locationId!,
-                        tenantId: user.tenantId,
-                        amount: totalSales,
-                        isDayOff: false,
-                        note: `來自 cash 清點 (${user.username})`,
-                    },
-                });
-            }
-
-            // 4. upsert CashCount
-            const cashCountData = {
-                date,
-                tenantId: user.tenantId,
+        const result = await prisma.$transaction(async (tx) =>
+            persistCashCount(tx as unknown as CashTx, {
+                user: { id: user.id, username: user.username, tenantId: user.tenantId },
                 locationId: user.locationId!,
-                attendantId: user.id,
+                date,
+                dateStr: data.date,
                 supervisorName,
-                cashBoxJson: JSON.stringify(cashBoxParsed.map),
-                cashBoxTotal,
-                reserveJson: JSON.stringify(reserveParsed.map),
-                reserveTotal,
-                salesJson: JSON.stringify(salesParsed.map),
-                salesTotal,
-                expensesJson: JSON.stringify(expensesClean),
+                cashBox: cashBoxParsed,
+                reserve: reserveParsed,
+                sales: salesParsed,
+                expenses: expensesClean,
                 expensesTotal,
                 totalSales,
                 signatureDataUrl: data.signatureDataUrl,
-                supervisorSignDataUrl: data.signatureDataUrl, // auto-sync per spec
-                handoverTime: new Date(),
-                revenueId: revenue.id,
-                note: data.note || null,
-            };
-
-            let cashCount;
-            if (existingCount) {
-                cashCount = await tx.cashCount.update({
-                    where: { id: existingCount.id },
-                    data: cashCountData,
-                });
-                // 重置 checklist done — 先刪後建（簡單最穩）
-                await tx.cashCountChecklistDone.deleteMany({
-                    where: { cashCountId: existingCount.id },
-                });
-            } else {
-                cashCount = await tx.cashCount.create({ data: cashCountData });
-            }
-
-            // 5. checklist done rows（只插 done=true 的；done=false 不插，前端可推算）
-            for (const c of checklistDone) {
-                await tx.cashCountChecklistDone.create({
-                    data: {
-                        cashCountId: cashCount.id,
-                        checklistItemId: c.id,
-                        done: c.done,
-                    },
-                });
-            }
-
-            return { cashCountId: cashCount.id, revenueId: revenue.id };
-        });
+                note: data.note,
+                checklistDone,
+            })
+        );
 
         // T-ML-027 範圍 C + A（cash 清點入口）：
         // C 先跑 —— 把清點表「當天現金支出明細」實際填的每一筆（清潔費/洗攤/大腸/
@@ -204,7 +155,7 @@ export async function submitCashCount(input: SubmitCashCountInput) {
         const stall = await stallForLocation(user.tenantId, user.locationId!);
         if (stall) {
             try {
-                await syncCashExpensesToEntry(realEntryDb, user.tenantId, date, stall, user.id, expensesClean);
+                await syncCashExpensesToEntry(realEntryDb, user.tenantId, date, stall, user.id, expensesClean, "CASH_COUNT");
             } catch (syncError) {
                 console.error("submitCashCount: cash expense sync (C) failed (non-fatal):", syncError);
             }
@@ -215,7 +166,7 @@ export async function submitCashCount(input: SubmitCashCountInput) {
                         .filter((it) => !it.alreadyExists)
                         .map((it) => ({ expenseType: it.expenseType, expenseLabel: it.expenseLabel, amount: it.amount }));
                     if (toApply.length > 0) {
-                        await applyFixedExpenses(realEntryDb, user.tenantId, date, stall, user.id, toApply);
+                        await applyFixedExpenses(realEntryDb, user.tenantId, date, stall, user.id, toApply, "CASH_COUNT_AUTOFILL");
                     }
                 }
             } catch (autofillError) {
@@ -239,6 +190,30 @@ export async function submitCashCount(input: SubmitCashCountInput) {
 
 // ---------- Queries ----------
 
+// 列表型查詢明確列出欄位，排除 signatureDataUrl / supervisorSignDataUrl（Prisma 5.22 不用 omit）。
+const CASH_COUNT_LIST_SELECT = {
+    id: true,
+    date: true,
+    tenantId: true,
+    locationId: true,
+    attendantId: true,
+    supervisorName: true,
+    cashBoxJson: true,
+    cashBoxTotal: true,
+    reserveJson: true,
+    reserveTotal: true,
+    salesJson: true,
+    salesTotal: true,
+    expensesJson: true,
+    expensesTotal: true,
+    totalSales: true,
+    handoverTime: true,
+    revenueId: true,
+    note: true,
+    createdAt: true,
+    updatedAt: true,
+} as const;
+
 // T-ML-034：where 條件抽到 src/lib/cash-queries.ts（有單元測試鎖住既有行為），
 // 新增可選參數 locationId（管理者的攤位篩選）；沒帶時行為與以前完全相同。
 export async function listCashCounts(filters?: CashCountFilters) {
@@ -247,7 +222,8 @@ export async function listCashCounts(filters?: CashCountFilters) {
     return prisma.cashCount.findMany({
         where,
         orderBy: { date: "desc" },
-        include: { location: true, attendant: { select: { username: true, realName: true } } },
+        // 列表不載入簽名（base64 很大）；詳情頁 getCashCountById 才帶
+        select: { ...CASH_COUNT_LIST_SELECT, location: true, attendant: { select: { username: true, realName: true } } },
         take: 200,
     });
 }
@@ -332,7 +308,12 @@ export async function listCashAlerts(): Promise<CashAlert[]> {
         where: { tenantId: user.tenantId },
         orderBy: { date: "desc" },
         take: 90,
-        include: {
+        // 異常清單只需要金額與檢查清單，不載入簽名
+        select: {
+            id: true,
+            date: true,
+            cashBoxTotal: true,
+            reserveTotal: true,
             location: { select: { name: true } },
             checklistDones: { include: { item: true } },
         },
