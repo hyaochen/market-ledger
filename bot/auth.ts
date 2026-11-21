@@ -123,6 +123,36 @@ export function parseLoginInput(text: string): { username: string; password: str
     return null;
 }
 
+const EXPLICIT_LOGIN_FORM = /帳號\s*\S+\s+密碼\s*\S+/;
+const CJK_CHAR = new RegExp(`[${String.fromCharCode(0x4e00)}-${String.fromCharCode(0x9fff)}]`);
+const DIGITS_ONLY = /^\d+$/;
+const NUMBER_OR_DATE_LIKE = /^[\d./:,-]+$/;
+
+/** 帳號名稱是不是純數字（例如員工帳號「1」「2」）。純數字帳號和數量、日期長得一樣，要另外判斷。 */
+export function isNumericUsername(username: string): boolean {
+    return DIGITS_ONLY.test(username.trim());
+}
+
+/**
+ * 已登入的人傳來的兩段文字，是不是「長得像帳號密碼」到值得當成憑證處理（刪訊息、不進解析）。
+ * 只看形狀，不查資料庫；呼叫端還要再確認帳號名稱真的存在。
+ *
+ * 純數字帳號（「1」「2」）是誤判的主要來源：「1/20」是日期、「2 斤」是數量、「1 500」是記帳。
+ * 把這些當成憑證會刪掉使用者的訊息並打斷記帳，比漏掉一次遮罩嚴重，所以：
+ *   - 明寫「帳號X 密碼Y」的一律算。
+ *   - 任一段含中文的不算（記帳內容）。
+ *   - 純數字帳號：第二段要至少 8 個字元、而且不是數字或日期的樣子，才算。
+ *   - 其他（英數帳號）：算。
+ */
+export function isLikelyCredentialPair(parsed: { username: string; password: string }, text: string): boolean {
+    if (EXPLICIT_LOGIN_FORM.test(text)) return true;
+    if (CJK_CHAR.test(parsed.username + parsed.password)) return false;
+    if (isNumericUsername(parsed.username)) {
+        return parsed.password.length >= 8 && !NUMBER_OR_DATE_LIKE.test(parsed.password);
+    }
+    return true;
+}
+
 // 登入驗證，成功回傳 SessionData，失敗回傳 null
 export async function verifyLogin(username: string, password: string): Promise<SessionData | null> {
     // 以 username 查（不再用 password 當 WHERE 條件，改由 verifyPassword 比對）

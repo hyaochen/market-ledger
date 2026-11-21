@@ -12,7 +12,7 @@ import type TelegramBot from 'node-telegram-bot-api';
 import prisma from '../../src/lib/prisma';
 import {
     getSession, saveSession, clearSession,
-    parseLoginInput, verifyLogin, usernameExists,
+    parseLoginInput, verifyLogin, usernameExists, isLikelyCredentialPair, isNumericUsername,
 } from '../auth';
 import { loadDbContext, enrichEntry } from '../matcher';
 import {
@@ -142,9 +142,13 @@ async function handleLoginOnce(c: MsgCtx): Promise<void> {
     // 例外：第一段剛好是資料庫裡真實存在的帳號名稱（帳號或密碼含中文的人）就當成憑證，
     // 不然整串（含密碼）會被暫存進 SystemConfig 並在登入後回顯進聊天。
     // 查詢失敗（DB 錯誤）usernameExists 回 false，行為等同沒有這道例外。
+    // 純數字帳號（員工帳號「1」「2」）不套用這道例外：「2 大腸」「1 斤」是記帳內容，
+    // 當成憑證會刪掉訊息、算進鎖定，登入後也不會重播。
     const parsed = parseLoginInput(text);
-    const credentials = parsed && (!HAS_CJK.test(parsed.username + parsed.password) || await usernameExists(parsed.username))
-        ? parsed : null;
+    const credentials = parsed && (
+        !HAS_CJK.test(parsed.username + parsed.password)
+        || (!isNumericUsername(parsed.username) && await usernameExists(parsed.username))
+    ) ? parsed : null;
     // T-ML-033：route='auth'。絕對不存原始文字——這裡的 text 可能是「帳號 密碼」明文
     // （帳密順序打反時，被當成帳號的那段其實是密碼），所以連帳號名稱也只存雜湊標記，
     // 沒解析出來就存一個固定佔位字串，密碼永遠不落地。
@@ -554,9 +558,11 @@ export async function handleMessage(bot: Bot, msg: TelegramBot.Message): Promise
 
         // 已登入的人傳來符合登入格式、且第一段是真實帳號名稱的訊息：當成憑證處理
         // （不分大小寫；不存在的帳號名稱照原本流程當記帳內容，例如「1234 500」不會被誤擋）
+        // isLikelyCredentialPair 先擋掉長得像記帳／日期／數量的兩段文字：有「1」「2」這種純數字
+        // 帳號時，「1/20」「2 斤」「1 500」不能被當成憑證刪掉。
         if (session) {
             const parsed = parseLoginInput(text);
-            if (parsed && await usernameExists(parsed.username)) {
+            if (parsed && isLikelyCredentialPair(parsed, text) && await usernameExists(parsed.username)) {
                 logLine('IN', chatId, `[${who}] ${redactLoginText(text)}`);
                 await handleCredentialsWhileLoggedIn(c, session, parsed.username);
                 return;
