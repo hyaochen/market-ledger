@@ -1,7 +1,8 @@
 // 查詢 / 記帳解析的執行函式（message handler 與 callback handler 共用）
 
 import { loadDbContext, enrichEntry } from '../matcher';
-import { parseEntries, newParseDiagnostics } from '../parser';
+import { parseEntries, newParseDiagnostics, MAX_LLM_TEXT_CHARS } from '../parser';
+import { llmCallLimiter, LLM_RATE_TEXT } from '../rateLimit';
 import { getState, setState, resetToIdle, startConfirmation } from '../state';
 import { processEntries, formatSummary, formatEntry, autofillFixedExpensesForSaved } from './entry';
 import { detectQueryDate, queryByDate, queryRecent } from './query';
@@ -37,6 +38,22 @@ export function logQueryBranch(
     });
 }
 
+// ── LLM 入口把關（記帳解析與自然語言查詢共用）────────────────────
+// 單則文字長度上限 + 每個 telegram id 的 LLM 呼叫頻率；放行時消耗 1 次額度。
+// 回傳 true = 擋下（已回覆使用者，呼叫端直接結束，不呼叫 LLM）。
+const TOO_LONG_TEXT = `這則訊息太長（超過 ${MAX_LLM_TEXT_CHARS} 字），請分批傳。`;
+async function rejectBeforeLlm(bot: Bot, chatId: number, text: string, telegramUserId?: number): Promise<boolean> {
+    if (text.length > MAX_LLM_TEXT_CHARS) {
+        await bot.sendMessage(chatId, TOO_LONG_TEXT);
+        return true;
+    }
+    if (!llmCallLimiter.tryConsume(String(telegramUserId ?? chatId)).allowed) {
+        await bot.sendMessage(chatId, LLM_RATE_TEXT);
+        return true;
+    }
+    return false;
+}
+
 // ── 日期查詢：把指定日期的記錄回給使用者 ────────────────────────
 // preloaded：呼叫端已經載好 ctx 時直接沿用，避免同一則訊息重複打 DB
 export async function runDateQuery(
@@ -66,6 +83,7 @@ export async function runNlQuery(
     bot: Bot, chatId: number, session: SessionData, text: string, ctx: DbContext,
     messageId?: number, telegramUserId?: number,
 ): Promise<void> {
+    if (await rejectBeforeLlm(bot, chatId, text, telegramUserId)) return;
     logLine('NLQ', chatId, text.slice(0, 120));
     await bot.sendMessage(chatId, '理解中…');
     const diag = newParseDiagnostics();
@@ -117,12 +135,18 @@ export async function runEntryParse(
     bot: Bot, chatId: number, session: SessionData, text: string, preloaded?: DbContext,
     messageId?: number, telegramUserId?: number,
 ): Promise<void> {
+    if (await rejectBeforeLlm(bot, chatId, text, telegramUserId)) return;
     logLine('PARSE', chatId, text.slice(0, 120));
     await bot.sendMessage(chatId, '解析中，請稍候...');
 
     const ctx = preloaded ?? await loadDbContext(session.tenantId);
     const diag = newParseDiagnostics();
+    // 逐行重試的每一次 LLM 呼叫也要從同一位使用者的額度扣（最壞 1 + 20 次，遠低於 5 分鐘 40 次）
+    const limiterKey = String(telegramUserId ?? chatId);
+    diag.allowLlmCall = () => llmCallLimiter.tryConsume(limiterKey).allowed;
     const rawEntries = await parseEntries(text, ctx, diag);
+    // 行數 / 時間 / 額度上限的提示（只在有觸發時才有）
+    for (const notice of diag.notices ?? []) await bot.sendMessage(chatId, notice);
 
     if (rawEntries.length === 0) {
         // T-ML-033：解析嘗試了但什麼都沒抽出來 → route='unparsed'（跟「有抽到東西」

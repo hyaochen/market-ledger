@@ -33,6 +33,7 @@ const PASSWORDS = {
     disabled: 'SimDisabled-789',
     demote: 'SimDemote-321',
     reader: 'SimReader-654',
+    cjk: '密碼測試一二三',
     wrong: ['WrongGuessA1', 'WrongGuessB2', 'WrongGuessC3', 'WrongGuessD4', 'WrongGuessE5', 'WrongGuessF6', 'WrongGuessG7'],
 };
 
@@ -178,6 +179,8 @@ test('offline simulation: login throttle, session revalidation, query, entry flo
     await mkUser('sim-u-disabled', 'sim-disabled', PASSWORDS.disabled, '模擬停用者', 'write');
     await mkUser('sim-u-demote', 'sim-demote', PASSWORDS.demote, '模擬降權者', 'write');
     await mkUser('sim-u-reader', 'sim-reader', PASSWORDS.reader, '模擬唯讀者', 'read');
+    // 帳號與密碼都含中文的使用者（帳號名稱快取要在第一次查詢前就能看到，所以放在種子資料裡）
+    await mkUser('sim-u-cjk', '模擬帳號', PASSWORDS.cjk, '模擬中文帳號', 'write');
 
     // ── 載入真的 bot（會 new FakeBot 並註冊 handler）──
     req('./index');
@@ -185,6 +188,15 @@ test('offline simulation: login throttle, session revalidation, query, entry flo
     assert.ok(bot, 'index.ts 必須建立 bot');
     await sleep(600);          // 讓啟動流程（preloadStates / bridge health check）跑完
     bot.calls.length = 0;      // 啟動雜訊不進逐字稿
+
+    // 未登入者的私訊頻率限制（每分鐘 6 則）會被這支腳本的連續登入嘗試打到：
+    // 用假時鐘讓每則訊息相隔 11 秒（等同真人速度），只有「頻率限制」情境才切成 burst。
+    const rateMod = req('./rateLimit');
+    const throttleMod = req('./loginThrottle');
+    const botLogMod = req('./botLog');
+    let simNow = 1_700_000_000_000;
+    let burst = false;
+    rateMod.unauthMessageLimiter.setClock(() => simNow);
 
     // ── 驅動工具 ──
     let seq = 100;
@@ -202,6 +214,7 @@ test('offline simulation: login throttle, session revalidation, query, entry flo
         bot.calls.length = 0;
     }
     async function say(label: string, tg: number, text: string) {
+        if (!burst) simNow += 11_000;
         const msg = { message_id: ++seq, chat: { id: tg, type: 'private' }, from: { id: tg, username: `tg${tg}` }, text, date: 0 };
         await (bot.listeners('message')[0] as any)(msg);
         await settle();
@@ -244,6 +257,18 @@ test('offline simulation: login throttle, session revalidation, query, entry flo
     // 清掉這個 session，讓後面的步驟維持原本的起始狀態
     await prisma.systemConfig.deleteMany({ where: { key: 'tg_session_5002' } });
     await say('owner logs out of sim state', 5002, '/logout');
+
+    // 3b. 帳號名稱層被灌爆鎖住：已知的 telegram id（5002 剛成功登入過 sim-victim）仍可登入，未知的被擋
+    for (let i = 0; i < 20; i++) await throttleMod.loginThrottle.recordFailure({ telegramId: 7000 + i, username: 'sim-victim' });
+    out = await say('username locked, unknown telegram id', 5021, `sim-victim ${PASSWORDS.victim}`);
+    assert.ok(texts(out).some((x) => x.includes('登入嘗試太多次')), 'unknown telegram id is blocked by the username lock');
+    assert.ok(!texts(out).some((x) => x.includes('登入成功')));
+    out = await say('username locked, known telegram id', 5002, `sim-victim ${PASSWORDS.victim}`);
+    assert.ok(texts(out).some((x) => x.includes('登入成功')), 'known telegram id passes the username-layer lock');
+    await prisma.systemConfig.deleteMany({ where: { key: 'tg_session_5002' } });
+    await say('known id logs out again', 5002, '/logout');
+    const knownRow = await prisma.systemConfig.findFirst({ where: { key: 'tg_known_5002' } });
+    assert.deepEqual(JSON.parse(knownRow!.value), ['sim-victim'], 'known list stores lowercase usernames');
 
     // 4. 正確登入 -> session + 訊息被刪
     bot.failDelete = true;
@@ -340,6 +365,92 @@ test('offline simulation: login throttle, session revalidation, query, entry flo
     out = await press('stale callback', 5003, 'new_item_yes');
     process.env.LLM_PROVIDER = 'claude';
 
+    // 6g. 已登入的人又傳「帳號 密碼」：當成憑證處理（刪訊息、不進解析與 LLM）；不存在的帳號名稱照常當記帳內容
+    out = await say('logged in user re-sends credentials', 5003, `sim-victim ${PASSWORDS.victim}`);
+    assert.equal(count('deleteMessage', out), 1, 'credential message deleted');
+    assert.ok(texts(out).some((x) => x.includes('你已經登入了') && x.includes('/logout')));
+    assert.ok(!texts(out).some((x) => x.includes('解析中')), 'credentials never reach the parser');
+    out = await say('logged in user re-sends credentials (upper case)', 5003, `SIM-Victim ${PASSWORDS.victim}`);
+    assert.equal(count('deleteMessage', out), 1, 'matching is case-insensitive');
+    bot.failDelete = true;
+    out = await say('credentials, delete fails', 5003, `sim-writer ${PASSWORDS.writer}`);
+    bot.failDelete = false;
+    assert.ok(texts(out).some((x) => x.includes('請自行刪除')), 'tells the user to delete it themselves');
+    out = await say('two tokens, not an account', 5003, '大腸 100');
+    assert.ok(!texts(out).some((x) => x.includes('你已經登入了')), 'non-account two-token text is a normal entry');
+    assert.equal(count('deleteMessage', out), 0);
+
+    // 6h. 單則文字太長：不呼叫 LLM
+    out = await say('too long text', 5003, '肝連'.repeat(1001));
+    assert.ok(texts(out).some((x) => x.includes('請分批傳')), 'oversize text is refused');
+    assert.ok(!texts(out).some((x) => x.includes('解析中')));
+
+    // 6i. 唯讀帳號密碼正確：不算失敗、但也不能清掉任何計數
+    for (let i = 0; i < 2; i++) await say(`reader wrong password #${i + 1}`, 5012, `sim-reader ${PASSWORDS.wrong[i]}`);
+    out = await say('reader correct password', 5012, `sim-reader ${PASSWORDS.reader}`);
+    assert.ok(texts(out).some((x) => x.includes('唯讀')));
+    const tgRec = await prisma.systemConfig.findFirst({ where: { key: throttleMod.telegramKey(5012) } });
+    const userRec = await prisma.systemConfig.findFirst({ where: { key: throttleMod.usernameKey('sim-reader') } });
+    assert.equal(JSON.parse(tgRec!.value).failures.length, 2, 'read-only success must not clear the telegram id counter');
+    assert.equal(JSON.parse(userRec!.value).failures.length, 2, 'read-only success must not clear the username counter');
+    assert.equal(await prisma.systemConfig.findFirst({ where: { key: 'tg_known_5012' } }), null, 'read-only login is not a known device');
+
+    // 6j. session 過期後傳「大腸 500」：不當成登入嘗試（不刪訊息、不算鎖定），暫存並在登入後自動重播
+    out = await say('expired session, bookkeeping text', 5010, '大腸 500');
+    assert.ok(texts(out).some((x) => x.includes('登入已過期')));
+    assert.equal(count('deleteMessage', out), 0, 'bookkeeping text is not deleted');
+    assert.equal(await prisma.systemConfig.findFirst({ where: { key: throttleMod.telegramKey(5010) } }), null, 'not counted as a login attempt');
+    assert.ok(JSON.stringify(await prisma.systemConfig.findFirst({ where: { key: 'tg_state_5010' } })).includes('大腸 500'), 'text stashed for replay');
+    out = await say('login after expiry replays the stashed text', 5010, `sim-writer ${PASSWORDS.writer}`);
+    assert.ok(texts(out).some((x) => x.includes('登入成功')));
+    assert.ok(texts(out).some((x) => x.includes('幫你送出剛才那則：「大腸 500」')), 'stashed text is replayed');
+    assert.ok(texts(out).some((x) => x.includes('解析中')), 'replayed text goes through the normal flow');
+
+    // 6k. 帳號與密碼都含中文：第一段是真實帳號名稱就當憑證（刪訊息、不暫存、不回顯）
+    out = await say('chinese credentials, wrong password', 5041, '模擬帳號 錯誤的密碼');
+    assert.equal(count('deleteMessage', out), 1, 'chinese-credential attempt is deleted');
+    assert.ok(texts(out).some((x) => x.includes('帳號或密碼錯誤')));
+    assert.ok(!texts(out).some((x) => x.includes('幫你送出')));
+    assert.ok(!JSON.stringify(await prisma.systemConfig.findMany({ where: { key: { startsWith: 'tg_state_' } } })).includes('錯誤的密碼'), 'chinese password is never stashed');
+    out = await say('chinese credentials, correct', 5040, `模擬帳號 ${PASSWORDS.cjk}`);
+    assert.equal(count('deleteMessage', out), 1);
+    assert.ok(texts(out).some((x) => x.includes('登入成功')));
+    assert.ok(!texts(out).some((x) => x.includes(PASSWORDS.cjk)), 'password is never echoed');
+
+    // 6l. 未登入者的頻率限制：超過後不再有任何 DB 寫入、不驗密碼，只回一次提示
+    burst = true;
+    for (const [i, txt] of ['/help', '/start', '今天肝連1', 'abcdef', '大腸 500', '/help'].entries()) {
+        out = await say(`unauth burst #${i + 1}`, 5030, txt);
+        assert.ok(texts(out).length >= 1, 'under the limit every message is answered');
+    }
+    await sleep(300);
+    const rowsBefore = await prisma.botMessageLog.count({ where: { chatId: '5030' } });
+    out = await say('unauth burst #7 (over the limit)', 5030, `sim-victim ${PASSWORDS.wrong[2]}`);
+    assert.deepEqual(texts(out), ['訊息太頻繁，請稍後再試。']);
+    assert.equal(count('deleteMessage', out), 0, 'over-limit message is dropped before any login handling');
+    out = await say('unauth burst #8 (silent)', 5030, `sim-victim ${PASSWORDS.wrong[3]}`);
+    assert.equal(out.length, 0, 'only one notice per window');
+    out = await say('unauth burst #9 command (silent)', 5030, '/help');
+    assert.equal(out.length, 0, 'commands count toward the same limit');
+    await sleep(300);
+    assert.equal(await prisma.botMessageLog.count({ where: { chatId: '5030' } }), rowsBefore, 'no BotMessageLog rows after the limit');
+    assert.equal(await prisma.systemConfig.findFirst({ where: { key: throttleMod.telegramKey(5030) } }), null, 'verifyLogin was never called');
+    burst = false;
+    simNow += 61 * 60 * 1000;
+    out = await say('unauth after the window passes', 5030, '/help');
+    assert.ok(texts(out).some((x) => x.includes('使用說明')), 'limit is lifted after the window');
+
+    // 6m. 未登入者連傳相同的非登入訊息：狀態沒變就不再寫 SystemConfig
+    await say('unauth state write #1', 5031, 'abc');
+    await sleep(100);
+    const st1 = await prisma.systemConfig.findFirst({ where: { key: 'tg_state_5031' } });
+    assert.ok(st1, 'first message persists awaiting_auth');
+    await sleep(50);
+    await say('unauth state write #2 (unchanged)', 5031, 'abc');
+    await sleep(100);
+    const st2 = await prisma.systemConfig.findFirst({ where: { key: 'tg_state_5031' } });
+    assert.equal(st2!.updatedAt.getTime(), st1!.updatedAt.getTime(), 'unchanged state is not rewritten');
+
     // 7. 停用 / 降權 的既有 session 下一則訊息就被拒
     out = await say('login disabled-to-be', 5005, `sim-disabled ${PASSWORDS.disabled}`);
     assert.ok(texts(out).some((x) => x.includes('登入成功')));
@@ -373,8 +484,15 @@ test('offline simulation: login throttle, session revalidation, query, entry flo
     const logText = fs.readFileSync(logFile, 'utf8');
     for (const s of secrets) assert.ok(!logText.includes(s), `bot.log must not contain a password (${s.slice(0, 6)}...)`);
     assert.ok(logText.includes('[password redacted]'), 'login lines are redacted in bot.log');
-    const dbLogs = JSON.stringify(await prisma.botMessageLog.findMany({ where: { chatId: { in: ['5001', '5002', '5003', '5004', '5005', '5006'] } } }));
+    const dbLogs = JSON.stringify(await prisma.botMessageLog.findMany({ where: { chatId: { in: ['5001', '5002', '5003', '5004', '5005', '5006', '5010', '5012', '5021', '5030', '5031', '5040', '5041'] } } }));
     for (const s of secrets) assert.ok(!dbLogs.includes(s), 'BotMessageLog must not contain a password');
+    // 帳號名稱也不落地（帳密順序打反時，那一段其實是密碼）：log 與 BotMessageLog 只留雜湊標記
+    for (const name of ['sim-victim', 'sim-writer', 'sim-reader', '模擬帳號']) {
+        assert.ok(!logText.includes(name), `bot.log must not contain the username ${name}`);
+        assert.ok(!dbLogs.includes(name), `BotMessageLog must not contain the username ${name}`);
+    }
+    assert.ok(logText.includes(botLogMod.usernameTag('sim-victim')), 'bot.log keeps the hashed username tag');
+    assert.ok(dbLogs.includes(botLogMod.usernameTag('sim-victim')), 'BotMessageLog keeps the hashed username tag');
     const states = JSON.stringify(await prisma.systemConfig.findMany({ where: { key: { startsWith: 'tg_state_' } } }));
     for (const s of secrets) assert.ok(!states.includes(s), 'persisted chat state must not contain a password');
     // 攻擊者那個 telegram 帳號的計數留著；帳號名稱的計數在主人登入成功時清掉

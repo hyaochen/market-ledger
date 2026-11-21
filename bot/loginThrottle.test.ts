@@ -7,10 +7,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-    LoginThrottle, ThrottleStore, ThrottleRecord, formatWait,
+    LoginThrottle, ThrottleStore, ThrottleRecord, KnownStore, formatWait,
     MAX_FAILURES, MAX_USERNAME_FAILURES, WINDOW_MS, BASE_LOCK_MS,
+    MAX_LOCK_MS, MAX_USERNAME_LOCK_MS, MAX_KNOWN_USERNAMES,
 } from "./loginThrottle";
-import { rotateIfNeeded, redactLoginText } from "./botLog";
+import { rotateIfNeeded, redactLoginText, usernameTag } from "./botLog";
 import { revalidateSession, resolveRoleCode } from "./auth";
 import type { SessionData } from "./types";
 
@@ -24,11 +25,21 @@ function memStore(): ThrottleStore & { map: Map<string, ThrottleRecord> } {
     };
 }
 
+function memKnown(): KnownStore & { map: Map<string, string[]> } {
+    const map = new Map<string, string[]>();
+    return {
+        map,
+        async get(id) { return [...(map.get(String(id)) ?? [])]; },
+        async set(id, names) { map.set(String(id), [...names]); },
+    };
+}
+
 function setup() {
     let t = 1_000_000;
     const store = memStore();
-    const th = new LoginThrottle(store, () => t);
-    return { th, store, advance: (ms: number) => { t += ms; } };
+    const known = memKnown();
+    const th = new LoginThrottle(store, () => t, known);
+    return { th, store, known, advance: (ms: number) => { t += ms; } };
 }
 
 const KEYS = { telegramId: 111, username: "mom" };
@@ -105,13 +116,77 @@ test("登入成功清掉失敗計數與退避等級", async () => {
     assert.equal(r.locked, false);
 });
 
+test("recordSuccess 只清這個 telegram id 與這個帳號名稱，不動別人的計數", async () => {
+    const { th, store } = setup();
+    await th.recordFailure({ telegramId: 1, username: "mom" });
+    await th.recordFailure({ telegramId: 2, username: "other" });
+    await th.recordFailure({ telegramId: 3, username: "mom" });
+    assert.equal(store.map.size, 5); // tg1 tg2 tg3 u(mom) u(other)
+    await th.recordSuccess({ telegramId: 1, username: "mom" });
+    assert.equal(store.map.size, 3); // 清掉 tg1 與 u(mom)；tg2 / tg3 / u(other) 還在
+});
+
+test("帳號名稱層鎖定：已知的 telegram id 放行，未知的被擋", async () => {
+    const { th } = setup();
+    await th.recordSuccess({ telegramId: 100, username: "Mom" }); // 100 成功登入過 mom（大小寫無關）
+    for (let i = 0; i < MAX_USERNAME_FAILURES; i++) await th.recordFailure({ telegramId: 500 + i, username: "mom" });
+    assert.equal((await th.check({ telegramId: 999, username: "mom" })).locked, true);
+    assert.deepEqual(await th.check({ telegramId: 100, username: "mom" }), { locked: false });
+    // 已知清單裡沒有的帳號名稱不適用
+    for (let i = 0; i < MAX_USERNAME_FAILURES; i++) await th.recordFailure({ telegramId: 600 + i, username: "aunt" });
+    assert.equal((await th.check({ telegramId: 100, username: "aunt" })).locked, true);
+});
+
+test("已知的 telegram id 自己連續打錯 5 次，telegram id 層照樣鎖（優先於已知放行）", async () => {
+    const { th } = setup();
+    await th.recordSuccess({ telegramId: 100, username: "mom" });
+    for (let i = 0; i < MAX_USERNAME_FAILURES; i++) await th.recordFailure({ telegramId: 500 + i, username: "mom" });
+    for (let i = 0; i < MAX_FAILURES; i++) await th.recordFailure({ telegramId: 100, username: "mom" });
+    assert.equal((await th.check({ telegramId: 100, username: "mom" })).locked, true);
+});
+
+test("帳號名稱層退避上限 1 小時，telegram id 層維持 24 小時", async () => {
+    const { th, advance } = setup();
+    let lastUser = 0;
+    for (let round = 0; round < 6; round++) {
+        let res: Awaited<ReturnType<typeof th.recordFailure>> = { locked: false };
+        for (let i = 0; i < MAX_USERNAME_FAILURES; i++) res = await th.recordFailure({ telegramId: 1000 + round * 100 + i, username: "mom" });
+        assert.equal(res.locked, true);
+        if (res.locked) lastUser = res.retryAfterMs;
+        advance(lastUser + 1);
+    }
+    assert.equal(lastUser, MAX_USERNAME_LOCK_MS);
+
+    const tg = setup();
+    let lastTg = 0;
+    for (let round = 0; round < 8; round++) {
+        let res: Awaited<ReturnType<typeof tg.th.recordFailure>> = { locked: false };
+        for (let i = 0; i < MAX_FAILURES; i++) res = await tg.th.recordFailure({ telegramId: 1, username: `u${round}` });
+        if (res.locked) lastTg = res.retryAfterMs;
+        tg.advance(lastTg + 1);
+    }
+    assert.equal(lastTg, MAX_LOCK_MS);
+});
+
+test("已知清單最多 5 個帳號名稱，新的擠掉最舊的，重複登入不重複記", async () => {
+    const { th, known } = setup();
+    for (const n of ["a", "b", "c", "d", "e", "f", "e"]) await th.recordSuccess({ telegramId: 7, username: n });
+    const list = known.map.get("7")!;
+    assert.equal(list.length, MAX_KNOWN_USERNAMES);
+    assert.deepEqual(list, ["e", "f", "d", "c", "b"]);
+});
+
 test("store 壞掉時 fail-open，不會把人鎖在外面也不丟例外", async () => {
     const broken: ThrottleStore = {
         async get() { throw new Error("db down"); },
         async set() { throw new Error("db down"); },
         async del() { throw new Error("db down"); },
     };
-    const th = new LoginThrottle(broken);
+    const brokenKnown: KnownStore = {
+        async get() { throw new Error("db down"); },
+        async set() { throw new Error("db down"); },
+    };
+    const th = new LoginThrottle(broken, Date.now, brokenKnown);
     assert.deepEqual(await th.check(KEYS), { locked: false });
     assert.deepEqual(await th.recordFailure(KEYS), { locked: false });
     await th.recordSuccess(KEYS);
@@ -130,8 +205,14 @@ test("redactLoginText：不回傳密碼，各種格式都遮蔽", () => {
     for (const raw of ["mom mom123", "mom/mom123", "帳號mom 密碼mom123", "帳號 mom 密碼 mom123"]) {
         const out = redactLoginText(raw);
         assert.ok(!out.includes("mom123"), `密碼外洩於 ${out}`);
-        assert.equal(out, "mom [password redacted]");
+        assert.equal(out, `${usernameTag("mom")} [password redacted]`);
+        assert.ok(!out.includes("mom "), `帳號名稱原文外洩於 ${out}`);
     }
+    assert.match(usernameTag("Mom"), /^u#[0-9a-f]{8}$/);
+    assert.equal(usernameTag("Mom"), usernameTag("mom"), "不分大小寫");
+    assert.notEqual(usernameTag("mom"), usernameTag("aunt"));
+    // 帳密打反：被當成帳號的其實是密碼，不能原文落地
+    assert.ok(!redactLoginText("SuperSecret99 mom").includes("SuperSecret99"));
     assert.equal(redactLoginText("今天 肝連2.6台斤218 好多字"), "[unrecognized login format]");
 });
 

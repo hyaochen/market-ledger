@@ -274,11 +274,27 @@ async function callClaudeBridge(systemPrompt: string, userText: string): Promise
 export type ParseDiagnostics = {
     usedFallback: boolean;
     fallbackReason: string | null;
+    /** parseEntries 想讓使用者知道的事（行數上限、時間上限、頻率上限），呼叫端自行回覆。 */
+    notices?: string[];
+    /** 逐行重試前問一次：回 false 代表這位使用者的 LLM 額度用完，停止重試（由呼叫端接上頻率限制）。 */
+    allowLlmCall?: () => boolean;
+    /** 測試用：注入時鐘（預設 Date.now）。 */
+    now?: () => number;
 };
 
 export function newParseDiagnostics(): ParseDiagnostics {
-    return { usedFallback: false, fallbackReason: null };
+    return { usedFallback: false, fallbackReason: null, notices: [] };
 }
+
+// 送進 LLM 的單則文字上限（字元）；超過由呼叫端直接請使用者分批，不呼叫 LLM
+export const MAX_LLM_TEXT_CHARS = 2000;
+// 多行訊息 LLM 回的筆數少於行數時才會逐行重試；超過這個行數就不重試（保留整段呼叫的結果）
+export const MAX_RETRY_LINES = 20;
+// 一則訊息的解析總時間上限；逐行重試每輪檢查，超過就停止並用已取得的結果
+export const PARSE_TIME_BUDGET_MS = 90_000;
+export const TOO_MANY_LINES_NOTICE = `【注意】一次最多處理 ${MAX_RETRY_LINES} 行，其餘請分批傳。`;
+export const PARSE_TIMEOUT_NOTICE = '【注意】這則訊息解析花太久，只處理了已解析出的部分，請核對後把其餘分批傳。';
+export const PARSE_RATE_NOTICE = '【注意】查詢與記帳太頻繁，只處理了已解析出的部分，請稍後再傳其餘的。';
 
 /**
  * 統一的 LLM 呼叫入口（T-ML-024）。取代原本直接呼叫 callOllama 的地方。
@@ -726,6 +742,8 @@ export async function parseEntries(userText: string, ctx: DbContext, diag?: Pars
 
     const locationNames = ctx.locations.map(l => l.name);
     const systemPrompt = buildSystemPrompt(today, locationNames);
+    const nowMs = diag?.now ?? Date.now;
+    const startedAt = nowMs();
 
     // 休假意圖優先攔截（pre-LLM）— 命中即整批回，不走 Ollama
     const dayOffEntries = detectDayOffEntries(userText, today, locationNames);
@@ -759,20 +777,37 @@ export async function parseEntries(userText: string, ctx: DbContext, diag?: Pars
     }
 
     // 多行輸入但 LLM 只回傳 1 筆 → 逐行重新解析補漏
+    // 上限：超過 MAX_RETRY_LINES 行不重試（每行一次 LLM 呼叫會燒 owner 的額度）、
+    // 總時間超過 PARSE_TIME_BUDGET_MS 或這位使用者的 LLM 額度用完就停，用已取得的結果。
     if (isMultiLine && result.length < inputLines.length) {
-        console.log(`[Parser] Multi-line input (${inputLines.length} lines) but only got ${result.length} entry, retrying per-line`);
-        const perLineResults: RawExtracted[] = [];
-        for (const line of inputLines) {
-            const maskedLine = maskKeywordsForLlm(line);
-            const lineResult = await callLLM(systemPrompt, maskedLine, OLLAMA_MODEL_FAST, diag);
-            if (lineResult && lineResult.length > 0) {
-                // rawInput 用 maskedLine 而非 line，post-process（含 stripCanonicalNumericNames）才一致
-                perLineResults.push(...lineResult.map(e => ({ ...e, rawInput: e.rawInput ?? maskedLine })));
+        if (inputLines.length > MAX_RETRY_LINES) {
+            console.log(`[Parser] Multi-line input (${inputLines.length} lines) exceeds ${MAX_RETRY_LINES}, skip per-line retry`);
+            diag?.notices?.push(TOO_MANY_LINES_NOTICE);
+        } else {
+            console.log(`[Parser] Multi-line input (${inputLines.length} lines) but only got ${result.length} entry, retrying per-line`);
+            const perLineResults: RawExtracted[] = [];
+            for (const line of inputLines) {
+                if (nowMs() - startedAt > PARSE_TIME_BUDGET_MS) {
+                    console.log('[Parser] per-line retry stopped: time budget exceeded');
+                    diag?.notices?.push(PARSE_TIMEOUT_NOTICE);
+                    break;
+                }
+                if (diag?.allowLlmCall && !diag.allowLlmCall()) {
+                    console.log('[Parser] per-line retry stopped: llm rate limit');
+                    diag.notices?.push(PARSE_RATE_NOTICE);
+                    break;
+                }
+                const maskedLine = maskKeywordsForLlm(line);
+                const lineResult = await callLLM(systemPrompt, maskedLine, OLLAMA_MODEL_FAST, diag);
+                if (lineResult && lineResult.length > 0) {
+                    // rawInput 用 maskedLine 而非 line，post-process（含 stripCanonicalNumericNames）才一致
+                    perLineResults.push(...lineResult.map(e => ({ ...e, rawInput: e.rawInput ?? maskedLine })));
+                }
             }
-        }
-        if (perLineResults.length > result.length) {
-            console.log(`[Parser] Per-line retry got ${perLineResults.length} entries`);
-            result = perLineResults;
+            if (perLineResults.length > result.length) {
+                console.log(`[Parser] Per-line retry got ${perLineResults.length} entries`);
+                result = perLineResults;
+            }
         }
     }
 

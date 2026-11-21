@@ -170,3 +170,25 @@ export async function verifyLogin(username: string, password: string): Promise<S
         expires: expires.toISOString(),
     };
 }
+
+// ── 帳號名稱是否存在（跨租戶，只查存在與否）──────────────────────
+// 用來判斷「兩段式文字」是不是憑證：含中文的記帳內容（「大腸 500」）不是，
+// 但第一段剛好是某個真實帳號名稱的就當成憑證處理（不落地、不暫存、不送 LLM）。
+// 帳號表很小，整份小寫名單快取 60 秒；SQLite 的 = 區分大小寫，快取才能做到不分大小寫比對。
+// 查詢失敗一律當成「不存在」（保守，行為等同沒有這道檢查），失敗結果不快取。
+export const USERNAME_CACHE_MS = 60 * 1000;
+let usernameCache: { at: number; names: Set<string> } | null = null;
+
+export function clearUsernameCache(): void { usernameCache = null; }
+
+export async function usernameExists(username: string, now: number = Date.now()): Promise<boolean> {
+    try {
+        if (!usernameCache || now - usernameCache.at > USERNAME_CACHE_MS) {
+            const rows = await prisma.user.findMany({ select: { username: true } });
+            usernameCache = { at: now, names: new Set(rows.map(r => r.username.trim().toLowerCase())) };
+        }
+        return usernameCache.names.has(username.trim().toLowerCase());
+    } catch {
+        return false;
+    }
+}
