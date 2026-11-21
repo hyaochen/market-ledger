@@ -19,6 +19,7 @@ env.SESSION_SECRET = env.SESSION_SECRET || "a".repeat(40);
 let currentToken: string | undefined;
 let lastSetCookie: { name: string; value: string; opts: Record<string, unknown> } | undefined;
 let requestHeaders: Record<string, string> = {};
+let knownDeviceCookie: string | undefined;
 
 function stub(id: string, exports: Record<string, unknown>) {
     const resolved = require.resolve(id);
@@ -26,8 +27,12 @@ function stub(id: string, exports: Record<string, unknown>) {
 }
 stub("next/headers", {
     cookies: async () => ({
-        get: (name: string) => (name === "session" && currentToken ? { name, value: currentToken } : undefined),
+        get: (name: string) => {
+            if (name === "kd" && knownDeviceCookie) return { name, value: knownDeviceCookie };
+            return name === "session" && currentToken ? { name, value: currentToken } : undefined;
+        },
         set: (name: string, value: string, opts: Record<string, unknown>) => {
+            if (name === "kd") knownDeviceCookie = value || undefined;
             lastSetCookie = { name, value, opts };
             if (name === "session") currentToken = value || undefined;
         },
@@ -391,6 +396,47 @@ test("login：錯誤密碼寫 FAIL log（含 IP、不含密碼）；同 IP 第 6
     const upgraded = await prisma.user.findUnique({ where: { id: ids.writeA } });
     assert.ok(upgraded.password.startsWith("$2"));
     assert.equal(payload?.pwv, session.passwordFingerprint(upgraded.password));
+});
+
+test("login：帳號層被鎖時，已知裝置 cookie 可通過（仍受 IP+帳號層限制）；沒有或別人的 cookie 仍被擋", async () => {
+    const { _resetLoginLimiterForTest, reserveLoginAttempt, MAX_ATTEMPTS_PER_IP_USER } = await import("@/lib/login-limiter");
+    const { signKnownDevice } = await import("@/lib/known-device");
+    _resetLoginLimiterForTest();
+    currentToken = undefined;
+    const writeA = await prisma.user.findUnique({ where: { id: ids.writeA } });
+    const readA = await prisma.user.findUnique({ where: { id: ids.readA } });
+    // 攻擊者用 10 個 IP 把 writeA 的帳號層打滿
+    for (let ip = 1; ip <= 10; ip++) {
+        for (let i = 0; i < MAX_ATTEMPTS_PER_IP_USER; i++) reserveLoginAttempt(`10.1.0.${ip}`, "writeA");
+    }
+    requestHeaders = { "cf-connecting-ip": "2001:db8:aa:bb::1" };
+
+    knownDeviceCookie = undefined;
+    const noKd = await authActions.login(form({ username: "writeA", password: "pw-writeA-12345" }));
+    assert.equal(noKd.success, false);
+    assert.match(String((noKd as { message?: string }).message), /登入嘗試過多/);
+
+    knownDeviceCookie = signKnownDevice({ userId: readA.id, pwv: session.passwordFingerprint(readA.password), issuedAt: Date.now() });
+    const otherKd = await authActions.login(form({ username: "writeA", password: "pw-writeA-12345" }));
+    assert.equal(otherKd.success, false, "別人的已知裝置 cookie 不能通過");
+
+    knownDeviceCookie = signKnownDevice({ userId: writeA.id, pwv: session.passwordFingerprint(writeA.password), issuedAt: Date.now() });
+    const withKd = await authActions.login(form({ username: "writeA", password: "pw-writeA-12345" }));
+    assert.equal(withKd.success, true);
+
+    // 已知裝置路徑仍受 IP+帳號層限制：同一個 /64 的另一個位址連續猜錯 5 次後被鎖
+    requestHeaders = { "cf-connecting-ip": "2001:db8:cc:dd::1" };
+    knownDeviceCookie = signKnownDevice({ userId: writeA.id, pwv: session.passwordFingerprint(writeA.password), issuedAt: Date.now() });
+    for (let i = 0; i < MAX_ATTEMPTS_PER_IP_USER; i++) {
+        requestHeaders = { "cf-connecting-ip": `2001:db8:cc:dd::${i + 10}` };
+        const bad = await authActions.login(form({ username: "writeA", password: "錯誤的密碼" }));
+        assert.match(String((bad as { message?: string }).message), /帳號或密碼錯誤/);
+    }
+    requestHeaders = { "cf-connecting-ip": "2001:db8:cc:dd:9:9:9:9" };
+    const locked = await authActions.login(form({ username: "writeA", password: "pw-writeA-12345" }));
+    assert.equal(locked.success, false);
+    assert.match(String((locked as { message?: string }).message), /登入嘗試過多/);
+    knownDeviceCookie = undefined;
 });
 
 test("login：不存在的帳號回應與密碼錯誤相同，且也有記錄", async () => {
