@@ -41,6 +41,15 @@ stub("next/headers", {
 });
 stub("next/cache", { revalidatePath: () => {}, revalidateTag: () => {} });
 
+// 節流器一定要拿「server action 實際在用的那一個 module 實例」。
+// Node 20 + tsx 下，action 內部載入的實例和測試自己用 import() 載入的不是同一個
+// （本機 Node 24 是同一個，所以只在 CI 與容器的 Node 20 才會壞）：用 import() 重設或預先
+// 灌次數會打到另一個實例，action 看到的仍是空的。require 走的是 action 用的那份快取。
+function limiter(): typeof import("@/lib/login-limiter") {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require("@/lib/login-limiter");
+}
+
 // ---- 測試資料 ----
 // 密碼 hash 用 legacy SHA-256（快）；登入測試另外用 bcrypt。
 const sha = (p: string) => createHash("sha256").update(p).digest("hex");
@@ -360,7 +369,7 @@ test("logout 在伺服器端撤銷：同一個 token 登出後不能再用", asy
 
 // ---- 7. 登入 ----
 test("login：錯誤密碼寫 FAIL log（含 IP、不含密碼）；同 IP 第 6 次被鎖；別的 IP 與正確登入不受影響", async () => {
-    const { _resetLoginLimiterForTest } = await import("@/lib/login-limiter");
+    const { _resetLoginLimiterForTest } = limiter();
     _resetLoginLimiterForTest();
     currentToken = undefined;
     const secret = "totally-wrong-password";
@@ -399,7 +408,7 @@ test("login：錯誤密碼寫 FAIL log（含 IP、不含密碼）；同 IP 第 6
 });
 
 test("login：帳號層被鎖時，已知裝置 cookie 可通過（仍受 IP+帳號層限制）；沒有或別人的 cookie 仍被擋", async () => {
-    const { _resetLoginLimiterForTest, reserveLoginAttempt, MAX_ATTEMPTS_PER_IP_USER } = await import("@/lib/login-limiter");
+    const { _resetLoginLimiterForTest, reserveLoginAttempt, MAX_ATTEMPTS_PER_IP_USER } = limiter();
     const { signKnownDevice } = await import("@/lib/known-device");
     _resetLoginLimiterForTest();
     currentToken = undefined;
@@ -440,7 +449,7 @@ test("login：帳號層被鎖時，已知裝置 cookie 可通過（仍受 IP+帳
 });
 
 test("login：不存在的帳號回應與密碼錯誤相同，且也有記錄", async () => {
-    const { _resetLoginLimiterForTest } = await import("@/lib/login-limiter");
+    const { _resetLoginLimiterForTest } = limiter();
     _resetLoginLimiterForTest();
     requestHeaders = { "cf-connecting-ip": "192.0.2.55" };
     const t0 = Date.now();
