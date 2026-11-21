@@ -30,6 +30,8 @@
 //    完全相等比對。
 
 import prisma from '@/lib/prisma';
+import { buildEntryAudit } from '@/lib/cash-audit';
+import { formatDateInput } from '@/lib/date';
 import { STALLS, inferStallFromNote, type StallCode } from '@/lib/analytics/stallInference';
 import { getWeekdayUTC } from '@/lib/analytics/dateRange';
 import {
@@ -186,6 +188,10 @@ export interface EntryWriteDb {
         create(args: { data: Record<string, unknown> }): Promise<{ id: string }>;
         update(args: { where: { id: string }; data: Record<string, unknown> }): Promise<{ id: string }>;
     };
+    /** 稽核紀錄寫入（可選；沒提供就不記，單元測試的假資料庫可以省略）。 */
+    operationLog?: {
+        create(args: { data: Record<string, unknown> }): Promise<unknown>;
+    };
 }
 
 /** 生產環境預設實作：包一層真正的 prisma。集中在這裡做型別轉換，其餘程式碼不需要 any。 */
@@ -209,6 +215,9 @@ export const realEntryDb: EntryWriteDb = {
                 data: args.data,
             } as Parameters<typeof prisma.entry.update>[0]),
     },
+    operationLog: {
+        create: (args) => prisma.operationLog.create({ data: args.data } as Parameters<typeof prisma.operationLog.create>[0]),
+    },
 };
 
 export type UpsertMode = 'skip-if-exists' | 'overwrite';
@@ -220,6 +229,8 @@ interface UpsertExpenseEntryBaseParams {
     amount: number;
     userId: string | null;
     mode: UpsertMode;
+    /** 有給才寫稽核（OperationLog，module=ENTRY），值是來源標記，例如 CASH_COUNT。 */
+    auditSource?: string;
 }
 
 export type UpsertExpenseEntryParams =
@@ -263,6 +274,34 @@ export interface UpsertExpenseEntryResult {
  * matchMode='note'：維持舊版完全相等比對，給 note 是自由文字（非攤位標籤）的
  *   情境用。
  */
+async function auditEntryWrite(
+    db: EntryWriteDb,
+    params: UpsertExpenseEntryParams,
+    entryId: string,
+    action: 'created' | 'updated',
+    before: number | null
+): Promise<void> {
+    if (!params.auditSource || !db.operationLog) return;
+    try {
+        await db.operationLog.create({
+            data: buildEntryAudit({
+                userId: params.userId,
+                tenantId: params.tenantId,
+                dateStr: formatDateInput(params.date), // 本地日期（date 是本地午夜，不能用 toISOString）
+                entryId,
+                expenseType: params.expenseType,
+                action,
+                before,
+                after: params.amount,
+                source: params.auditSource,
+                mode: params.mode,
+            }),
+        });
+    } catch (err) {
+        console.error('upsertExpenseEntry: audit log failed (non-fatal):', err);
+    }
+}
+
 export async function upsertExpenseEntry(
     db: EntryWriteDb,
     params: UpsertExpenseEntryParams
@@ -309,6 +348,7 @@ export async function upsertExpenseEntry(
         // [重要] 只更新金額，note 欄位絕對不動 —— 既有 Entry 的原始寫法（就算是錯字）
         // 是 owner 的原始輸入憑證，不因為正規化比對邏輯而被改寫。
         await db.entry.update({ where: { id: existing.id }, data: { totalPrice: params.amount, updatedAt: new Date() } });
+        await auditEntryWrite(db, params, existing.id, 'updated', existing.totalPrice);
         return { action: 'updated', entryId: existing.id };
     }
 
@@ -324,6 +364,7 @@ export async function upsertExpenseEntry(
             status: 'APPROVED',
         },
     });
+    await auditEntryWrite(db, params, created.id, 'created', null);
     return { action: 'created', entryId: created.id };
 }
 
@@ -346,7 +387,8 @@ export async function applyFixedExpenses(
     date: Date,
     stall: StallCode,
     userId: string | null,
-    items: FixedExpenseLine[]
+    items: FixedExpenseLine[],
+    auditSource?: string
 ): Promise<ApplyFixedExpensesResult> {
     const result: ApplyFixedExpensesResult = { created: [], updated: [], skipped: [] };
 
@@ -358,6 +400,7 @@ export async function applyFixedExpenses(
             amount: item.amount,
             userId,
             mode: 'skip-if-exists',
+            auditSource,
             matchMode: 'stall',
             stall,
         });

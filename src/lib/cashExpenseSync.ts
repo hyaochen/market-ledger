@@ -84,7 +84,8 @@ export async function syncCashExpensesToEntry(
     date: Date,
     stall: StallCode,
     userId: string | null,
-    rows: CashExpenseRowInput[]
+    rows: CashExpenseRowInput[],
+    auditSource?: string
 ): Promise<CashExpenseSyncResult> {
     const stallLabel = stallCanonicalLabel(stall);
     const miscDict = await prisma.dictionary.findFirst({
@@ -119,6 +120,7 @@ export async function syncCashExpensesToEntry(
                   amount: row.amount,
                   userId,
                   mode: 'overwrite',
+                  auditSource,
                   matchMode: 'stall',
                   stall,
               })
@@ -130,6 +132,7 @@ export async function syncCashExpensesToEntry(
                   amount: row.amount,
                   userId,
                   mode: 'overwrite',
+                  auditSource,
                   matchMode: 'note',
               });
 
