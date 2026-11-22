@@ -5,6 +5,15 @@ import { revalidatePath } from 'next/cache';
 import { hashPasswordAsync } from '@/lib/password';
 import { getCurrentUser } from '@/lib/auth';
 import { usernameTaken, validateNewPassword, validateUsername } from '@/lib/username';
+import {
+    buildPasswordResetAudit,
+    buildTenantCreateAudit,
+    buildTenantStatusAudit,
+    buildTenantUpdateAudit,
+    recordPrivilegedAudit,
+    requestIp,
+    writePrivilegedAudit,
+} from '@/lib/privileged-audit';
 
 async function requireSuperAdmin() {
     const user = await getCurrentUser();
@@ -85,13 +94,15 @@ export async function createTenant(formData: FormData) {
             return { success: false, error: '系統角色尚未建立，請先執行 seed' };
         }
 
-        // Create tenant + admin user in a transaction
+        const ip = await requestIp();
+
+        // Create tenant + admin user (+ 稽核紀錄) in a transaction
         const tenant = await prisma.$transaction(async (tx) => {
             const newTenant = await tx.tenant.create({
                 data: { name, code, note },
             });
 
-            await tx.user.create({
+            const adminUser = await tx.user.create({
                 data: {
                     username: adminUsername,
                     password: hashedPassword,
@@ -102,6 +113,17 @@ export async function createTenant(formData: FormData) {
                     },
                 },
             });
+
+            await writePrivilegedAudit(tx, buildTenantCreateAudit({
+                actorId: auth.user.id,
+                ip,
+                tenantId: newTenant.id,
+                code,
+                name,
+                note,
+                adminUserId: adminUser.id,
+                adminUsername,
+            }));
 
             return newTenant;
         });
@@ -127,9 +149,22 @@ export async function updateTenant(id: string, formData: FormData) {
             return { success: false, error: '請填寫企業名稱' };
         }
 
-        await prisma.tenant.update({
-            where: { id },
-            data: { name, note },
+        const ip = await requestIp();
+        // 稽核寫在同一個交易裡；企業不存在時 update 會丟錯，行為與原本相同（走 catch）
+        await prisma.$transaction(async (tx) => {
+            const before = await tx.tenant.findUnique({ where: { id }, select: { code: true, name: true, note: true } });
+            await tx.tenant.update({
+                where: { id },
+                data: { name, note },
+            });
+            await writePrivilegedAudit(tx, buildTenantUpdateAudit({
+                actorId: auth.user.id,
+                ip,
+                tenantId: id,
+                code: before?.code ?? id,
+                before: { name: before?.name ?? '', note: before?.note ?? null },
+                after: { name, note },
+            }));
         });
 
         revalidatePath('/super-admin');
@@ -147,9 +182,22 @@ export async function toggleTenantStatus(id: string, status: boolean) {
         const auth = await requireSuperAdmin();
         if (!auth.ok) return { success: false, error: auth.error };
 
-        await prisma.tenant.update({
-            where: { id },
-            data: { status },
+        const ip = await requestIp();
+        await prisma.$transaction(async (tx) => {
+            const before = await tx.tenant.findUnique({ where: { id }, select: { code: true, name: true, status: true } });
+            await tx.tenant.update({
+                where: { id },
+                data: { status },
+            });
+            await writePrivilegedAudit(tx, buildTenantStatusAudit({
+                actorId: auth.user.id,
+                ip,
+                tenantId: id,
+                code: before?.code ?? id,
+                name: before?.name ?? '',
+                before: before?.status ?? false,
+                after: status,
+            }));
         });
 
         revalidatePath('/super-admin');
@@ -169,7 +217,7 @@ export async function resetUserPassword(userId: string, newPassword: string) {
         const pwErr = validateNewPassword(newPassword);
         if (pwErr) return { success: false, error: pwErr };
 
-        const target = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
+        const target = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, username: true, tenantId: true } });
         if (!target) return { success: false, error: '使用者不存在' };
 
         const hashedPassword = await hashPasswordAsync(newPassword);
@@ -183,6 +231,15 @@ export async function resetUserPassword(userId: string, newPassword: string) {
         await prisma.systemConfig.deleteMany({
             where: { key: { startsWith: 'tg_session_' }, value: { contains: `"userId":"${userId}"` } },
         });
+
+        // 稽核只記誰重設了誰；不記任何密碼相關的值。操作成功之後才寫，失敗不回滾
+        await recordPrivilegedAudit(buildPasswordResetAudit({
+            actorId: auth.user.id,
+            ip: await requestIp(),
+            tenantId: target.tenantId,
+            userId: target.id,
+            username: target.username,
+        }));
 
         revalidatePath('/super-admin');
         return { success: true };

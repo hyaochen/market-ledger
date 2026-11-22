@@ -461,3 +461,255 @@ test("login：不存在的帳號回應與密碼錯誤相同，且也有記錄", 
     // 不存在的帳號不記原字串（可能是打錯欄位的密碼）
     assert.equal(await prisma.operationLog.count({ where: { target: "ghost-user" } }), 0);
 });
+
+// ---- 7. 特權操作稽核（OperationLog） ----
+// 用自己新建的租戶與使用者，不動前面測試依賴的狀態。
+const PRIV_MODULES = ["USER", "TENANT", "AUTH"];
+const privLogs = async () => {
+    const rows = await prisma.operationLog.findMany({ where: { module: { in: PRIV_MODULES } }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] });
+    return rows.map((r: any) => ({ ...r, d: r.details ? JSON.parse(r.details) : null }));
+};
+const privCount = async () => (await privLogs()).length;
+const lastPriv = async () => {
+    const all = await privLogs();
+    return all[all.length - 1];
+};
+const AUDIT_IP = "198.51.100.9";
+
+test("稽核：租戶 admin 的帳號操作各留一筆紀錄（欄位、tenantId、IP 正確）；被擋與驗證失敗不留", async () => {
+    requestHeaders = { "cf-connecting-ip": AUDIT_IP };
+    ids.auditT = (await prisma.tenant.create({ data: { name: "稽核企業", code: "audit-co" } })).id;
+    ids.auditDept = (await prisma.department.create({ data: { name: "稽核部門", tenantId: ids.auditT } })).id;
+    HASH.auditAdmin = sha("pw-auditAdmin-12345");
+    ids.auditAdmin = (await prisma.user.create({
+        data: { username: "auditAdmin", password: HASH.auditAdmin, tenantId: ids.auditT, realName: "稽核管理員", roles: { create: { roleId: ids.role_admin } } },
+    })).id;
+
+    // 沒有權限 / 驗證失敗：不留紀錄
+    const n0 = await privCount();
+    await actAs("readA");
+    assert.equal((await admin.createUser(form({ username: "nobody", password: "password123", roles: [ids.role_read] }))).success, false);
+    await actAs("adminB");
+    assert.equal((await admin.toggleUserStatus(ids.auditAdmin, false)).success, false);
+    await actAs("auditAdmin");
+    assert.equal((await admin.createUser(form({ username: "auditNew", password: "short", roles: [ids.role_read] }))).success, false);
+    assert.equal(await privCount(), n0, "被擋下與驗證失敗不得留下紀錄");
+
+    // createUser
+    const r1 = await admin.createUser(form({ username: "auditNew", realName: "稽核新人", password: "password123", departmentId: ids.auditDept, roles: [ids.role_read] }));
+    assert.equal(r1.success, true);
+    const created = await prisma.user.findFirst({ where: { username: "auditNew" } });
+    assert.equal(await privCount(), n0 + 1);
+    let l = await lastPriv();
+    assert.deepEqual([l.action, l.module, l.target, l.status, l.ip], ["CREATE", "USER", "auditNew", "SUCCESS", AUDIT_IP]);
+    assert.equal(l.userId, ids.auditAdmin);
+    assert.equal(l.tenantId, ids.auditT);
+    assert.deepEqual(l.d, {
+        op: "user.create",
+        userId: created.id,
+        before: null,
+        after: { username: "auditNew", realName: "稽核新人", departmentId: ids.auditDept, roleCodes: ["read"], status: true },
+    });
+    assert.doesNotMatch(l.details, /password123/);
+    assert.equal(l.details.includes(created.password), false);
+
+    // toggleUserStatus
+    assert.equal((await admin.toggleUserStatus(created.id, false)).success, true);
+    l = await lastPriv();
+    assert.deepEqual([l.action, l.module, l.target, l.tenantId], ["UPDATE", "USER", "auditNew", ids.auditT]);
+    assert.deepEqual(l.d, { op: "user.status", userId: created.id, before: { status: true }, after: { status: false } });
+    assert.equal(await privCount(), n0 + 2);
+
+    // updateUserRole
+    assert.equal((await admin.updateUserRole(created.id, ids.role_write)).success, true);
+    l = await lastPriv();
+    assert.deepEqual([l.action, l.module, l.target, l.tenantId], ["UPDATE", "USER", "auditNew", ids.auditT]);
+    assert.deepEqual(l.d, { op: "user.role", userId: created.id, before: { roleCodes: ["read"] }, after: { roleCodes: ["write"] } });
+    assert.equal(await privCount(), n0 + 3);
+
+    // 失敗的操作（最後一位管理者不能降級）不留紀錄
+    assert.equal((await admin.updateUserRole(ids.auditAdmin, ids.role_read)).success, false);
+    assert.equal(await privCount(), n0 + 3);
+    ids.auditNew = created.id;
+});
+
+test("deleteUser 的實際行為：有角色刪不掉（外鍵擋下、不留紀錄）；沒角色才刪得掉，記帳紀錄不擋（userId 變 null）；成功才寫紀錄", async () => {
+    await actAs("auditAdmin");
+    const n0 = await privCount();
+
+    // 1. 有 UserRole 的使用者：刪除失敗（UserRole.userId 沒有 onDelete，預設 Restrict）
+    const rolesBefore = await prisma.userRole.count({ where: { userId: ids.auditNew } });
+    assert.equal(rolesBefore, 1);
+    const fail = await admin.deleteUser(ids.auditNew);
+    assert.deepEqual(fail, { success: false, error: "刪除失敗" });
+    assert.ok(await prisma.user.findUnique({ where: { id: ids.auditNew } }), "使用者還在");
+    assert.equal(await privCount(), n0, "失敗不留紀錄");
+
+    // 2. 沒角色、有記帳紀錄：Entry.userId 是可空的關聯（預設 SetNull）：刪得掉，Entry 保留
+    await prisma.userRole.deleteMany({ where: { userId: ids.auditNew } });
+    const entry = await prisma.entry.create({
+        data: { date: new Date(), type: "EXPENSE", totalPrice: 100, note: "稽核測試支出", userId: ids.auditNew, tenantId: ids.auditT },
+    });
+    const ok = await admin.deleteUser(ids.auditNew);
+    assert.equal(ok.success, true);
+    assert.equal(await prisma.user.findUnique({ where: { id: ids.auditNew } }), null);
+    const keptEntry = await prisma.entry.findUnique({ where: { id: entry.id } });
+    assert.ok(keptEntry && keptEntry.userId === null, "記帳紀錄保留，userId 變 null");
+
+    assert.equal(await privCount(), n0 + 1);
+    const l = await lastPriv();
+    assert.deepEqual([l.action, l.module, l.target, l.userId, l.tenantId, l.ip], ["DELETE", "USER", "auditNew", ids.auditAdmin, ids.auditT, AUDIT_IP]);
+    assert.deepEqual(l.d, { op: "user.delete", userId: ids.auditNew, before: { username: "auditNew", roleCodes: [], status: false }, after: null });
+});
+
+test("稽核：super admin 的企業操作與重設密碼（紀錄歸在被操作的企業；不含密碼與雜湊）", async () => {
+    const pw = "ZzSecretPw-98765";
+    const n0 = await privCount();
+
+    // 被擋：租戶 admin 呼叫不留紀錄
+    await actAs("auditAdmin");
+    assert.equal((await superAdmin.toggleTenantStatus(ids.auditT, false)).success, false);
+    assert.equal((await superAdmin.resetUserPassword(ids.auditAdmin, "newpassword123")).success, false);
+    assert.equal(await privCount(), n0);
+
+    await actAs("super", null);
+    // createTenant（交易內：企業、管理者、稽核一起）
+    const created = await superAdmin.createTenant(form({ name: "丁企業", code: "audit-d", adminUsername: "auditDAdmin", adminPassword: pw, note: "測試備註" }));
+    assert.equal(created.success, true);
+    const tenantD = await prisma.tenant.findUnique({ where: { code: "audit-d" } });
+    const adminD = await prisma.user.findFirst({ where: { username: "auditDAdmin" } });
+    let l = await lastPriv();
+    assert.deepEqual([l.action, l.module, l.target, l.userId, l.tenantId, l.ip], ["CREATE", "TENANT", "audit-d", ids.super, tenantD.id, AUDIT_IP]);
+    assert.deepEqual(l.d, {
+        op: "tenant.create",
+        tenantId: tenantD.id,
+        before: null,
+        after: { code: "audit-d", name: "丁企業", note: "測試備註", status: true },
+        adminUserId: adminD.id,
+        adminUsername: "auditDAdmin",
+    });
+    assert.equal(l.details.includes(pw), false);
+    assert.equal(l.details.includes(adminD.password), false);
+
+    // updateTenant
+    assert.equal((await superAdmin.updateTenant(tenantD.id, form({ name: "丁企業改名", note: "" }))).success, true);
+    l = await lastPriv();
+    assert.deepEqual([l.action, l.module, l.target, l.tenantId], ["UPDATE", "TENANT", "audit-d", tenantD.id]);
+    assert.deepEqual(l.d, { op: "tenant.update", tenantId: tenantD.id, before: { name: "丁企業", note: "測試備註" }, after: { name: "丁企業改名", note: null } });
+
+    // toggleTenantStatus（停用再啟用，各一筆）
+    assert.equal((await superAdmin.toggleTenantStatus(tenantD.id, false)).success, true);
+    l = await lastPriv();
+    assert.deepEqual(l.d, { op: "tenant.status", tenantId: tenantD.id, tenantName: "丁企業改名", before: { status: true }, after: { status: false } });
+    assert.equal((await superAdmin.toggleTenantStatus(tenantD.id, true)).success, true);
+    assert.deepEqual((await lastPriv()).d.after, { status: true });
+    assert.equal(await privCount(), n0 + 4);
+
+    // 不存在的企業：操作失敗、不留紀錄
+    assert.equal((await superAdmin.updateTenant("no-such-tenant", form({ name: "x" }))).success, false);
+    assert.equal((await superAdmin.toggleTenantStatus("no-such-tenant", false)).success, false);
+    assert.equal(await privCount(), n0 + 4);
+
+    // resetUserPassword：tenantId 是被重設者所屬企業；details 不含密碼或雜湊（新舊都不含）
+    const oldHash = (await prisma.user.findUnique({ where: { id: ids.auditAdmin } })).password;
+    const newPw = "BrandNewPw-24680";
+    const r = await superAdmin.resetUserPassword(ids.auditAdmin, newPw);
+    assert.equal(r.success, true);
+    const newHash = (await prisma.user.findUnique({ where: { id: ids.auditAdmin } })).password;
+    assert.notEqual(newHash, oldHash);
+    l = await lastPriv();
+    assert.deepEqual([l.action, l.module, l.target, l.userId, l.tenantId, l.ip], ["UPDATE", "USER", "auditAdmin", ids.super, ids.auditT, AUDIT_IP]);
+    assert.deepEqual(l.d, { op: "user.password_reset", userId: ids.auditAdmin, sessionsRevoked: true });
+    for (const secret of [newPw, oldHash, newHash, HASH.auditAdmin]) assert.equal(l.details.includes(secret), false);
+    // 全部新紀錄整列（含所有欄位）都不能出現這些密碼與雜湊
+    const dump = JSON.stringify((await privLogs()).slice(n0));
+    for (const secret of [pw, newPw, oldHash, newHash, adminD.password]) assert.equal(dump.includes(secret), false);
+
+    // 重設不存在的使用者：失敗、不留紀錄
+    const n1 = await privCount();
+    assert.equal((await superAdmin.resetUserPassword("no-such-user", "newpassword123")).success, false);
+    assert.equal(await privCount(), n1);
+    ids.auditD = tenantD.id;
+});
+
+test("稽核：switchToTenant / switchBackToSuperAdmin 記進入與離開的企業；失敗與重複離開不留紀錄", async () => {
+    const n0 = await privCount();
+    // 非 super admin 與不存在的企業
+    await actAs("adminA");
+    assert.equal((await authActions.switchToTenant(ids.auditT)).success, false);
+    assert.equal((await authActions.switchBackToSuperAdmin()).success, false);
+    await actAs("super", null);
+    assert.equal((await authActions.switchToTenant("no-such-tenant")).success, false);
+    assert.equal(await privCount(), n0);
+
+    // 沒進任何企業就「離開」：沒有東西可記
+    assert.equal((await authActions.switchBackToSuperAdmin()).success, true);
+    assert.equal(await privCount(), n0);
+
+    // 進入（action 自己換 session cookie，後面的離開沿用）
+    assert.equal((await authActions.switchToTenant(ids.auditT)).success, true);
+    let l = await lastPriv();
+    assert.deepEqual([l.action, l.module, l.target, l.userId, l.tenantId, l.ip], ["SWITCH", "AUTH", "audit-co", ids.super, ids.auditT, AUDIT_IP]);
+    assert.deepEqual(l.d, { op: "tenant.switch_in", tenantId: ids.auditT, tenantName: "稽核企業" });
+
+    // 離開：tenantId 是離開前所在的企業
+    assert.equal((await authActions.switchBackToSuperAdmin()).success, true);
+    l = await lastPriv();
+    assert.deepEqual([l.action, l.module, l.target, l.userId, l.tenantId], ["SWITCH", "AUTH", "audit-co", ids.super, ids.auditT]);
+    assert.deepEqual(l.d, { op: "tenant.switch_back", tenantId: ids.auditT, tenantName: "稽核企業" });
+    assert.equal(await privCount(), n0 + 2);
+});
+
+test("稽核：該企業的 admin 在操作紀錄看得到 super admin 對他們做的事", async () => {
+    await actAs("auditAdmin");
+    const logs = await admin.getOperationLogs();
+    const ops = logs.filter((x: any) => x.module !== "SYSTEM").map((x: any) => JSON.parse(x.details).op);
+    for (const op of ["user.create", "user.status", "user.role", "user.delete", "user.password_reset", "tenant.switch_in", "tenant.switch_back"]) {
+        assert.ok(ops.includes(op), `${op} 應出現在 auditAdmin 的操作紀錄`);
+    }
+    const reset = logs.find((x: any) => x.details && JSON.parse(x.details).op === "user.password_reset");
+    assert.equal(reset.user.username, "superboss");
+    assert.equal("password" in reset.user, false);
+    // 別企業的操作（丁企業建立）不會出現在這裡
+    assert.equal(logs.some((x: any) => x.target === "audit-d"), false);
+    assert.ok(logs.every((x: any) => x.tenantId === ids.auditT));
+});
+
+test("稽核寫入失敗：交易內的操作整個回滾、事後寫入的操作不回滾（只留一行 console.error，不含敏感值）", async () => {
+    const errors: string[] = [];
+    const origError = console.error;
+    console.error = (...a: unknown[]) => { errors.push(a.map(String).join(" ")); };
+    try {
+        // 用 SQLite trigger 讓特定 target 的稽核寫入一定失敗
+        await prisma.$executeRawUnsafe("CREATE TRIGGER audit_boom BEFORE INSERT ON OperationLog WHEN NEW.target IN ('boomuser', 'boom-co') BEGIN SELECT RAISE(ABORT, 'audit down'); END");
+        const boom = await prisma.user.create({
+            data: { username: "boomuser", password: sha("pw-boom-12345"), tenantId: ids.auditT, realName: "爆炸測試", roles: { create: { roleId: ids.role_read } } },
+        });
+        const boomTenant = await prisma.tenant.create({ data: { name: "爆炸企業", code: "boom-co" } });
+        const n0 = await privCount();
+
+        // 交易內：updateUserRole 回滾
+        await actAs("auditAdmin");
+        const rr = await admin.updateUserRole(boom.id, ids.role_write);
+        assert.equal(rr.success, false);
+        const roles = await prisma.userRole.findMany({ where: { userId: boom.id }, include: { role: true } });
+        assert.deepEqual(roles.map((x: any) => x.role.code), ["read"], "角色變更必須回滾");
+
+        // 交易內：updateTenant 回滾
+        await actAs("super", null);
+        assert.equal((await superAdmin.updateTenant(boomTenant.id, form({ name: "改了" }))).success, false);
+        assert.equal((await prisma.tenant.findUnique({ where: { id: boomTenant.id } })).name, "爆炸企業");
+
+        // 事後寫入：toggleUserStatus 成功，只有一行 console.error
+        await actAs("auditAdmin");
+        errors.length = 0;
+        assert.equal((await admin.toggleUserStatus(boom.id, false)).success, true);
+        assert.equal((await prisma.user.findUnique({ where: { id: boom.id } })).status, false);
+        assert.equal(await privCount(), n0, "稽核沒寫進去");
+        assert.equal(errors.filter((e) => e.includes("[audit]")).length, 1);
+        for (const e of errors) assert.equal(/boomuser|爆炸|password|\$2/i.test(e), false, "console.error 不含帳號或敏感值");
+    } finally {
+        console.error = origError;
+        await prisma.$executeRawUnsafe("DROP TRIGGER IF EXISTS audit_boom");
+    }
+});

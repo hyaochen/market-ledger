@@ -15,6 +15,7 @@ import {
 import { KNOWN_DEVICE_COOKIE, KNOWN_DEVICE_MAX_AGE_SEC, signKnownDevice, verifyKnownDevice } from "@/lib/known-device";
 import { passwordGate } from "@/lib/bcrypt-gate";
 import { revokeUserSessions } from "@/lib/session-revocation";
+import { buildTenantSwitchAudit, recordPrivilegedAudit, requestIp } from "@/lib/privileged-audit";
 
 // 統一最小回應時間：失敗路徑（含帳號不存在、被鎖定）都補到這個時間，降低帳號列舉的 timing 差異。
 // 帳號不存在時另外會跑一次 dummy bcrypt，所以不是只靠這個 padding。
@@ -265,6 +266,14 @@ export async function switchToTenant(tenantId: string) {
     }
 
     await setSessionCookie({ userId: user.id, tenantId: tenant.id, isSuperAdmin: true, pwv: payload.pwv });
+    await recordPrivilegedAudit(buildTenantSwitchAudit({
+        actorId: user.id,
+        ip: await requestIp(),
+        direction: "in",
+        tenantId: tenant.id,
+        code: tenant.code,
+        name: tenant.name,
+    }));
     return { success: true };
 }
 
@@ -276,7 +285,22 @@ export async function switchBackToSuperAdmin() {
         return { success: false, error: "權限不足" };
     }
 
+    // 離開前所在的企業（沒進任何企業時沒有東西可記）
+    const leftTenant = payload.tenantId
+        ? await prisma.tenant.findUnique({ where: { id: payload.tenantId }, select: { id: true, code: true, name: true } })
+        : null;
+
     await setSessionCookie({ userId: user.id, tenantId: null, isSuperAdmin: true, pwv: payload.pwv });
+    if (leftTenant) {
+        await recordPrivilegedAudit(buildTenantSwitchAudit({
+            actorId: user.id,
+            ip: await requestIp(),
+            direction: "back",
+            tenantId: leftTenant.id,
+            code: leftTenant.code,
+            name: leftTenant.name,
+        }));
+    }
     return { success: true };
 }
 
