@@ -74,18 +74,35 @@ function tokensEqual(provided, expected) {
     return crypto.timingSafeEqual(a, b); // 先雜湊成等長，避免 length 洩漏與 timingSafeEqual 長度例外
 }
 
-/** 回傳 null 表示放行，否則 { status, errorType, error }。token 以參數傳入，方便測試。 */
+/**
+ * 回傳 null 表示放行，否則 { status, errorType, error }。token 以參數傳入，方便測試。
+ * token 沒設定 = 一律拒絕（fail closed）。以前沒設就放行，等於 .env 少一行或讀不到時，
+ * 本機任何程式與同一台 Docker 上的任何容器都能用 owner 的訂閱額度，而且沒有任何徵兆。
+ */
 function checkRequestAuth(req, token) {
     if (req.headers['origin'] !== undefined) {
         return { status: 403, errorType: 'forbidden_origin', error: 'requests with an Origin header are rejected' };
     }
-    if (token) {
-        const m = /^Bearer (.+)$/.exec(req.headers['authorization'] || '');
-        if (!m || !tokensEqual(m[1], token)) {
-            return { status: 401, errorType: 'unauthorized', error: 'missing or invalid bearer token' };
-        }
+    if (!token) {
+        return { status: 503, errorType: 'auth_not_configured', error: 'CLAUDE_BRIDGE_TOKEN is not set; the bridge refuses all requests' };
+    }
+    const m = /^Bearer (.+)$/.exec(req.headers['authorization'] || '');
+    if (!m || !tokensEqual(m[1], token)) {
+        return { status: 401, errorType: 'unauthorized', error: 'missing or invalid bearer token' };
     }
     return null;
+}
+
+/**
+ * /health 的回應。不需要 token（bot 啟動時與 watchdog 用來探測，不含敏感資訊），
+ * 但 token 沒設定時回 503：這樣 bot 啟動時的健康檢查會失敗並通知 owner，
+ * 而不是顯示健康、實際上每個 /chat 都被拒絕。
+ */
+function healthResponse(token, stats) {
+    if (!token) {
+        return { status: 503, body: { ok: false, errorType: 'auth_not_configured', error: 'CLAUDE_BRIDGE_TOKEN is not set' } };
+    }
+    return { status: 200, body: { ok: true, ...stats } };
 }
 
 // ── 找出真正可以 shell:false 直接 spawn 的 claude 執行檔 ─────────────────
@@ -368,8 +385,7 @@ const server = http.createServer((req, res) => {
         return;
     }
     if (isHealth) {
-        respond(res, 200, {
-            ok: true,
+        const health = healthResponse(AUTH_TOKEN, {
             model: MODEL,
             maxConcurrent: MAX_CONCURRENT,
             activeCount,
@@ -377,6 +393,7 @@ const server = http.createServer((req, res) => {
             pid: process.pid,
             uptimeSec: Math.round(process.uptime()),
         });
+        respond(res, health.status, health.body);
         return;
     }
     if (req.method === 'POST' && req.url === '/chat') {
@@ -410,8 +427,10 @@ function main() {
         console.log(`[claude-bridge] listening on http://${BIND}:${PORT} (pid ${process.pid}, model=${MODEL})`);
         console.log(`[claude-bridge] claude bin: ${CLAUDE_BIN} (shell=${CLAUDE_SHELL})`);
         if (!AUTH_TOKEN) {
-            console.warn('[claude-bridge] WARNING: CLAUDE_BRIDGE_TOKEN is not set -- /chat accepts any local caller.');
-            console.warn('[claude-bridge] Set CLAUDE_BRIDGE_TOKEN in the repo .env (see README.md).');
+            // 刻意不 process.exit：run-hidden.bat 會每 5 秒重啟一次，token 沒設時只會把 log 灌滿。
+            // 留著 process 但拒絕所有請求（/chat 與 /health 都回 503），bot 會退回 ollama 並在啟動時通知 owner。
+            console.error('[claude-bridge] ERROR: CLAUDE_BRIDGE_TOKEN is not set -- every request is refused (503 auth_not_configured).');
+            console.error('[claude-bridge] Set CLAUDE_BRIDGE_TOKEN in the repo .env (see README.md) and restart the bridge.');
         }
         console.log('[claude-bridge] Ctrl+C to stop');
     });
@@ -428,4 +447,4 @@ if (require.main === module) {
     main();
 }
 
-module.exports = { checkRequestAuth, tokensEqual, readEnvFileKey, ALLOWED_MODELS, server };
+module.exports = { checkRequestAuth, healthResponse, tokensEqual, readEnvFileKey, ALLOWED_MODELS, server };

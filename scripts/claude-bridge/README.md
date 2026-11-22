@@ -140,7 +140,7 @@ process 層級的 `alreadyAlertedThisProcess` flag 防重複告警（純防禦�
 | `CLAUDE_BRIDGE_MAX_CONCURRENT` | `2` | 同時最多跑幾個 `claude -p` process（並發保護，見下方） |
 | `CLAUDE_BRIDGE_TIMEOUT_MS` | `25000` | 單一請求的總預算（排隊等待 + 執行時間）。刻意小於 `parser.ts` 呼叫端的 30s fetch timeout，讓 bridge 有機會先回一個乾淨的錯誤 JSON |
 | `CLAUDE_BRIDGE_BIN` | 自動偵測 | 手動指定 claude 執行檔路徑（遇到自動偵測失敗時用，見下方踩坑記錄）|
-| `CLAUDE_BRIDGE_TOKEN` | 無（**強烈建議設**）| T-ML-037：設了之後 `/chat` 必須帶 `Authorization: Bearer <token>`，見下方「認證」|
+| `CLAUDE_BRIDGE_TOKEN` | 無（**必填**）| `/chat` 必須帶 `Authorization: Bearer <token>`。沒設定時 bridge 拒絕所有請求（`/chat` 與 `/health` 都回 503），見下方「認證」|
 | `CLAUDE_BRIDGE_ALLOWED_MODELS` | `sonnet,haiku,opus` | T-ML-037：請求 `model` 欄位的白名單（逗號分隔；預設模型一定允許）|
 
 [重要] **`CLAUDE_BRIDGE_BIND`（或任何形式的「讓它聽 0.0.0.0」）刻意沒有實作** —— bind 寫死在程式碼裡
@@ -156,9 +156,13 @@ process 層級的 `alreadyAlertedThisProcess` flag 防重複告警（純防禦�
 
 1. **Origin 一律拒絕**：任何帶 `Origin` header 的請求回 403（瀏覽器發的請求一定帶；bot 的 Node
    `fetch` 不帶）。`/health` 也擋 Origin。
-2. **Bearer token**：設了 `CLAUDE_BRIDGE_TOKEN` 之後，`POST /chat` 沒帶或帶錯
-   `Authorization: Bearer <token>` 回 401（constant-time 比對）。`GET /health` 不需 token
-   （bot 啟動健康檢查與 watchdog 用，不含敏感資訊）。
+2. **Bearer token**：`POST /chat` 沒帶或帶錯 `Authorization: Bearer <token>` 回 401
+   （constant-time 比對）。`GET /health` 不需 token（bot 啟動健康檢查與 watchdog 用，不含敏感資訊）。
+   **`CLAUDE_BRIDGE_TOKEN` 沒設定時一律拒絕（T-ML-040）**：`/chat` 與 `/health` 都回 503
+   `auth_not_configured`。以前沒設就放行，`.env` 少一行或讀不到時，本機任何程式與同一台 Docker
+   上的任何容器都能用訂閱額度，而且沒有徵兆。現在的行為：bot 的記帳解析退回 Ollama（功能不壞），
+   bot 啟動時的健康檢查會失敗並通知 owner，bridge 的 log 有 `ERROR: CLAUDE_BRIDGE_TOKEN is not set`。
+   bridge 不會因此結束（`run-hidden.bat` 每 5 秒重啟一次，結束只會把 log 灌滿）。
 3. `model` 欄位必須在白名單內，否則 400。
 
 ### 怎麼設定 token（owner 要做的事）

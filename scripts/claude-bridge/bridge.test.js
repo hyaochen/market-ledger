@@ -27,8 +27,29 @@ test('checkRequestAuth: token required when configured', () => {
     assert.equal(bridge.checkRequestAuth(req({ authorization: `Bearer ${TOKEN}` }), TOKEN), null);
 });
 
-test('checkRequestAuth: no token configured -> only Origin check applies', () => {
-    assert.equal(bridge.checkRequestAuth(req({}), ''), null);
+test('checkRequestAuth: no token configured -> every request is refused (fail closed)', () => {
+    for (const token of ['', undefined, null]) {
+        const r = bridge.checkRequestAuth(req({}), token);
+        assert.equal(r.status, 503);
+        assert.equal(r.errorType, 'auth_not_configured');
+        // a caller that sends some bearer value still must not get through
+        assert.equal(bridge.checkRequestAuth(req({ authorization: 'Bearer anything' }), token).status, 503);
+        assert.equal(bridge.checkRequestAuth(req({ authorization: 'Bearer ' }), token).status, 503);
+    }
+    // Origin is still rejected first
+    assert.equal(bridge.checkRequestAuth(req({ origin: 'https://evil.example' }), '').status, 403);
+});
+
+test('healthResponse: 503 when no token is configured, 200 with stats otherwise', () => {
+    const down = bridge.healthResponse('', { model: 'sonnet' });
+    assert.equal(down.status, 503);
+    assert.equal(down.body.ok, false);
+    assert.equal(down.body.errorType, 'auth_not_configured');
+    assert.equal(down.body.model, undefined);
+
+    const up = bridge.healthResponse(TOKEN, { model: 'sonnet', activeCount: 0 });
+    assert.equal(up.status, 200);
+    assert.deepEqual(up.body, { ok: true, model: 'sonnet', activeCount: 0 });
 });
 
 test('tokensEqual handles different lengths without throwing', () => {
