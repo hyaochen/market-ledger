@@ -225,7 +225,14 @@ async function handleLoginOnce(c: MsgCtx): Promise<void> {
     await loginThrottle.recordSuccess(throttleKeys);
 
     const replayText = getState(chatId).pendingReplayText;
-    setState(chatId, { phase: 'idle', pendingReplayText: null });
+    // 換帳號（可能是另一個租戶）登入：同時清掉這個 chat 殘留的待確認／待新增狀態，
+    // 舊租戶的 itemId／vendorId 不能被確認進新租戶。靜音設定保留；重播文字上一行已取出，
+    // 重播會重新走一次完整解析，用的是新租戶的資料。
+    setState(chatId, {
+        phase: 'idle', pendingReplayText: null,
+        pendingEntries: [], confirmedEntries: [], uncertainQueue: [], currentUncertain: null,
+        newItemPending: null, pendingClarifyText: null, pendingLogId: undefined,
+    });
 
     await bot.sendMessage(chatId,
         `登入成功，歡迎 ${newSession.realName || newSession.username}！\n帳戶：${newSession.tenantName}（${newSession.roleCode === 'admin' ? '管理員' : '一般'}）\n登入有效期 90 天。${deletedNote}\n\n直接輸入記帳內容開始記錄。\n查資料就傳 /menu 叫出按鈕選單。`);

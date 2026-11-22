@@ -85,9 +85,14 @@ async function onVendorSelect(c: CbCtx): Promise<void> {
     const pending = state.newItemPending;
     if (!pending) return;
     const vendorId = data.replace('vendor_select_', '');
+    // callback_data 可被偽造：id 必須在這個租戶的廠商清單裡，否則保持原狀態、讓使用者重選
     const vendor = ctx.vendors.find(v => v.id === vendorId);
-    addToConfirmed(chatId, { ...pending.entry, vendorId, vendorName: vendor?.name ?? null });
-    await bot.sendMessage(chatId, `廠商：${vendor?.name ?? vendorId}`);
+    if (!vendor) {
+        await bot.sendMessage(chatId, '找不到這個廠商，請重新選擇。');
+        return;
+    }
+    addToConfirmed(chatId, { ...pending.entry, vendorId: vendor.id, vendorName: vendor.name });
+    await bot.sendMessage(chatId, `廠商：${vendor.name}`);
     const next = exitNewItemFlow(chatId);
     if (next) await sendUncertainPrompt(bot, chatId, next, 0, ctx);
     else await finalizeEntries(bot, chatId, session);
@@ -212,16 +217,21 @@ async function onCategorySelect(c: CbCtx): Promise<void> {
     if (!pending) return;
 
     const categoryId = data.replace('cat_select_', '');
+    // callback_data 可被偽造：id 必須在這個租戶的分類清單裡，否則保持原狀態、讓使用者重選
+    const category = ctx.categories.find(c => c.id === categoryId);
+    if (!category) {
+        await bot.sendMessage(chatId, '找不到這個分類，請重新選擇。');
+        return;
+    }
     const itemName = pending.confirmedItemName ?? pending.suggestedName;
     const defaultUnit = pending.entry.unit ?? ctx.units[0]?.code ?? '個';
     const savedNextUncertain = pending.nextUncertain;
 
     try {
-        const newItemId = await createItem(session.tenantId, itemName, categoryId, defaultUnit);
-        const category = ctx.categories.find(c => c.id === categoryId);
+        const newItemId = await createItem(session.tenantId, itemName, category.id, defaultUnit);
         const updatedEntry: ParsedEntry = { ...pending.entry, itemId: newItemId, itemName };
 
-        await bot.sendMessage(chatId, `已新增品項「${itemName}」（分類：${category?.name ?? categoryId}）`);
+        await bot.sendMessage(chatId, `已新增品項「${itemName}」（分類：${category.name}）`);
 
         // 新品項建立後詢問廠商（有廠商資料才問）
         if (ctx.vendors.length > 0) {

@@ -33,6 +33,7 @@ const PASSWORDS = {
     disabled: 'SimDisabled-789',
     demote: 'SimDemote-321',
     reader: 'SimReader-654',
+    other: 'SimOther-987',
     cjk: '密碼測試一二三',
     wrong: ['WrongGuessA1', 'WrongGuessB2', 'WrongGuessC3', 'WrongGuessD4', 'WrongGuessE5', 'WrongGuessF6', 'WrongGuessG7'],
 };
@@ -95,7 +96,9 @@ test('offline simulation: login throttle, session revalidation, query, entry flo
     const dataDir = path.join(work, 'data');
     fs.mkdirSync(dataDir);
 
+    let llmHits = 0;
     const llmServer = http.createServer((req, res) => {
+        llmHits++;
         let body = '';
         req.on('data', (c) => { body += c; });
         req.on('end', () => {
@@ -114,6 +117,8 @@ test('offline simulation: login throttle, session revalidation, query, entry flo
                 content = { entries: [{ type: 'PURCHASE', itemName: '測試肝連', quantity: 2.6, unit: '台斤', price: 218, vendorName: null, note: null, rawInput: user }] };
             } else if (user.includes('鱷梨醬')) {
                 content = { entries: [{ type: 'PURCHASE', itemName: '鱷梨醬', quantity: 3, unit: '個', price: 90, vendorName: null, note: null, rawInput: user }] };
+            } else if (user.includes('紫蘇梅')) {
+                content = { entries: [{ type: 'PURCHASE', itemName: '紫蘇梅', quantity: 1, unit: '個', price: 50, vendorName: null, note: null, rawInput: user }] };
             } else if (user.includes('山葵醬')) {
                 content = { entries: [{ type: 'PURCHASE', itemName: '山葵醬', quantity: 2, unit: '個', price: 60, vendorName: null, note: null, rawInput: user }] };
             }
@@ -163,6 +168,14 @@ test('offline simulation: login throttle, session revalidation, query, entry flo
     await prisma.vendor.create({ data: { id: 'sim-vendor', name: '模擬海豐', tenantId: TENANT } });
     await prisma.location.create({ data: { id: 'sim-loc', name: '模擬攤', tenantId: TENANT } });
 
+    // 第二個租戶：驗證「別的租戶的 id」不能被偽造的 callback／過期的待確認狀態寫進來
+    const TENANT_B = 'sim-tenant-b';
+    await prisma.tenant.create({ data: { id: TENANT_B, name: '另一商行', code: 'sim-tenant-b', status: true } });
+    await prisma.category.create({ data: { id: 'sim-b-cat', name: '別家分類', tenantId: TENANT_B } });
+    await prisma.item.create({ data: { id: 'sim-b-item', name: '別家肝連', categoryId: 'sim-b-cat', defaultUnit: 'pc', tenantId: TENANT_B } });
+    await prisma.vendor.create({ data: { id: 'sim-b-vendor', name: '別家海豐', tenantId: TENANT_B } });
+    await prisma.location.create({ data: { id: 'sim-b-loc', name: '別家攤', tenantId: TENANT_B } });
+
     async function role(code: string) {
         const found = await prisma.role.findFirst({ where: { code } });
         return found ?? prisma.role.create({ data: { name: `sim-${code}`, code } });
@@ -179,6 +192,10 @@ test('offline simulation: login throttle, session revalidation, query, entry flo
     await mkUser('sim-u-disabled', 'sim-disabled', PASSWORDS.disabled, '模擬停用者', 'write');
     await mkUser('sim-u-demote', 'sim-demote', PASSWORDS.demote, '模擬降權者', 'write');
     await mkUser('sim-u-reader', 'sim-reader', PASSWORDS.reader, '模擬唯讀者', 'read');
+    await prisma.user.create({
+        data: { id: 'sim-u-other', username: 'sim-other', password: hashPassword(PASSWORDS.other), realName: '另一商行記帳員', status: true, tenantId: TENANT_B },
+    });
+    await prisma.userRole.create({ data: { userId: 'sim-u-other', roleId: roles.write.id } });
     // 帳號與密碼都含中文的使用者（帳號名稱快取要在第一次查詢前就能看到，所以放在種子資料裡）
     await mkUser('sim-u-cjk', '模擬帳號', PASSWORDS.cjk, '模擬中文帳號', 'write');
 
@@ -197,6 +214,9 @@ test('offline simulation: login throttle, session revalidation, query, entry flo
     let simNow = 1_700_000_000_000;
     let burst = false;
     rateMod.unauthMessageLimiter.setClock(() => simNow);
+    rateMod.nonPrivateNoticeLimiter.setClock(() => simNow);
+    const stateMod = req('./state');
+    const entryMod = req('./handlers/entry');
 
     // ── 驅動工具 ──
     let seq = 100;
@@ -213,17 +233,17 @@ test('offline simulation: login throttle, session revalidation, query, entry flo
         for (const c of bot.calls) transcript.push(normalize(JSON.stringify(c)));
         bot.calls.length = 0;
     }
-    async function say(label: string, tg: number, text: string) {
+    async function say(label: string, tg: number, text: string, chat: { id: number; type?: string } = { id: tg, type: 'private' }) {
         if (!burst) simNow += 11_000;
-        const msg = { message_id: ++seq, chat: { id: tg, type: 'private' }, from: { id: tg, username: `tg${tg}` }, text, date: 0 };
+        const msg = { message_id: ++seq, chat, from: { id: tg, username: `tg${tg}` }, text, date: 0 };
         await (bot.listeners('message')[0] as any)(msg);
         await settle();
         const out = bot.calls.slice();
         flush(`${label} | tg${tg} says: ${text.replace(/\S+$/, (w) => (Object.values(PASSWORDS).flat().includes(w) ? '[pw]' : w))}`);
         return out;
     }
-    async function press(label: string, tg: number, data: string) {
-        const q = { id: `cb${++seq}`, from: { id: tg }, message: { message_id: seq, chat: { id: tg } }, data };
+    async function press(label: string, tg: number, data: string, chat: { id: number; type?: string } = { id: tg, type: 'private' }) {
+        const q = { id: `cb${++seq}`, from: { id: tg }, message: { message_id: seq, chat }, data };
         await (bot.listeners('callback_query')[0] as any)(q);
         await settle();
         const out = bot.calls.slice();
@@ -451,6 +471,152 @@ test('offline simulation: login throttle, session revalidation, query, entry flo
     const st2 = await prisma.systemConfig.findFirst({ where: { key: 'tg_state_5031' } });
     assert.equal(st2!.updatedAt.getTime(), st1!.updatedAt.getTime(), 'unchanged state is not rewritten');
 
+    // 6n. 只處理私訊：群組／頻道的訊息與按鈕完全不處理（不查 session、不寫 DB、不呼叫 LLM、不刪訊息）
+    const GROUP = { id: -1001234567, type: 'supergroup' };
+    const groupEntriesBefore = await prisma.entry.count({ where: { tenantId: TENANT } });
+    const llmBefore = llmHits;
+    const logRowsBefore = await prisma.botMessageLog.count();
+    for (const txt of ['今天肝連2.6台斤218', `sim-victim ${PASSWORDS.victim}`, '/today', '/menu', '/logout', '/mute']) {
+        out = await say(`group text ignored: ${txt.slice(0, 6)}`, 5003, txt, GROUP);
+        assert.equal(out.length, 0, `group message "${txt.slice(0, 6)}" gets no reaction at all`);
+    }
+    out = await say('channel chat ignored', 5003, '大腸 500', { id: -1009999, type: 'channel' });
+    assert.equal(out.length, 0);
+    out = await say('chat without type is treated as non-private', 5003, '大腸 500', { id: 5003 });
+    assert.equal(out.length, 0, 'missing chat.type is not private');
+    await sleep(300);
+    assert.equal(llmHits, llmBefore, 'no LLM call from group messages');
+    assert.equal(await prisma.botMessageLog.count(), logRowsBefore, 'no BotMessageLog rows from group messages');
+    assert.equal(await prisma.systemConfig.findFirst({ where: { key: 'tg_state_-1001234567' } }), null, 'no chat state persisted for the group');
+    assert.equal(await prisma.entry.count({ where: { tenantId: TENANT } }), groupEntriesBefore, 'no entry written from a group');
+    assert.equal(stateMod.getState(GROUP.id).phase, 'idle');
+    assert.equal(stateMod.getState(5003).muteMode, false, 'a group /mute does not change anything');
+
+    // /start、/help：回一句提示，同一個聊天室一小時一次
+    out = await say('group /start', 5003, '/start', GROUP);
+    assert.deepEqual(texts(out), ['這個 bot 只能在私訊使用，請直接私訊我。']);
+    out = await say('group /help (within the hour)', 5003, '/help', GROUP);
+    assert.equal(out.length, 0, 'one notice per chat per hour');
+    out = await say('group /start@botname (within the hour)', 5003, '/start@ledger_bot', GROUP);
+    assert.equal(out.length, 0);
+    out = await say('another group /help', 5003, '/help', { id: -1007654321, type: 'group' });
+    assert.deepEqual(texts(out), ['這個 bot 只能在私訊使用，請直接私訊我。'], 'each chat has its own allowance');
+    simNow += 61 * 60 * 1000;
+    out = await say('group /start after the hour', 5003, '/start', GROUP);
+    assert.equal(texts(out).length, 1, 'notice again after an hour');
+    assert.equal(count('deleteMessage', out), 0);
+    assert.equal(llmHits, llmBefore);
+    assert.equal(await prisma.botMessageLog.count(), logRowsBefore, 'notice does not write BotMessageLog');
+
+    // 群組裡的 callback：只 answer，不動任何狀態
+    out = await say('private entry with pending confirmation', 5003, '測試肝連2.6台斤221');
+    assert.ok(out.some((c) => JSON.stringify(c.extra ?? '').includes('confirm_yes_0')));
+    const pendingBefore = JSON.stringify(stateMod.getState(5003));
+    const entriesPrivate = await prisma.entry.count({ where: { tenantId: TENANT } });
+    for (const grp of [GROUP, { id: 5003 }]) {
+        out = await press('non-private callback confirm_yes', 5003, 'confirm_yes_0', grp);
+        assert.deepEqual(out.map((c) => c.op), ['answerCallbackQuery'], 'non-private callback only gets answered');
+    }
+    out = await press('group callback vendor_select', 5003, 'vendor_select_sim-vendor', GROUP);
+    assert.deepEqual(out.map((c) => c.op), ['answerCallbackQuery']);
+    assert.equal(JSON.stringify(stateMod.getState(5003)), pendingBefore, 'callback from a group does not touch the state');
+    assert.equal(await prisma.entry.count({ where: { tenantId: TENANT } }), entriesPrivate);
+    assert.equal(await prisma.systemConfig.findFirst({ where: { key: 'tg_state_-1001234567' } }), null);
+    // 私訊裡同樣的按鈕仍然正常
+    out = await press('private callback confirm_yes still works', 5003, 'confirm_yes_0');
+    assert.ok(out.some((c) => JSON.stringify(c.extra ?? '').includes('vendor_select_sim-vendor')), 'private chat flow unaffected');
+
+    // 6o. 偽造 vendor_select_<別的租戶的廠商 id>：被拒絕、狀態保持、可以重選
+    const lastEntry = async () => prisma.entry.findFirst({ where: { tenantId: TENANT }, orderBy: { createdAt: 'desc' } });
+    const entriesForged = await prisma.entry.count({ where: { tenantId: TENANT } });
+    out = await press('forged vendor id (other tenant)', 5003, 'vendor_select_sim-b-vendor');
+    assert.ok(texts(out).some((x) => x.includes('找不到這個廠商，請重新選擇。')), 'forged vendor id is refused');
+    assert.ok(!texts(out).some((x) => x.includes('別家海豐') || x.includes('sim-b-vendor')), 'nothing about the other tenant is echoed');
+    assert.equal(await prisma.entry.count({ where: { tenantId: TENANT } }), entriesForged, 'nothing written');
+    assert.equal(stateMod.getState(5003).phase, 'awaiting_vendor_decision', 'state is kept');
+    assert.ok(stateMod.getState(5003).newItemPending, 'pending item is kept');
+    out = await press('forged vendor id (nonexistent)', 5003, 'vendor_select_nope');
+    assert.ok(texts(out).some((x) => x.includes('找不到這個廠商，請重新選擇。')));
+    assert.equal(stateMod.getState(5003).phase, 'awaiting_vendor_decision');
+    out = await press('real vendor id afterwards', 5003, 'vendor_select_sim-vendor');
+    assert.equal(await prisma.entry.count({ where: { tenantId: TENANT } }), entriesForged + 1, 'the legit choice still saves');
+    assert.equal((await lastEntry())!.vendorId, 'sim-vendor');
+
+    // 6p. 偽造 cat_select_<別的租戶的分類 id>
+    process.env.LLM_PROVIDER = 'ollama';
+    await say('unknown item for forged category', 5003, '紫蘇梅1個50');
+    await press('confirm', 5003, 'confirm_yes_0');
+    await press('new purchase item', 5003, 'new_purchase_create');
+    const itemsBefore = await prisma.item.count();
+    out = await press('forged category id (other tenant)', 5003, 'cat_select_sim-b-cat');
+    assert.ok(texts(out).some((x) => x.includes('找不到這個分類，請重新選擇。')), 'forged category id is refused');
+    assert.equal(await prisma.item.count(), itemsBefore, 'no item created');
+    assert.equal(stateMod.getState(5003).phase, 'awaiting_category_select', 'state is kept');
+    out = await press('forged category id (nonexistent)', 5003, 'cat_select_nope');
+    assert.ok(texts(out).some((x) => x.includes('找不到這個分類，請重新選擇。')));
+    assert.equal(await prisma.item.count(), itemsBefore);
+    out = await press('real category id afterwards', 5003, 'cat_select_sim-cat');
+    const plum = await prisma.item.findFirst({ where: { name: '紫蘇梅' } });
+    assert.equal(plum?.tenantId, TENANT, 'item created in own tenant with own category');
+    assert.equal(plum?.categoryId, 'sim-cat');
+    await press('skip vendor', 5003, 'vendor_skip');
+    process.env.LLM_PROVIDER = 'claude';
+
+    // 6q. saveEntry 最後一道防線：別的租戶的 itemId／vendorId／locationId 不寫入
+    const sess = { userId: 'sim-u-writer', tenantId: TENANT, username: 'sim-writer', realName: '模擬記帳員', roleCode: 'write', tenantName: '模擬商行', expires: '2099-01-01T00:00:00.000Z' };
+    const base = {
+        type: 'PURCHASE', date: '2026-11-20', rawInput: '測試', itemId: 'sim-item-liver', itemName: '測試肝連', vendorId: null, vendorName: null,
+        quantity: 1, unit: 'pc', expenseType: null, locationId: null, locationName: null, price: 50, note: null, confident: true, uncertainReason: null,
+    };
+    const entryCount = () => prisma.entry.count();
+    const revCount = () => prisma.revenue.count();
+    const e0 = await entryCount();
+    const logBefore = fs.readFileSync(path.join(dataDir, 'bot.log'), 'utf8').length;
+    let res = await entryMod.saveEntry({ ...base, itemId: 'sim-b-item', itemName: '別家肝連' }, sess);
+    assert.equal(res.success, false, 'other tenant itemId is refused');
+    assert.equal(res.error, '資料已變更，請重新輸入這一筆。');
+    res = await entryMod.saveEntry({ ...base, vendorId: 'sim-b-vendor' }, sess);
+    assert.equal(res.success, false, 'other tenant vendorId is refused');
+    res = await entryMod.saveEntry({ ...base, itemId: 'no-such-item' }, sess);
+    assert.equal(res.success, false, 'nonexistent itemId is refused');
+    assert.equal(await entryCount(), e0, 'nothing written');
+    const r0 = await revCount();
+    res = await entryMod.saveEntry({ ...base, type: 'REVENUE', itemId: null, itemName: null, locationId: 'sim-b-loc', price: 1234 }, sess);
+    assert.equal(res.success, false, 'other tenant locationId is refused');
+    assert.equal(await revCount(), r0, 'no revenue written');
+    const logAfter = fs.readFileSync(path.join(dataDir, 'bot.log'), 'utf8').slice(logBefore);
+    assert.ok(logAfter.includes('rejected: item/vendor/location not in tenant'), 'rejection is logged');
+    assert.ok(!logAfter.includes('sim-b-item') && !logAfter.includes('別家'), 'log line has no ids or user text');
+    // 對照：自己租戶的 id 照常寫入
+    res = await entryMod.saveEntry({ ...base, vendorId: 'sim-vendor' }, sess);
+    assert.equal(res.success, true);
+    res = await entryMod.saveEntry({ ...base, type: 'REVENUE', itemId: null, itemName: null, locationId: 'sim-loc', price: 4321, date: '2026-11-19' }, sess);
+    assert.equal(res.success, true, 'own location still works');
+    assert.equal(await entryCount(), e0 + 1);
+
+    // 6r. 換租戶登入：舊租戶的待確認項目不能被確認進新租戶；登入後重播仍然運作
+    out = await say('tenant A login on chat 5050', 5050, `sim-writer ${PASSWORDS.writer}`);
+    assert.ok(texts(out).some((x) => x.includes('登入成功')));
+    out = await say('tenant A pending confirmation', 5050, '測試肝連2.6台斤222');
+    assert.ok(out.some((c) => JSON.stringify(c.extra ?? '').includes('confirm_yes_0')));
+    assert.ok(JSON.stringify(stateMod.getState(5050)).includes('sim-item-liver'), 'pending item carries a tenant A id');
+    // session 過期（列被清掉）但對話狀態還在，然後同一個聊天室用另一個租戶的帳號登入
+    await prisma.systemConfig.deleteMany({ where: { key: 'tg_session_5050' } });
+    out = await say('expired, bookkeeping text to replay', 5050, '大腸 600');
+    assert.ok(texts(out).some((x) => x.includes('登入已過期')));
+    assert.ok(JSON.stringify(stateMod.getState(5050)).includes('sim-item-liver'), 'stale pending item survives until login');
+    const bEntries = await prisma.entry.count({ where: { tenantId: TENANT_B } });
+    out = await say('tenant B login on the same chat', 5050, `sim-other ${PASSWORDS.other}`);
+    assert.ok(texts(out).some((x) => x.includes('登入成功') && x.includes('另一商行')));
+    assert.ok(texts(out).some((x) => x.includes('幫你送出剛才那則：「大腸 600」')), 'replay still works');
+    const st5050 = stateMod.getState(5050);
+    assert.ok(!JSON.stringify(st5050).includes('sim-item-liver'), 'tenant A item id is gone from the state');
+    assert.equal(st5050.currentUncertain, null);
+    assert.equal(st5050.newItemPending, null);
+    out = await press('stale confirm after tenant switch', 5050, 'confirm_yes_0');
+    assert.equal(await prisma.entry.count({ where: { tenantId: TENANT_B } }), bEntries, 'nothing from tenant A is written into tenant B');
+    assert.equal(await prisma.entry.count({ where: { tenantId: TENANT_B, itemId: 'sim-item-liver' } }), 0);
+
     // 7. 停用 / 降權 的既有 session 下一則訊息就被拒
     out = await say('login disabled-to-be', 5005, `sim-disabled ${PASSWORDS.disabled}`);
     assert.ok(texts(out).some((x) => x.includes('登入成功')));
@@ -484,7 +650,7 @@ test('offline simulation: login throttle, session revalidation, query, entry flo
     const logText = fs.readFileSync(logFile, 'utf8');
     for (const s of secrets) assert.ok(!logText.includes(s), `bot.log must not contain a password (${s.slice(0, 6)}...)`);
     assert.ok(logText.includes('[password redacted]'), 'login lines are redacted in bot.log');
-    const dbLogs = JSON.stringify(await prisma.botMessageLog.findMany({ where: { chatId: { in: ['5001', '5002', '5003', '5004', '5005', '5006', '5010', '5012', '5021', '5030', '5031', '5040', '5041'] } } }));
+    const dbLogs = JSON.stringify(await prisma.botMessageLog.findMany({ where: { chatId: { in: ['5001', '5002', '5003', '5004', '5005', '5006', '5010', '5012', '5021', '5030', '5031', '5040', '5041', '5050'] } } }));
     for (const s of secrets) assert.ok(!dbLogs.includes(s), 'BotMessageLog must not contain a password');
     // 帳號名稱也不落地（帳密順序打反時，那一段其實是密碼）：log 與 BotMessageLog 只留雜湊標記
     for (const name of ['sim-victim', 'sim-writer', 'sim-reader', '模擬帳號']) {
