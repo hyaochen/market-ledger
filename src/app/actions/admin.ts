@@ -5,6 +5,14 @@ import { revalidatePath } from 'next/cache';
 import { hashPasswordAsync } from '@/lib/password';
 import { ensureRole, getCurrentUser } from '@/lib/auth';
 import { usernameTaken, validateNewPassword, validateUsername } from '@/lib/username';
+import {
+    buildUserCreateAudit,
+    buildUserDeleteAudit,
+    buildUserRoleAudit,
+    buildUserStatusAudit,
+    recordPrivilegedAudit,
+    requestIp,
+} from '@/lib/privileged-audit';
 
 // 本檔 export 的每個 function 都是可被任何人直接呼叫的 server action，
 // 所以每一個都要自己驗證角色與租戶，不能只靠頁面 / layout 擋。
@@ -152,7 +160,7 @@ export async function createUser(formData: FormData) {
         if (!roleIds.length) {
             return { success: false, error: '請選擇角色' };
         }
-        const roles = await prisma.role.findMany({ where: { id: { in: roleIds }, status: true }, select: { id: true } });
+        const roles = await prisma.role.findMany({ where: { id: { in: roleIds }, status: true }, select: { id: true, code: true } });
         if (roles.length !== roleIds.length) {
             return { success: false, error: '角色不存在' };
         }
@@ -171,7 +179,7 @@ export async function createUser(formData: FormData) {
 
         const hashedPassword = await hashPasswordAsync(password as string);
 
-        await prisma.user.create({
+        const createdUser = await prisma.user.create({
             data: {
                 username,
                 realName,
@@ -183,6 +191,18 @@ export async function createUser(formData: FormData) {
                 }
             }
         });
+
+        // 稽核：操作成功之後才寫；寫入失敗不回滾建立
+        await recordPrivilegedAudit(buildUserCreateAudit({
+            actorId: scope.user.id,
+            ip: await requestIp(),
+            tenantId,
+            userId: createdUser.id,
+            username,
+            realName,
+            departmentId: deptId,
+            roleCodes: roles.map((r) => r.code),
+        }));
 
         revalidatePath('/settings/users');
         return { success: true };
@@ -209,6 +229,15 @@ export async function toggleUserStatus(id: string, status: boolean) {
         }
 
         await prisma.user.update({ where: { id }, data: { status } });
+        await recordPrivilegedAudit(buildUserStatusAudit({
+            actorId: scope.user.id,
+            ip: await requestIp(),
+            tenantId,
+            userId: id,
+            username: existing.username,
+            before: existing.status,
+            after: status,
+        }));
         revalidatePath('/settings/users');
         return { success: true };
     } catch (e) {
@@ -222,7 +251,10 @@ export async function deleteUser(id: string) {
         if (!scope.ok) return { success: false, error: scope.error };
         const tenantId = scope.tenantId;
 
-        const existing = await prisma.user.findFirst({ where: { id, tenantId } });
+        const existing = await prisma.user.findFirst({
+            where: { id, tenantId },
+            include: { roles: { select: { role: { select: { code: true } } } } },
+        });
         if (!existing) return { success: false, error: '使用者不存在或無權限' };
 
         if (id === scope.user.id) return { success: false, error: '不能刪除自己的帳號' };
@@ -232,6 +264,15 @@ export async function deleteUser(id: string) {
 
         await prisma.user.delete({ where: { id } });
         await prisma.systemConfig.deleteMany({ where: { key: `sessions_valid_after:${id}`, tenantId: null } });
+        await recordPrivilegedAudit(buildUserDeleteAudit({
+            actorId: scope.user.id,
+            ip: await requestIp(),
+            tenantId,
+            userId: id,
+            username: existing.username,
+            roleCodes: existing.roles.map((r) => r.role.code),
+            status: existing.status,
+        }));
         revalidatePath('/settings/users');
         return { success: true };
     } catch (e) {
@@ -245,7 +286,10 @@ export async function updateUserRole(userId: string, roleId: string) {
         if (!scope.ok) return { success: false, error: scope.error };
         const tenantId = scope.tenantId;
 
-        const existing = await prisma.user.findFirst({ where: { id: userId, tenantId } });
+        const existing = await prisma.user.findFirst({
+            where: { id: userId, tenantId },
+            include: { roles: { select: { role: { select: { code: true } } } } },
+        });
         if (!existing) return { success: false, error: '使用者不存在或無權限' };
 
         const role = await prisma.role.findFirst({ where: { id: roleId, status: true } });
@@ -258,9 +302,20 @@ export async function updateUserRole(userId: string, roleId: string) {
             }
         }
 
+        // 稽核寫在同一個交易裡：寫不進去整個角色變更回滾
+        const auditData = buildUserRoleAudit({
+            actorId: scope.user.id,
+            ip: await requestIp(),
+            tenantId,
+            userId,
+            username: existing.username,
+            beforeRoleCodes: existing.roles.map((r) => r.role.code),
+            afterRoleCode: role.code,
+        });
         await prisma.$transaction([
             prisma.userRole.deleteMany({ where: { userId } }),
             prisma.userRole.create({ data: { userId, roleId } }),
+            prisma.operationLog.create({ data: auditData }),
         ]);
 
         revalidatePath('/settings/users');
