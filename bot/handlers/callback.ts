@@ -21,6 +21,7 @@ import {
     createItem, createExpenseType, finalizeEntries, handleAcceptedEntry, sendUncertainPrompt,
 } from './flow';
 import { handleMenuCallback } from './menuCallback';
+import { isPrivateChat } from './chatGuard';
 import type { ParsedEntry } from '../types';
 import type { Bot, CbCtx } from './botTypes';
 
@@ -421,6 +422,11 @@ export async function handleCallback(bot: Bot, query: TelegramBot.CallbackQuery)
     const data = query.data ?? '';
 
     if (!chatId) return;
+    // 只處理私訊：群組裡的按鈕只讓它停止轉圈，不查 session、不動狀態、不寫入
+    if (!isPrivateChat(query.message?.chat)) {
+        try { await bot.answerCallbackQuery(query.id); } catch { /* query too old — ignore */ }
+        return;
+    }
     // answerCallbackQuery 可能因 query 過期（>30秒）而失敗，不讓它中斷後續流程
     try { await bot.answerCallbackQuery(query.id); } catch { /* query too old — ignore */ }
 

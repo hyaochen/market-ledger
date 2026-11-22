@@ -26,6 +26,7 @@ import { logLine, redactLoginText, usernameTag } from '../botLog';
 import { unauthMessageLimiter, UNAUTH_RATE_TEXT } from '../rateLimit';
 import { loginThrottle, formatWait } from '../loginThrottle';
 import { HELP_TEXT } from './helpText';
+import { isPrivateChat, handleNonPrivateMessage } from './chatGuard';
 import { INTENT_CLARIFY_KEYBOARD, UNKNOWN_ITEM_KEYBOARD } from './keyboards';
 import { MENU_ROOT_TEXT, buildRootMenu } from './menu';
 import { runDateQuery, runNlQuery, runEntryParse } from './runners';
@@ -517,6 +518,11 @@ async function routeFreeText(c: MsgCtx, session: SessionData): Promise<void> {
 
 // ── 入口 ────────────────────────────────────────────────────────
 export async function handleMessage(bot: Bot, msg: TelegramBot.Message): Promise<void> {
+    // 只處理私訊：群組／頻道在查 session 之前就結束（見 chatGuard.ts）
+    if (!isPrivateChat(msg.chat)) {
+        await handleNonPrivateMessage(bot, msg);
+        return;
+    }
     const chatId = msg.chat.id;
     const telegramId = msg.from?.id;
     const text = (msg.text ?? '').trim();
