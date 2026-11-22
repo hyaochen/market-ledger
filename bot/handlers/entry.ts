@@ -3,6 +3,7 @@
 import prisma from '../../src/lib/prisma';
 import type { ParsedEntry, SessionData } from '../types';
 import { checkDuplicate } from '../matcher';
+import { logLine } from '../botLog';
 import type { DbContext } from '../types';
 import { formatJinLiang, jinLiangToKg } from '../../src/lib/units';
 import { previewFixedExpenses, applyFixedExpenses, stallForLocation, realEntryDb } from '../../src/lib/fixedExpenseAutofill';
@@ -60,6 +61,19 @@ export function formatEntry(e: ParsedEntry, ctx: DbContext): string {
     }
 }
 
+// 最後一道防線：callback_data 可以被自訂客戶端偽造，待確認狀態也可能是換租戶登入前留下的。
+// 寫入前確認 itemId／vendorId／locationId（有值的才查）都屬於這個租戶；任何一個不屬於就不寫。
+export const ENTRY_STALE_REFERENCE_TEXT = '資料已變更，請重新輸入這一筆。';
+async function referencesBelongToTenant(entry: ParsedEntry, tenantId: string): Promise<boolean> {
+    const checks: Promise<number>[] = [];
+    const expected: number[] = [];
+    if (entry.itemId) { checks.push(prisma.item.count({ where: { id: entry.itemId, tenantId } })); expected.push(1); }
+    if (entry.vendorId) { checks.push(prisma.vendor.count({ where: { id: entry.vendorId, tenantId } })); expected.push(1); }
+    if (entry.locationId) { checks.push(prisma.location.count({ where: { id: entry.locationId, tenantId } })); expected.push(1); }
+    const found = await Promise.all(checks);
+    return found.every((n, i) => n === expected[i]);
+}
+
 // 寫入單筆記錄到 DB
 // T-ML-033：成功時多回傳 id（Entry 或 Revenue 的主鍵），供 bot/messageLog.ts 的
 // finalJson 記錄「實際寫進哪一筆」。只加欄位，不改變既有 { success, error } 語意，
@@ -67,6 +81,11 @@ export function formatEntry(e: ParsedEntry, ctx: DbContext): string {
 export async function saveEntry(entry: ParsedEntry, session: SessionData): Promise<{ success: boolean; error?: string; id?: string }> {
     try {
         const date = new Date(entry.date);
+
+        if (!(await referencesBelongToTenant(entry, session.tenantId))) {
+            logLine('SAVE', `tenant:${session.tenantId}`, `rejected: item/vendor/location not in tenant (type=${entry.type})`);
+            return { success: false, error: ENTRY_STALE_REFERENCE_TEXT };
+        }
 
         // 營業額走獨立的 Revenue 表
         if (entry.type === 'REVENUE') {

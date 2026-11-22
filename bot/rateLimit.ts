@@ -99,3 +99,12 @@ export const llmCallLimiter = new WindowRateLimiter([
 
 export const UNAUTH_RATE_TEXT = '訊息太頻繁，請稍後再試。';
 export const LLM_RATE_TEXT = '查詢與記帳太頻繁，請稍後再試。';
+
+// 非私訊聊天室（群組、頻道）：bot 只服務私訊，對 /start、/help 回一句提示，
+// 同一個聊天室一小時最多回一次。key 是 chat id，數量有上限（最舊的先淘汰）。
+export const NON_PRIVATE_NOTICE_WINDOW_MS = 60 * 60 * 1000;
+export const nonPrivateNoticeLimiter = new WindowRateLimiter([
+    { ms: NON_PRIVATE_NOTICE_WINDOW_MS, max: 1 },
+], RATE_MAX_KEYS);
+
+export const NON_PRIVATE_NOTICE_TEXT = '這個 bot 只能在私訊使用，請直接私訊我。';

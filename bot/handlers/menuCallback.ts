@@ -3,7 +3,7 @@
 
 import {
     runQuery, expenseGroups, periodFromCode,
-    METRIC_LABEL,
+    METRIC_LABEL, GROUPBY_LABEL,
     type QuerySpec, type Metric, type GroupBy,
 } from './querySpec';
 import {
@@ -12,6 +12,11 @@ import {
 } from './menu';
 import { logLine } from '../botLog';
 import type { CbCtx } from './botTypes';
+
+// callback_data 可被偽造：指標與切法只收已知值。查詢本身全部帶 session.tenantId，
+// 這裡只是避免亂值走到沒預期的分支（例如標題顯示 undefined）。
+const VALID_METRICS = new Set<string>(Object.keys(METRIC_LABEL));
+const VALID_GROUPBY = new Set<string>([...Object.keys(GROUPBY_LABEL), 'list']);
 
 export async function handleMenuCallback(c: CbCtx): Promise<void> {
     const { bot, query, chatId, data, session, ctx } = c;
@@ -27,6 +32,12 @@ export async function handleMenuCallback(c: CbCtx): Promise<void> {
             await bot.sendMessage(chatId, text, { parse_mode: 'Markdown', reply_markup: markup as never });
         }
     };
+
+    const needsMetric = kind === 'm' || kind === 'pm' || kind === 'p' || kind === 'r' || kind === 'c';
+    if ((needsMetric && !VALID_METRICS.has(parts[2])) || (kind === 'r' && !VALID_GROUPBY.has(parts[4]))) {
+        await bot.sendMessage(chatId, '這個按鈕我不認得，請重開 /menu。');
+        return;
+    }
 
     if (kind === 'root') { await nav(MENU_ROOT_TEXT, buildRootMenu()); return; }
     if (kind === 's1') { await nav('*進階查詢* — 第 1 步：查什麼？', buildMetricMenu()); return; }
